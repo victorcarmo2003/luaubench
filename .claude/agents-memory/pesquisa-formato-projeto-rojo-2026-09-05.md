@@ -4,7 +4,7 @@
 
 ## Resposta curta
 
-O parser do `cli` precisa reproduzir: (1) o `Project`/`ProjectNode` do `project.rs` (campos exatos abaixo, com **erro se houver campo desconhecido no nível raiz** — isso quebra a sugestão de `.claude/rules/04-cli-rokit.md` de usar um campo `"luaubench": {...}` no topo do `.project.json`, ver "Limites e pegadinhas"); (2) o algoritmo de resolução de `ClassName` de `snapshot_project.rs` (ordem: `$className` explícito > classe inferida do `$path` > inferência de Service pelo nome quando o pai é `DataModel`); (3) a tabela de `sync_rule` (extensão → Middleware) de `snapshot_middleware/mod.rs`; (4) que `rojo sourcemap` **sem `--include-non-scripts` só inclui `Script`/`LocalScript`/`ModuleScript`** — se o `cli` do LuauBench for popular o `DataModel` inteiro a partir do sourcemap, precisa rodar com essa flag ou vai perder toda instância não-script (Folders, Models, Values etc.) silenciosamente.
+O parser do `cli` precisa reproduzir: (1) o `Project`/`ProjectNode` do `project.rs` (campos exatos abaixo, com **erro se houver campo desconhecido no nível raiz** — isso quebra a sugestão de `.claude/rules/04-cli-rokit.md` de usar um campo `"luaubench": {...}` no topo do `.project.json`, ver "Limites e pegadinhas"); (2) o algoritmo de resolução de `ClassName` de `snapshot_project.rs` — **CORRIGIDO em 2026-09-05, ver seção "Correção 2026-09-05 (achado do testador)" logo após a seção 4**: `infer_class_name` tem 3 ramos, não 1 — `parent_class == "DataModel"` (Service reconhecido via tag `ClassTag::Service`), `parent_class == "StarterPlayer"` (filhos fixos hardcoded `StarterPlayerScripts`/`StarterCharacterScripts`), `parent_class == "Workspace"` (filho fixo hardcoded `Terrain`) — e a ordem geral é `$className` explícito > `$path` (quando não resolve a `Folder`) > inferência (Service OU filho fixo, mesmo nível) > `Folder` genérico do `$path` > erro `[plan/missing-class-name]`; (3) a tabela de `sync_rule` (extensão → Middleware) de `snapshot_middleware/mod.rs`; (4) que `rojo sourcemap` **sem `--include-non-scripts` só inclui `Script`/`LocalScript`/`ModuleScript`** — se o `cli` do LuauBench for popular o `DataModel` inteiro a partir do sourcemap, precisa rodar com essa flag ou vai perder toda instância não-script (Folders, Models, Values etc.) silenciosamente.
 
 ## Fatos verificados
 
@@ -92,6 +92,136 @@ Fonte: `src/snapshot_middleware/project.rs`, função `snapshot_project_node` (l
 - Ordem de precedência quando há conflito: `$className` explícito > classe do `$path` > inferência de Service — **exceto** quando `$className` E `$path` estão setados ao mesmo tempo: só é permitido se a classe resolvida pelo `$path` for `Folder` (senão erro "$className foi especificado tanto no projeto quanto no filesystem"). Da mesma forma, se `$path` resolve a `Folder` e há inferência de Service disponível, a inferência de Service vence (uma pasta chamada `ReplicatedStorage` sob a raiz vira o Service, não um Folder genérico).
 - Mensagem de erro literal quando nada resolve o `ClassName` (útil pra replicar no LuauBench com fidelidade de UX): `"Instance \"{nome}\" is missing some required information. One of the following must be true: - $className must be set... - $path must be set... - The instance must be a known service, like ReplicatedStorage"`.
 - `$path` do tipo `{"optional": "..."}` que não resolve a nada (arquivo ausente) e sem outra fonte de classe → o nó inteiro é omitido (`Ok(None)`), não é erro.
+
+### Correção 2026-09-05 (achado do testador)
+
+**A afirmação da seção 4 acima — "`infer_class_name`: só entra em ação se `parent_class == "DataModel"`" — estava INCOMPLETA, não errada sobre o que existe, mas errada por omissão.** O testador (`.claude/agents-memory/testador-roblox-games-2026-09-05.md`) confirmou contra o binário real (`rojo 7.7.0`, `rojo sourcemap` rodado de verdade no projeto `Tiktok`, template padrão de `rojo init`) que `StarterPlayer.StarterPlayerScripts` — sem `$className`, sem inferência de Service (`StarterPlayerScripts` tem `IsService=false` no dump real) — resolve com sucesso. Isso bloqueava `TreePlanner.Plan` para 17/17 dos projetos reais do usuário (`task-cli-013`). Releitura completa e verbatim do arquivo-fonte real (baixado diretamente de `raw.githubusercontent.com/rojo-rbx/rojo/master/src/snapshot_middleware/project.rs`, não resumido por ferramenta intermediária — conferido por `grep` local no arquivo baixado) confirma o algoritmo completo abaixo. **Não houve mudança de comportamento entre versões — a pesquisa original simplesmente não reportou os outros dois ramos (`else if`) da mesma função.** Ver evidência de histórico ao final desta seção.
+
+#### 1. `infer_class_name` é uma função só, com 3 ramos fixos — não duas mecânicas separadas
+
+Fonte: `src/snapshot_middleware/project.rs`, função `infer_class_name`, **linhas 676-705** (master atual = mesmo conteúdo do release `v7.7.0`, confirmado — ver histórico abaixo). Corpo completo, verbatim:
+
+```rust
+fn infer_class_name(name: &str, parent_class: Option<&str>) -> Option<Ustr> {
+    // If className wasn't defined from another source, we may be able
+    // to infer one.
+
+    let parent_class = parent_class?;
+
+    if parent_class == "DataModel" {
+        // Members of DataModel with names that match known services are
+        // probably supposed to be those services.
+
+        let descriptor = rbx_reflection_database::get().unwrap().classes.get(name)?;
+
+        if descriptor.tags.contains(&ClassTag::Service) {
+            return Some(ustr(name));
+        }
+    } else if parent_class == "StarterPlayer" {
+        // StarterPlayer has two special members with their own classes.
+
+        if name == "StarterPlayerScripts" || name == "StarterCharacterScripts" {
+            return Some(ustr(name));
+        }
+    } else if parent_class == "Workspace" {
+        // Workspace has a special Terrain class inside it
+        if name == "Terrain" {
+            return Some(ustr(name));
+        }
+    }
+
+    None
+}
+```
+
+Não é uma tabela de dados externa — é um `if`/`else if`/`else if` direto no código, terminando em `None`. **Isso é exaustivo na versão pesquisada**: não há nenhum outro `else if` nem tabela auxiliar consultada por essa função.
+
+#### 2. Lista completa e confirmadamente exaustiva de pares pai→filho fixo (fora do mecanismo de Service)
+
+| `parent_class` | Filho(s) fixo(s) reconhecidos | Mecanismo |
+|---|---|---|
+| `"StarterPlayer"` | `"StarterPlayerScripts"`, `"StarterCharacterScripts"` | nomes literais hardcoded, comparação de string direta — **não** consulta `rbx_reflection_database` |
+| `"Workspace"` | `"Terrain"` | nome literal hardcoded, mesma forma — **não** consulta `rbx_reflection_database` |
+| `"DataModel"` | qualquer nome de classe real com a tag `ClassTag::Service` no `rbx_reflection_database` | dinâmico, já documentado na seção 4 original — não é uma lista fixa de nomes, é uma checagem de tag no banco de reflection |
+
+Não existem outros pares (`Teams→Team`, etc. — não existe, confirmado por leitura direta: a função não tem ramo para `"Teams"` nem qualquer outro `parent_class` além dos três acima). Nenhum candidato adicional (ex.: `Lighting`, `SoundService` como pai de algo fixo) existe nesta função — se algo do tipo existir em outro lugar do Rojo, não é neste mecanismo de `infer_class_name`.
+
+#### 3. Ordem de precedência confirmada (função `snapshot_project_node`, mesmas arquivo, linhas 92-219)
+
+`class_name_from_inference = infer_class_name(&name, parent_class)` (linha 143) é calculado **sempre**, para todo nó, e entra no mesmo `match` de 4-tuplas junto com `node.class_name` (explícito) e `class_name_from_path` (derivado de `$path` via `snapshot_from_vfs`) — **linhas 145-219**, verbatim relevante:
+
+```rust
+let class_name = match (
+    node.class_name,
+    class_name_from_path,
+    class_name_from_inference,
+    &node.path,
+) {
+    // These are the easy, happy paths!
+    (Some(project), None, None, _) => project,
+    (None, Some(path), None, _) => path,
+    (None, None, Some(inference), _) => inference,
+
+    // If the user specifies a class name, but there's an inferred class
+    // name, we prefer the name listed explicitly by the user.
+    (Some(project), None, Some(_), _) => project,
+
+    // If the user has a $path pointing to a folder and we're able to infer
+    // a class name, let's use the inferred name. If the path we're pointing
+    // to isn't a folder, though, that's a user error.
+    (None, Some(path), Some(inference), _) => {
+        if path == "Folder" { inference } else { path }
+    }
+
+    (Some(project), Some(path), _, _) => {
+        if path == "Folder" { project } else { bail!(/* erro: className setado nos dois lugares */) }
+    }
+
+    (None, None, None, Some(PathNode::Optional(_))) => return Ok(None),
+
+    (_, None, _, Some(PathNode::Required(path))) => { anyhow::bail!(/* $path não vira Instance */) }
+
+    (None, None, None, None) => {
+        bail!(
+            "Instance \"{}\" is missing some required information.\n\
+             One of the following must be true:\n\
+             - $className must be set to the name of a Roblox class\n\
+             - $path must be set to a path of an instance\n\
+             - The instance must be a known service, like ReplicatedStorage\n\
+             \n\
+             Project path: {}", instance_name, project_path.display(),
+        );
+    }
+};
+```
+
+Isso é literalmente a mensagem de erro que o testador viu (`[plan/missing-class-name]`) — confirma que ela só dispara quando **nenhum dos três mecanismos** (explícito, `$path`, inferência) resolve.
+
+Regras de precedência resultantes, respondendo diretamente às perguntas do pedido:
+
+- **`$className` explícito sempre vence a inferência de filho fixo (e a de Service), mesmo quando ambos estão presentes.** Comentário literal do código: *"If the user specifies a class name, but there's an inferred class name, we prefer the name listed explicitly by the user."* — confirmado, não é hipótese.
+- **`$className` + `$path` juntos**: só permitido se a classe resolvida pelo `$path` for `Folder` — nesse caso `$className` explícito vence (a inferência sequer é consultada nesse ramo do `match`, é `_` — coringa). Se `$path` resolver a qualquer outra classe, é erro ("ClassName especificado tanto no projeto quanto no filesystem"), independente de haver inferência ou não.
+- **`$path` sem `$className`**: se a classe resolvida pelo `$path` **não** for `Folder`, o `$path` vence sobre a inferência. Se a classe resolvida pelo `$path` **for** `Folder` (ex.: uma pasta comum sem `init.*`), a inferência (Service reconhecido OU `StarterPlayerScripts`/`StarterCharacterScripts`/`Terrain`) vence sobre o `Folder` genérico — é assim que uma pasta chamada `ReplicatedStorage` (ou `StarterPlayerScripts`) com `$path` vira o Service/classe certa em vez de um `Folder` cru.
+- **Nem `$className` nem `$path`, só inferência**: inferência é usada diretamente.
+- **Ordem geral, resumida**: `$className` explícito > `$path` (quando não resolve a `Folder`) > inferência (Service reconhecido OU filho fixo hardcoded — mesmo nível de prioridade entre si) > `Folder` genérico do `$path` > erro `[plan/missing-class-name]`.
+- **Sobre o hipotético "nome bate tanto num filho fixo quanto seria um Service reconhecido"**: **não pode acontecer na prática**, porque `infer_class_name` é uma única função com ramos `if`/`else if` mutuamente exclusivos por `parent_class` — um nó só tem UM pai concreto por vez, então só UM ramo (`DataModel` OU `StarterPlayer` OU `Workspace`) pode disparar para aquele nó. Os dois mecanismos ("Service reconhecido" e "filho fixo hardcoded") não são dois sistemas concorrentes com precedência própria entre si — são ramos da MESMA função, unificados num único valor `class_name_from_inference` antes mesmo de chegar no `match` de precedência. Não há uma precedência a definir entre eles porque nunca competem pelo mesmo nó.
+
+#### 4. Pesquisa incompleta, não mudança de versão — evidência
+
+Baixei `project.rs` de tags históricas do próprio `rojo-rbx/rojo` (`raw.githubusercontent.com/rojo-rbx/rojo/<tag>/src/snapshot_middleware/project.rs`) e conferi por `grep`:
+
+| Tag | `StarterPlayerScripts` presente? | `Terrain` (inferência) presente? |
+|---|---|---|
+| `v6.0.0` | Sim (como closure inline, mesma lógica) | Não |
+| `v7.0.0` | Sim | Não |
+| `v7.3.0` | Sim | Não |
+| `v7.4.0-rc1` | Sim | **Sim** (novo) |
+| `v7.4.0` / `v7.5.0` / `v7.7.0` (release atual, `latest` via API, publicado 2026-07-02) | Sim | Sim |
+| `master` (checado em 2026-09-05, `Unreleased` só tem `#1290`/`#1297`, fixes de path no Windows e um toggle de plugin — nada de `snapshot_project.rs`) | Sim | Sim |
+
+- O ramo `StarterPlayer` já existe desde pelo menos `v6.0.0` (release muito antiga) — **não é novo, não mudou entre a versão pesquisada antes e agora.**
+- O ramo `Workspace`/`Terrain` foi adicionado depois, via PR [#771](https://github.com/rojo-rbx/rojo/pull/771), lançado em `7.4.0-rc1` (3 de outubro de 2023) — CHANGELOG: *"Added `Terrain` classname inference, similar to services ([#771])"*. Isso é bem anterior à versão fixada pelo projeto (`v7.7.0`), então já estava presente quando a pesquisa original de 2026-09-05 foi feita.
+- **Conclusão**: a pesquisa original (`pesquisa-formato-projeto-rojo-2026-09-05.md`, seção 4/linhas ~90-91) leu a função `infer_class_name`/`snapshot_project_node` da MESMA versão (`v7.7.0`/master) que este documento confere agora, mas relatou só o ramo `if parent_class == "DataModel"` e **não mencionou os dois `else if` seguintes** (`StarterPlayer`, `Workspace`) — sub-leitura da função, não divergência de binário nem mudança de release. `coder-cli` deve implementar os 3 ramos acima, não só o de Service.
 
 ### 5. Resolução de `$path` e projetos aninhados
 
