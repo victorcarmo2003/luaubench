@@ -100,6 +100,11 @@
 	     `Services.new` para o resto; isso preserva o erro claro para um `"$className"` inválido
 	     vindo do `.project.json` (entrada não confiável do usuário) que `NewEngineInstance`,
 	     sem a guarda de `IsAbstract`, deixaria passar como instância malformada em silêncio.
+
+	task-runtime-025 acrescenta `Runtime.Sandbox.Load` e o tipo `SandboxChunkOptions` -- pré-
+	requisito do `require` simulado que `cli` constrói em `ModuleLoader.luau` (desenho completo
+	em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 5, e no cabeçalho de
+	Sandbox.luau). Nenhuma reexportação foi removida; `Runtime.Sandbox.Run` continua idêntico.
 ]]
 
 local SignalModule = require("./runtime/Signal")
@@ -124,6 +129,7 @@ export type Scheduler = SchedulerModule.Scheduler
 export type TaskHandle = SchedulerModule.TaskHandle
 export type SandboxOptions = SandboxModule.SandboxOptions
 export type SandboxResult = SandboxModule.SandboxResult
+export type SandboxChunkOptions = SandboxModule.SandboxChunkOptions
 export type OutputRecord = SandboxModule.OutputRecord
 export type OutputLevel = SandboxModule.OutputLevel
 
@@ -159,6 +165,11 @@ local Runtime = {
 
 	Sandbox = {
 		Run = SandboxModule.Run,
+		-- task-runtime-025: compila um chunk sem criar thread -- pré-requisito do `require`
+		-- simulado que `cli` vai construir em `ModuleLoader.luau` (ver desenho completo no
+		-- cabeçalho de Sandbox.luau e em .claude/agents-memory/arquiteto-cli-2026-09-05.md,
+		-- Decisão 5).
+		Load = SandboxModule.Load,
 	},
 }
 

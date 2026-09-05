@@ -526,5 +526,190 @@ test("unpack disponível e funcionalmente correto (confirmado por task-cli-007: 
 	assert(fields.a == "x" and fields.b == "y" and fields.c == "z", "unpack deveria expandir os três elementos do array na ordem certa")
 end)
 
+--[[
+	Testes da task-runtime-025 (Sandbox.Load: compilar um chunk sem criar thread). Desenho em
+	.claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 5.
+]]
+
+test("Sandbox.Load não cria thread -- o chunk roda na MESMA coroutine que o chamou", function()
+	local scheduler = Scheduler.new()
+	local innerThreadRef: thread? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(co: thread)
+			innerThreadRef = co
+		end,
+	}
+
+	local chunkFn = Sandbox.Load({
+		scriptName = "Modules.ThreadIdentity",
+		source = [[
+			report(coroutine.running())
+			return true
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(typeof(chunkFn) == "function", "Sandbox.Load deveria devolver a função do chunk, não uma thread")
+
+	local outerThreadRef = coroutine.running()
+	chunkFn()
+
+	assert(
+		innerThreadRef == outerThreadRef,
+		"o chunk carregado por Sandbox.Load deveria rodar na MESMA coroutine que o chamou -- nenhuma thread nova deveria ter sido criada"
+	)
+end)
+
+test("Sandbox.Load usa a MESMA whitelist de Sandbox.Run (fs/net/process/serde/io/require ausentes; setmetatable disponível)", function()
+	local scheduler = Scheduler.new()
+
+	local chunkFn = Sandbox.Load({
+		scriptName = "Modules.WhitelistParity",
+		source = [[
+			-- setmetatable presente confirma que é a MESMA buildEnvironment de Sandbox.Run (com a
+			-- whitelist completada por task-runtime-026), nunca uma segunda cópia reduzida.
+			local proxied = setmetatable({}, { __index = function() return "via-metamethod" end })
+			return {
+				fs = typeof(fs),
+				net = typeof(net),
+				process = typeof(process),
+				serde = typeof(serde),
+				io = typeof(io),
+				require = typeof(require),
+				setmetatableType = typeof(setmetatable),
+				proxiedValue = proxied.anything,
+			}
+		]],
+		scheduler = scheduler,
+		onOutput = function(_record) end,
+	})
+
+	local moduleResult = chunkFn()
+	local fields = moduleResult :: { [string]: unknown }
+	assert(fields.fs == "nil", "fs deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.net == "nil", "net deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.process == "nil", "process deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.serde == "nil", "serde deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.io == "nil", "io deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.require == "nil", "require (cru do Lune) deveria continuar inalcançável dentro de um chunk carregado por Sandbox.Load")
+	assert(fields.setmetatableType == "function", "setmetatable deveria estar disponível -- mesma whitelist completa de Sandbox.Run")
+	assert(fields.proxiedValue == "via-metamethod", "setmetatable/__index deveria funcionar de ponta a ponta dentro do chunk")
+end)
+
+test("chamar o chunk devolve o valor de retorno do módulo", function()
+	local scheduler = Scheduler.new()
+
+	local chunkFn = Sandbox.Load({
+		scriptName = "Modules.ReturnValue",
+		source = [[
+			local Module = { greeting = "hello", count = 42 }
+			return Module
+		]],
+		scheduler = scheduler,
+		onOutput = function(_record) end,
+	})
+
+	local result = chunkFn()
+	local moduleTable = result :: { greeting: string, count: number }
+	assert(moduleTable.greeting == "hello", "o valor devolvido pelo chunk deveria ser exatamente o que o módulo retornou")
+	assert(moduleTable.count == 42, "o valor devolvido pelo chunk deveria ser exatamente o que o módulo retornou")
+end)
+
+test("erro de EXECUÇÃO dentro do chunk propaga para o chamador via pcall e NÃO vira OutputRecord duplicado", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	local chunkFn = Sandbox.Load({
+		scriptName = "Modules.RequireErra",
+		source = [[ error("erro dentro do modulo requerido") ]],
+		scheduler = scheduler,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	local ok, err = pcall(chunkFn)
+
+	assert(not ok, "o erro dentro do chunk deveria propagar via retorno de pcall, nunca ser engolido")
+	assert(string.find(tostring(err), "erro dentro do modulo requerido") ~= nil, `pcall deveria capturar a mensagem original, recebeu: {tostring(err)}`)
+	assert(#records == 0, `Sandbox.Load não se inscreve em ThreadError -- não deveria ter gerado nenhum OutputRecord, recebeu {#records}`)
+end)
+
+test("erro de COMPILAÇÃO (source Luau inválido) propaga direto do próprio Sandbox.Load via pcall, nunca vira OutputRecord", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	local ok, err = pcall(function()
+		return Sandbox.Load({
+			scriptName = "Modules.CompilacaoInvalida",
+			source = "this is not )( valid luau {{{",
+			scheduler = scheduler,
+			onOutput = function(record)
+				table.insert(records, record)
+			end,
+		})
+	end)
+
+	assert(not ok, "Sandbox.Load deveria propagar erro de compilação como erro Lua direto, capturável por pcall em volta da própria chamada")
+	assert(tostring(err) ~= "", "a mensagem de erro de compilação não deveria vir vazia")
+	assert(#records == 0, "erro de compilação em Sandbox.Load não deveria gerar nenhum OutputRecord")
+end)
+
+test("task.wait no topo de um chunk carregado por Sandbox.Load suspende a thread CHAMADORA (cooperativo via Scheduler, nunca sleep de SO)", function()
+	local scheduler = Scheduler.new()
+	local waitCompleted = false
+	local resultValue: string? = nil
+
+	local chunkFn = Sandbox.Load({
+		scriptName = "Modules.WaitTopLevel",
+		source = [[
+			task.wait(0.05)
+			return "done-after-wait"
+		]],
+		scheduler = scheduler,
+		onOutput = function(_record) end,
+	})
+
+	-- Chama o chunk DENTRO de uma thread gerida pelo Scheduler -- é o que Sandbox.Load promete
+	-- (rodar na thread chamadora): se `task.wait` no topo do módulo criasse/suspendesse uma
+	-- thread própria em vez da corrente, esta atribuição a `resultValue`/`waitCompleted` só
+	-- aconteceria depois, sem depender do StepOnce abaixo.
+	scheduler:Spawn(function()
+		-- `chunkFn()` devolve `...unknown` (tipo público de `Sandbox.Load`) -- estreitado aqui
+		-- com um único cast (a origem já é `unknown`, não `any`), só para a asserção abaixo.
+		resultValue = chunkFn() :: string?
+		waitCompleted = true
+	end)
+
+	assert(not waitCompleted, "task.wait no topo do módulo deveria ter suspendido a thread chamadora imediatamente, antes de qualquer StepOnce")
+
+	scheduler:StepOnce(0.06)
+
+	assert(waitCompleted, "StepOnce deveria ter retomado a MESMA thread chamadora depois do task.wait, via Scheduler (nunca sleep de SO)")
+	assert(resultValue == "done-after-wait", "chunkFn() deveria devolver o valor do módulo depois de retomar do task.wait")
+end)
+
+test("Sandbox.Run continua com o comportamento de hoje -- Sandbox.Load não introduz regressão (repete o cenário de erro síncrono de Sandbox.Run)", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	local result = Sandbox.Run({
+		scriptName = "Workspace.RegressaoRun",
+		source = [[ error("ainda funciona") ]],
+		scheduler = scheduler,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(typeof(result.thread) == "thread", "Sandbox.Run continua devolvendo { thread: thread }")
+	assert(#records == 1, `Sandbox.Run deveria continuar reportando exatamente 1 OutputRecord de erro, recebeu {#records}`)
+	assert(records[1].level == "error", "Sandbox.Run deveria continuar reportando nível 'error'")
+	assert(records[1].scriptName == "Workspace.RegressaoRun", "Sandbox.Run deveria continuar identificando o scriptName corretamente")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

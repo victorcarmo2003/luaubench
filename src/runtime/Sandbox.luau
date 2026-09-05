@@ -84,7 +84,47 @@
 	`Instance.luau` (fora do escopo desta tarefa, que é só Sandbox.luau/Sandbox.spec.luau):
 	caminho óbvio é travar `InstanceMeta.__metatable`, espelhando o comportamento real de
 	userdata. Reportado como pendência de acompanhamento na mesma seção do relatório desta
-	tarefa, não corrigido aqui.
+	tarefa, não corrigido aqui. (task-runtime-027, em Instance.luau, já fechou este ponto --
+	fora do território deste arquivo, não conferido aqui.)
+
+	-- task-runtime-025: `Sandbox.Load` -- compilar um chunk sem criar thread (pré-requisito do
+	-- `require` simulado que `cli` vai construir em `ModuleLoader.luau`).
+
+	Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 5.
+	`Sandbox.Run` faz `scheduler:Spawn(entry)` e, dentro, `chunk()` descartando o valor de
+	retorno e rodando em thread própria -- as duas coisas são incompatíveis com `require`, que
+	precisa (a) do valor de retorno do módulo e (b) de rodar NA THREAD CHAMADORA, para que um
+	`task.wait()` no topo de um `ModuleScript` suspenda quem pediu (`pcall(require, m)` no
+	script do usuário), em vez de suspender uma thread interna que ninguém mais alcança.
+
+	`Sandbox.Load` resolve isso compilando `options.source` com a MESMA `buildEnvironment` que
+	`Sandbox.Run` usa (a mesma função Luau, chamada aqui embaixo -- nunca uma segunda cópia da
+	whitelist: ela é a superfície de segurança inteira do sandbox, e ter duas definições seria
+	exatamente o tipo de divergência silenciosa que a regra 00 proíbe) e devolvendo a função do
+	chunk já carregada, SEM criar thread nenhuma e SEM chamá-la -- quem chama decide quando
+	invocar, e invocar na própria thread corrente é o que preserva a semântica síncrona do
+	`require` real.
+
+	Por isso `Sandbox.Load` DELIBERADAMENTE não registra a thread chamadora em `ownThreads` e
+	não se inscreve em `options.scheduler.ThreadError`: um erro dentro do chunk (de compilação,
+	em `luau.load`, ou de execução, ao chamar a função devolvida) é um erro Lua comum,
+	propagando pela pilha de chamada normal -- exatamente o que faz `pcall(require, m)` funcionar
+	no script do usuário. Se ninguém tratar, o erro sobe até onde quer que a cadeia de chamadas
+	comece; se essa origem for a thread de um `Script` rodando via `Sandbox.Run`, ela JÁ é
+	`ownThread` daquele `Sandbox.Run` e cai no `coroutine.resume` protegido de Scheduler.luau --
+	reportada como `OutputRecord` UMA ÚNICA VEZ ali, nunca duplicada aqui.
+
+	LIMITAÇÃO CONHECIDA, documentada de propósito (regra 00): como `Sandbox.Load` não se
+	inscreve em `ThreadError`, um erro dentro de uma thread NOVA criada por `task.spawn`/
+	`task.delay`/`task.defer` chamado de DENTRO de um chunk carregado por `Sandbox.Load` (ex.:
+	um `ModuleScript` que dispara `task.spawn` no seu próprio corpo) dispara `ThreadError` no
+	`Scheduler` compartilhado, mas nenhuma `ownThreads` ativa (nem a do `Sandbox.Run` do Script
+	original, nem nenhuma outra) contém essa thread -- então nenhum `OutputRecord` é gerado para
+	ela. Isso é diferente do erro SÍNCRONO do próprio corpo do chunk (o caso que esta tarefa
+	resolve, coberto pelo acceptance/teste), que propaga normalmente via `pcall`. Corrigir o caso
+	assíncrono exigiria repassar/compartilhar a `ownThreads` do Script que originou a cadeia de
+	`require`, o que o desenho desta tarefa pede explicitamente para NÃO fazer aqui -- fica
+	registrado como pendência para quem desenhar `cli/ModuleLoader.luau`.
 ]]
 
 local luau = require("@lune/luau")
@@ -115,6 +155,14 @@ export type SandboxOptions = {
 export type SandboxResult = {
 	thread: thread,
 }
+
+-- Alias deliberado, não um tipo espelhado à mão: `Sandbox.Load` precisa exatamente dos mesmos
+-- cinco campos que `Sandbox.Run` (`scriptName`/`source`/`scheduler`/`extraGlobals`/`onOutput`)
+-- para poder chamar a MESMA `buildEnvironment` sem nenhuma cópia da whitelist (acceptance da
+-- task-runtime-025) -- um tipo espelhado à mão arriscaria os dois divergirem em silêncio se
+-- `SandboxOptions` ganhar um campo novo depois. Nome próprio (em vez de reusar `SandboxOptions`
+-- direto na assinatura de `Load`) só para deixar a intenção clara para quem lê `cli`.
+export type SandboxChunkOptions = SandboxOptions
 
 -- Forma interna da tabela `task` exposta ao script do usuário -- fechada sobre o `scheduler`
 -- real recebido em `options`, nunca sobre `@lune/task` cru. Não exportado: é um detalhe de
@@ -427,6 +475,53 @@ function Sandbox.Run(options: SandboxOptions): SandboxResult
 	local handle = options.scheduler:Spawn(entry)
 
 	return { thread = handle }
+end
+
+-- task-runtime-025: compila `options.source` SEM criar thread e SEM chamar o chunk -- quem
+-- chama decide quando invocar, e chamar na própria thread corrente é o que dá ao `require`
+-- simulado (`cli/ModuleLoader.luau`) a semântica síncrona real: um `task.wait()` no topo do
+-- `ModuleScript` suspende quem pediu, e um erro no corpo do módulo propaga por `pcall` normal
+-- em vez de sumir numa thread interna que ninguém mais alcança. Ver o bloco dedicado no
+-- cabeçalho do módulo para o desenho completo e a limitação conhecida sobre `task.spawn`
+-- interno a um chunk carregado desta forma.
+function Sandbox.Load(options: SandboxChunkOptions): () -> ...unknown
+	-- `ownThreads` aqui só existe para satisfazer a assinatura de `buildEnvironment` (a MESMA
+	-- função que `Sandbox.Run` usa, chamada logo abaixo) -- ela é o que permite `task.spawn`/
+	-- `task.delay`/`task.defer` chamados de DENTRO do chunk continuarem criando threads geridas
+	-- de verdade pelo Scheduler. Como `Sandbox.Load` NUNCA se inscreve em `ThreadError` (ver
+	-- cabeçalho do módulo), nenhum listener chega a consultar esta tabela -- ela nunca precisa
+	-- sobreviver além desta chamada, então uma tabela nova e comum (sem `__mode`) já é
+	-- suficiente; mantemos o padrão de chave fraca de `Sandbox.Run` só por consistência de
+	-- estilo entre as duas funções deste módulo.
+	local ownThreads: { [thread]: boolean } =
+		(setmetatable({}, { __mode = "k" }) :: unknown) :: { [thread]: boolean }
+
+	local environment = buildEnvironment(options, ownThreads)
+
+	-- Mesmo boundary de `LoadOptions.environment` documentado em `Sandbox.Run` -- fronteira
+	-- declarada pelo stub do próprio Lune (`{ [string]: any }?`), não nossa.
+	local loadOptions = {
+		debugName = options.scriptName,
+		environment = (environment :: unknown) :: { [string]: any },
+		injectGlobals = false,
+	}
+
+	-- `luau.load` lança um erro Lua direto se `options.source` não compilar (mesmo mecanismo
+	-- documentado em `Sandbox.Run`/pesquisa-sandbox-globals-lune-2026-09-04.md: a assinatura
+	-- Rust devolve `LuaResult<LuaFunction>`, nunca `nil` + mensagem) -- aqui, diferente de
+	-- `Sandbox.Run`, essa chamada NÃO está dentro de uma thread gerida pelo `Scheduler`, então o
+	-- erro de compilação propaga como um erro Lua comum direto para quem chamou `Sandbox.Load`,
+	-- capturável por `pcall(Sandbox.Load, options)` -- não vira `OutputRecord` (nenhum
+	-- `Scheduler:Spawn`/`coroutine.resume` protegido está envolvido nesta chamada).
+	--
+	-- `luau.load(...)` é tipado como `(...any) -> ...any` no stub do próprio Lune -- fronteira
+	-- externa declarada pela biblioteca, não nossa (mesmo precedente do cast de
+	-- `LoadOptions.environment` acima). Cast em duas etapas por `unknown` (nunca `any` na nossa
+	-- própria API, regra 01, mesmo padrão de `ownThreads`/`environment` deste arquivo): o tipo
+	-- público devolvido por `Sandbox.Load` continua sendo `() -> ...unknown`.
+	local chunk = (luau.load(options.source, loadOptions) :: unknown) :: () -> ...unknown
+
+	return chunk
 end
 
 return Sandbox
