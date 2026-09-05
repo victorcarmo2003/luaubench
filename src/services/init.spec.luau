@@ -184,6 +184,70 @@ test("Services.IsEngineFixedChild funciona ANTES de Services.Bootstrap (leitura 
 	)
 end)
 
+--[[
+	task-services-014 (arquiteto-cli-2026-09-05.md, Decisão 17): `Services.IsEngineOnlyClass` é
+	leitura PURA de `generated/Manifest.luau` + `RUNTIME_OWNED_CLASSES` -- não toca
+	`Runtime.ClassRegistry` nem `Context`, mesma garantia de `IsServiceClass`/`IsEngineFixedChild`
+	acima. Este teste PRECISA rodar antes de qualquer `Services.Bootstrap`/`Context.Set` deste
+	arquivo -- por isso vem logo depois dos testes de `IsServiceClass`/`IsEngineFixedChild` (que já
+	provam, com `not Context.IsSet()`, que nada neste arquivo chamou `Bootstrap` até aqui). É também
+	o acceptance "(6) segura ANTES de Bootstrap" do board -- este teste nunca chama `Bootstrap`.
+]]
+test("Services.IsEngineOnlyClass funciona ANTES de Services.Bootstrap (leitura pura do manifesto + RUNTIME_OWNED_CLASSES, sem erro de Context)", function()
+	assert(
+		not Context.IsSet(),
+		"este teste precisa rodar ANTES de qualquer Services.Bootstrap neste arquivo -- se isto falhar, um teste anterior chamou Bootstrap e a ordem do arquivo foi violada"
+	)
+
+	-- (1) o caso que originou a tarefa: DataModel é NotCreatable e Covered == false no manifesto
+	-- (implementada por `runtime`, fora do pipeline gerado de `services`) -- sem RUNTIME_OWNED_CLASSES
+	-- esta asserção falharia, é exatamente a armadilha que a task descreve.
+	local dataModelEntry = Manifest.Classes["DataModel"]
+	assert(dataModelEntry ~= nil, "'DataModel' deveria constar do manifesto real")
+	assert(dataModelEntry.IsAbstract, "'DataModel' deveria ser NotCreatable (IsAbstract==true) no manifesto")
+	assert(
+		not dataModelEntry.Covered,
+		"'DataModel' deveria ter Covered==false no manifesto -- implementada por runtime, fora do pipeline gerado de services"
+	)
+	assert(
+		Services.IsEngineOnlyClass("DataModel"),
+		"IsEngineOnlyClass('DataModel') deveria ser true via RUNTIME_OWNED_CLASSES, apesar de Covered==false"
+	)
+
+	-- mais três classes NotCreatable e Covered==true que nunca são um nó legítimo de .project.json
+	assert(Services.IsEngineOnlyClass("Instance"), "IsEngineOnlyClass('Instance') deveria ser true -- NotCreatable e coberta")
+	assert(Services.IsEngineOnlyClass("PVInstance"), "IsEngineOnlyClass('PVInstance') deveria ser true -- NotCreatable e coberta")
+	assert(Services.IsEngineOnlyClass("WorldRoot"), "IsEngineOnlyClass('WorldRoot') deveria ser true -- NotCreatable e coberta")
+
+	-- (2) TRUE também para Service coberto -- a função classifica "não pode nascer via
+	-- Services.new", NUNCA decide legitimidade de POSIÇÃO (isso é trabalho do isServiceRoot em
+	-- TreePlanner, uma camada acima). Workspace/ReplicatedStorage são NotCreatable E Covered no
+	-- manifesto real.
+	assert(
+		Services.IsEngineOnlyClass("Workspace"),
+		"IsEngineOnlyClass('Workspace') deveria ser true -- é NotCreatable e coberta, mesmo sendo um Service legítimo na raiz"
+	)
+	assert(Services.IsEngineOnlyClass("ReplicatedStorage"), "IsEngineOnlyClass('ReplicatedStorage') deveria ser true -- mesma razão")
+
+	-- (3) false para Terrain: NotCreatable, mas Covered==false e NÃO está em RUNTIME_OWNED_CLASSES --
+	-- é o recorte que mantém a mensagem VERDADEIRA ("ainda não simulada") em vez de uma acusação de
+	-- erro de projeto (Decisão 17, "Por quê o recorte 'este build simula'").
+	local terrainEntry = Manifest.Classes["Terrain"]
+	assert(
+		terrainEntry ~= nil and terrainEntry.IsAbstract and not terrainEntry.Covered,
+		"'Terrain' precisa ser NotCreatable e Covered==false no manifesto para exercitar este caso"
+	)
+	assert(not Services.IsEngineOnlyClass("Terrain"), "IsEngineOnlyClass('Terrain') deveria ser false -- NotCreatable mas ainda não simulada por este build")
+
+	-- (4) false para classes criáveis (IsAbstract==false) -- Folder e ModuleScript são o caso comum
+	assert(not Services.IsEngineOnlyClass("Folder"), "IsEngineOnlyClass('Folder') deveria ser false -- classe criável (IsAbstract==false)")
+	assert(not Services.IsEngineOnlyClass("ModuleScript"), "IsEngineOnlyClass('ModuleScript') deveria ser false -- classe criável (IsAbstract==false)")
+
+	-- (5) false para classe inexistente no manifesto -- nunca erro
+	assert(not Services.IsKnownClass("Frmae"), "'Frmae' (typo) não deveria constar do manifesto real")
+	assert(not Services.IsEngineOnlyClass("Frmae"), "IsEngineOnlyClass('Frmae') deveria ser false -- classe ausente do manifesto, nunca erro")
+end)
+
 test("Register() é idempotente -- chamar duas vezes não erra", function()
 	local ok = pcall(function()
 		Services.Register()
@@ -714,6 +778,68 @@ test(
 				)
 			end
 		end
+	end
+)
+
+--------------------------------------------------------------------------------------------------
+-- task-services-014 (arquiteto-cli-2026-09-05.md, Decisão 17, "Riscos"): TESTE DE COERÊNCIA -- o
+-- alarme contra falso positivo futuro em `cli`. `TreePlanner` (Decisão 17) só pode pré-rejeitar um
+-- nó com `IsEngineOnlyClass(className) == true` porque HOJE essas classes se dividem, sem resto, em
+-- três grupos que `TreePlanner` sabe excluir ANTES de checar `IsEngineOnlyClass`: Services
+-- (`isServiceRoot`), filhos fixos do motor (`IsEngineFixedChild`) e uma lista fechada do que nunca é
+-- legítimo num `.project.json`. Se uma leva futura de `services` cobrir uma classe NotCreatable (ex.:
+-- `Terrain`) SEM encaixá-la em um desses três grupos, `IsEngineOnlyClass` passaria a devolver `true`
+-- para ela e `TreePlanner` rejeitaria um `Workspace/Terrain` legítimo -- este teste FALHA nesse
+-- momento, na leva de `services` que introduziu o problema, não meses depois no projeto de um
+-- usuário.
+--
+-- CLOSED_NEVER_LEGITIMATE é a lista fechada e explícita de classes NotCreatable+Covered que nunca
+-- são um nó legítimo de `.project.json` (nem Service, nem filho fixo) -- hardcoded de propósito,
+-- mesma disciplina de `KNOWN_ENGINE_FIXED_PARENTS` (acima) e `COVERED_CLASSES`/`SERVICES_THIS_LEVA`
+-- em `Integration.spec.luau`: falha alto e claro se o manifesto crescer essa lista sem que este
+-- teste seja revisitado. `fixedChildClassNames` reaproveita `KNOWN_ENGINE_FIXED_PARENTS` (declarado
+-- acima, no teste de coerência da task-services-010) em vez de duplicar "StarterPlayer" -- as duas
+-- listas fechadas precisam andar juntas por construção.
+--------------------------------------------------------------------------------------------------
+
+local CLOSED_NEVER_LEGITIMATE: { [string]: boolean } = {
+	Instance = true,
+	PVInstance = true,
+	BaseScript = true,
+	LuaSourceContainer = true,
+	WorldRoot = true,
+	BasePlayerGui = true,
+	DataModel = true,
+}
+
+test(
+	"TESTE DE COERÊNCIA: toda classe para a qual IsEngineOnlyClass devolve true é Service, filho fixo do motor, ou está na lista fechada de nunca-legítima",
+	function()
+		local fixedChildClassNames: { [string]: boolean } = {}
+		for _, parentClassName in KNOWN_ENGINE_FIXED_PARENTS do
+			for _, entry in EngineFixedChildren.Of(parentClassName) do
+				fixedChildClassNames[entry.ClassName] = true
+			end
+		end
+
+		local uncategorizedCount = 0
+		for className in Manifest.Classes do
+			if Services.IsEngineOnlyClass(className) then
+				local isAccountedFor = Services.IsServiceClass(className)
+					or fixedChildClassNames[className] == true
+					or CLOSED_NEVER_LEGITIMATE[className] == true
+				if not isAccountedFor then
+					uncategorizedCount += 1
+					print(
+						`[ALARME] "{className}" é IsEngineOnlyClass mas não é Service, filho fixo do motor, nem está na lista fechada -- TreePlanner vai rejeitar um projeto legítimo. Registre em EngineFixedChildren ou na lista fechada (CLOSED_NEVER_LEGITIMATE).`
+					)
+				end
+			end
+		end
+		assert(
+			uncategorizedCount == 0,
+			`{uncategorizedCount} classe(s) com IsEngineOnlyClass == true não estão categorizadas -- ver mensagens [ALARME] acima`
+		)
 	end
 )
 

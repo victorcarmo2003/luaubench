@@ -160,7 +160,9 @@
 	`Services` abaixo (`Bootstrap`/`new`/`IsKnownClass`/`IsSimulatedClass`/`GetDumpVersion`/
 	`IsServiceClass`/`GetSimulatedServiceClasses` -- task-services-009, leitura pura do manifesto,
 	seguras de chamar ANTES de `Bootstrap`; `IsEngineFixedChild` -- task-services-010, mesma
-	garantia, leitura pura de `EngineFixedChildren.luau` -- ver comentário de cada uma abaixo).
+	garantia, leitura pura de `EngineFixedChildren.luau`; `IsEngineOnlyClass` -- task-services-014,
+	mesma garantia, leitura pura do manifesto + `RUNTIME_OWNED_CLASSES` -- ver comentário de cada uma
+	abaixo).
 	`EngineFixedChildren.Of` fica INTERNO: não é reexportado por este arquivo -- `cli` não tem uso
 	legítimo para a lista completa de filhos fixos, só para o predicado. Nenhuma função NOVA
 	exportada por task-services-011 -- `Register()`/`Bootstrap()` continuam sendo os únicos pontos
@@ -398,6 +400,59 @@ end
 ]]
 function Services.IsEngineFixedChild(parentClassName: string, name: string, className: string): boolean
 	return EngineFixedChildren.Is(parentClassName, name, className)
+end
+
+-- task-services-014 (arquiteto-cli-2026-09-05.md, Decisão 17, "RUNTIME_OWNED_CLASSES -- a
+-- armadilha nº 2, encontrada verificando o manifesto"): classes que o LuauBench simula FORA do
+-- pipeline gerado de `services` (implementadas por `runtime`) e que por isso aparecem com
+-- `Covered == false` no manifesto SEM que isso signifique "não simulada" -- `Covered` é gerado por
+-- `tools/coverage.luau` a partir do registro de `services`, e `DataModel` (`Runtime.DataModel.new()`)
+-- nunca passa por esse pipeline. Hoje só `DataModel`. Sem esta tabela, `IsEngineOnlyClass("DataModel")`
+-- devolveria `false` (`Covered == false`) e a guarda de `cli` (`TreePlanner`, Decisão 17) não
+-- dispararia no caso original que motivou esta tarefa (`task-cli-022`).
+local RUNTIME_OWNED_CLASSES: { [string]: boolean } = { DataModel = true }
+
+--[[
+	task-services-014 (arquiteto-cli-2026-09-05.md, Decisão 17, "Contrato entre territórios
+	(delta)"): "só o MOTOR cria instância desta classe, E este build sabe simulá-la" -- tag
+	`NotCreatable` do dump (`ManifestEntry.IsAbstract`; o NOME DO CAMPO é enganoso -- é a tradução
+	literal de `NotCreatable`, não "classe abstrata" no sentido de OOP; a renomeação para
+	`IsNotCreatable` já está registrada como pendente em `src/runtime/ClassRegistry.luau`, NÃO feita
+	nesta tarefa) E (coberta por esta leva de `services`, `Covered == true`, OU implementada por
+	`runtime` fora do pipeline gerado, `RUNTIME_OWNED_CLASSES` acima).
+
+	PURA -- só lê `generated/Manifest.luau` e `RUNTIME_OWNED_CLASSES` (tabelas estáticas, já
+	carregada/definida no `require`/topo deste arquivo). NÃO toca `Runtime.ClassRegistry` nem
+	`Context`: por isso é explicitamente SEGURA de chamar ANTES de `Services.Bootstrap` ter rodado --
+	mesma garantia de `IsServiceClass`/`IsEngineFixedChild`/`GetSimulatedServiceClasses` acima.
+	`Services.IsSimulatedClass` (consulta `Runtime.ClassRegistry`, a fonte VIVA) NÃO serve para este
+	uso: `TreePlanner.Plan` roda no passo 4 do pipeline de `cli` (lê `.project.json` + filesystem,
+	NENHUMA Instance criada ainda), bem ANTES de `Services.Bootstrap` no passo 7.
+
+	`cli` (`TreePlanner.resolveCore`, Decisão 17) usa este predicado para antecipar, uma fase antes,
+	que `TreeMaterializer.createInstance` vai cair no ramo 3 (`Services.new`) para este nó E que essa
+	chamada não pode dar certo -- SEM pré-julgar classe que este build ainda não simula: uma classe
+	`NotCreatable` mas `Covered == false` (ex. "Terrain") continua devolvendo `false` aqui, para que o
+	usuário veja a mensagem VERDADEIRA (`[LuauBench] ... is not simulated yet`, no `Materialize`), e
+	não uma acusação de erro de projeto por algo que o LuauBench simplesmente ainda não cobre. Esta
+	função classifica "não pode nascer via `Services.new`" -- NUNCA decide legitimidade de POSIÇÃO
+	(um Service coberto como "Workspace"/"ReplicatedStorage" também devolve `true` aqui; é o
+	`isServiceRoot` de `TreePlanner`, uma camada acima, que sabe que a raiz é uma posição legítima).
+
+	NOME DELIBERADO: não `IsAbstractClass` -- ver acima sobre `IsAbstract` ser a tag `NotCreatable`,
+	não "abstrata"; `IsAbstractClass("Workspace") == true` levaria quem lê a uma conclusão errada
+	(`Workspace` não é abstrata em sentido nenhum, só não é instanciável por script). `Engine*` já é
+	vocabulário do repositório (`EngineFixedChildren`, `NewEngineInstance`) para "criado pelo motor,
+	não por script do usuário" -- e o nome carrega o recorte de cobertura sem prometer ser um espelho
+	cru da tag do dump.
+
+	Classe ausente do manifesto (typo do usuário, ex. "Frmae") -> `false`, NUNCA erro: esta função só
+	classifica -- decidir se um `className` desconhecido é erro de projeto é responsabilidade de quem
+	chama (`TreePlanner`), igual às vizinhas acima.
+]]
+function Services.IsEngineOnlyClass(className: string): boolean
+	local entry = Manifest.Classes[className]
+	return entry ~= nil and entry.IsAbstract and (entry.Covered or RUNTIME_OWNED_CLASSES[className] == true)
 end
 
 --[[
