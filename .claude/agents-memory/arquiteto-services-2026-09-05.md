@@ -854,3 +854,71 @@ O que muda para **este** desenho de `services`:
 - `Services.new` **não muda** — já barra `IsAbstract` antes de chamar `ClassRegistry.new`, e continua sendo o ponto de enforcement do gate voltado ao script.
 - `Types.GeneratedClass.IsAbstract` **não é renomeado agora**. O nome está errado (o dump só tem `NotCreatable`); o renome fica de carona na leva 3 (tipos de valor), que já reescreve os arquivos gerados. Ver o gatilho registrado no desenho do runtime.
 - Os testes-gatilho que `task-services-003` deixou em `src/services/Integration.spec.luau` falhando de propósito devem **inverter** para asserção normal quando `task-runtime-023` fechar — trabalho de `coder-services`, na retomada de `task-services-003`.
+
+---
+
+## Decisão de fidelidade 2026-09-05 (3) — `RunService.PreRender` fica conectável (fecho de `task-services-008`)
+
+Fecha a pendência aberta em **B.4** e deferida por `task-services-007`. Citável do código como **"B.5"**.
+
+### B.5.1 Decisão
+
+**`RunService.PreRender` NÃO recebe `RejectingSignal`.** Continua exatamente como está: existe no schema, é conectável, nunca dispara. `RenderStepped` continua sendo o **único** membro da leva 1 que erra ao conectar.
+
+A recomendação de `task-services-007` (tratar por analogia estrutural com `RenderStepped`) foi lida integralmente e **não é acatada** — ela veio explicitamente marcada como *inferência, não confirmação empírica*, e três fatos abaixo pesam contra ela. Isto não é reversão da decisão B: B continua valendo sem alteração para `RenderStepped`.
+
+### B.5.2 O enquadramento correto: `PreRender` nunca foi "o irmão poupado de `RenderStepped`"
+
+Este é o ponto que dissolve a aparente incoerência e que a pesquisa não enquadrou assim.
+
+**B.2** já estabeleceu um balde inteiro de superfície client-only deliberadamente **não varrida** nesta leva: `UserInputService`, `GuiService`, `Players.LocalPlayer` e afins — tudo isso existe e não faz nada, sem erro. `RenderStepped` é uma **exceção recortada desse balde**, justificada por evidência direta de um erro duro de engine em RCC (thread de 14/set/2024, com staff reconhecendo o não-erro do Studio como bug).
+
+`PreRender` pertence ao balde, não à exceção. Manter a exceção do tamanho exato da evidência que a sustenta é a política já escrita; estendê-la por semelhança de nome seria alargá-la por analogia — exatamente o movimento que B.4 pré-comprometeu a não fazer. A decisão de hoje **aplica** a regra existente em vez de abrir uma nova.
+
+### B.5.3 Três fatos que pesam contra a analogia
+
+**1. A analogia tem um contraexemplo com citação ao vivo — e a própria pesquisa o traz.**
+`BindToRenderStep` carrega na doc oficial a **mesma frase** de restrição ("As it is linked to the client's rendering process, it can only be called on the client") e, em jogo publicado real, **falha em silêncio, sem erro** (DevForum `182636`, citado na seção 1 do relatório). Ou seja: temos prova viva de que a frase "is client-side, can only be used in X" **não implica** erro em runtime. A pesquisa reconheceu isso e contornou com a distinção `Event` × `Function`; mas a única evidência *empírica* que possuímos sobre o que aquela frase significa aponta para silêncio. Evidência documental cujo poder preditivo já foi falsificado uma vez não sustenta uma mudança de comportamento por comissão.
+
+**2. O portão conhecido de `RenderStepped` é uma checagem legada, não o mecanismo moderno.**
+A mensagem de `RenderStepped` (`"...can only be used from local scripts"`) é de 2014 — hardcoded, anterior ao sistema de Capabilities. `PreRender` entrou por volta de 2021, na era moderna, e no dump fixado `28360dea` declara `Capabilities: ["Basic"]`: **nenhum portão declarado**. Isso não prova ausência de checagem (a de `RenderStepped` também não aparece no dump), mas destrói a premissa implícita da analogia — a de que os dois compartilham um mecanismo. Não há evidência nenhuma de que a checagem legada tenha sido religada ao nome novo, e o histórico de rollout por feature flag de `PreRender` (seção 1, "Incerto") sugere um caminho de código menos endurecido, não mais.
+
+**3. A doc oficial migrou a frase de `RenderStepped` para `PreRender`** — a pesquisa apresentou isso como argumento *a favor* de errar. Ele é mais fraco do que parece: a frase descreve **onde o evento é útil** (só dispara sob render, que só existe no cliente), afirmação verdadeira para os dois nomes e para `BindToRenderStep`, e que no caso vivo conhecido corresponde a silêncio. Documentação mudando de lugar é evento de documentação, não de runtime — a própria seção 3 do relatório faz essa ressalva para a hipótese da família de erro e ela vale igual aqui.
+
+### B.5.4 Assimetria de custo, medida contra o `cli` que existe hoje
+
+Fato que a pesquisa não tinha e que decide a margem: **`src/cli/ScriptRunner.luau` nunca executa `LocalScript`** (`SkippedLocalScripts` no `RunSummary`; LuauBench é servidor). Logo, dentro do LuauBench, só há dois caminhos até `PreRender:Connect()`:
+
+| Caminho | Se errarmos (comissão) | Se mantivermos (omissão) |
+|---|---|---|
+| `Script` de servidor conectando direto | Erro em código que no Roblox real é conexão morta — ganho pequeno e real | Conexão morta, igual ao Roblox real |
+| `ModuleScript` compartilhado (ex.: `ReplicatedStorage`) que conecta sem guarda e é `require`d do servidor | **Crash no meio do `require`**, derrubando em cascata todo consumidor a jusante daquele módulo — código que no Roblox real carrega sem incidente, se `PreRender` de fato não errar | Módulo carrega, conexão morta |
+
+O caminho bem escrito (`if RunService:IsClient() then`) é seguro nos dois cenários — `IsClient()` devolve `false` e o ramo nunca é tomado. A exposição de um `LocalScript` conectando `PreRender` é **zero**, porque ele nunca roda.
+
+Duas consequências:
+
+- O ganho da mudança é quase nulo — a incoerência "um nome erra, o outro não" é praticamente inobservável, já que exige um `Script` de servidor tocando os dois.
+- O prejuízo é concreto e não-local: falha em cascata no `require`, o pior formato de erro que este runtime pode produzir, em código que roda limpo no Studio.
+
+Comissão custa mais que omissão, e o ganho não paga. É a mesma conta da **Decisão 3** ("em caso de dúvida: incluir") e do princípio de B.4, aplicada com números.
+
+### B.5.5 A regra que isto fixa
+
+Estender `RejectingSignal` a um membro exige **evidência direta de erro naquele membro** — citação de erro real, ao vivo. Analogia estrutural, semelhança de nome e frase de documentação **não** bastam, porque já temos um caso (`BindToRenderStep`) em que os três apontaram para erro e a realidade era silêncio. Vale para toda a superfície client-only do balde de B.2, não só para `PreRender`.
+
+### B.5.6 O que reabre esta decisão
+
+Uma citação ao vivo de `RunService.PreRender:Connect()` num `Script` de servidor em produção (RCC) reportando erro. A pesquisa buscou especificamente e não achou. Pesquisa documental já se esgotou aqui (seção 1, "Incerto"): o que fecha é smoke test contra servidor Roblox publicado — mesmo caminho já registrado para o texto exato do erro de `RenderStepped` (seção 3 do relatório). **Até lá, a pendência está fechada, não em aberto:** nenhum agente precisa revisitá-la sem evidência nova desse tipo específico.
+
+### B.5.7 Consequência para o código (vira `task-services-012`)
+
+Nada de comportamento muda. `src/services/behavior/RunService.luau` e `RunService.spec.luau` estão **corretos como estão** — o único trabalho é textual: os comentários hoje descrevem a falta de evidência como pendência viva ("não há evidência de que erre", tom de questão aberta) e devem passar a citar **B.5** como decisão fechada, com o motivo curto (contraexemplo `BindToRenderStep` + custo de cascata no `require`) e o gatilho de reabertura de B.5.6. Detalhe na tarefa.
+
+### B.5.8 Correções ao texto acima
+
+| Trecho | Situação |
+|---|---|
+| B.4, item `RunService.PreRender` ("Vai para as pendências novas") | **fechado** por B.5 — deixa de ser pendência; a justificativa passa de "não há evidência" para o ledger de B.5.3/B.5.4 |
+| "Pendências novas para o `pesquisador`", item 1 | **respondida e decidida**: pesquisa não confirmou; decisão é manter |
+| Recomendação 1 do relatório `pesquisa-prerender-capabilities-2026-09-05.md` | **não acatada**, com motivo registrado em B.5.3 — o relatório continua válido como levantamento; só a recomendação é recusada |

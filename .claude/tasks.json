@@ -729,7 +729,7 @@
       "id": "task-services-008",
       "title": "Fechar decisao pendente: PreRender deve usar RejectingSignal como RenderStepped?",
       "description": "Observacao nao-bloqueante do revisor-services na revisao de task-services-004. task-services-007 (pesquisa) recomendou, por analogia estrutural e marcado explicitamente como inferencia nao confirmada empiricamente, tratar RunService.PreRender igual a RenderStepped (RejectingSignal, erro ao conectar) -- e deferiu essa decisao formal para quando task-services-004 fosse revisado. O coder de task-services-004 corretamente manteve PreRender intocado (conectavel, nunca dispara) em vez de decidir sozinho uma mudanca de fidelidade sem confirmacao empirica (regra 00/02). Decisao fica pendente com o arquiteto: fechar como esta (PreRender conectavel e nunca dispara, documentado como fidelidade menor sem evidencia de erro) ou estender RejectingSignal a ele tambem por analogia. Nao bloqueia nada em andamento.",
-      "column": "todo",
+      "column": "done",
       "agent": "arquiteto",
       "reviewer": "revisor-services",
       "wave": 14,
@@ -742,7 +742,8 @@
       "acceptance": "Decisao documentada explicitamente na secao de fidelidade do desenho de services, com justificativa; se decidir estender RejectingSignal a PreRender, vira tarefa nova para coder-services; se decidir manter como esta, o comentario de PreRender em behavior/RunService.luau e atualizado para deixar de citar a pendencia como aberta.",
       "depends": [],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "DECIDIDO: manter como esta -- PreRender NAO recebe RejectingSignal (continua conectavel, nunca dispara). RenderStepped segue sendo o unico membro da leva 1 que erra ao conectar. A recomendacao de task-services-007 (analogia estrutural) foi recusada com motivo registrado: (1) a analogia tem contraexemplo com citacao ao vivo -- BindToRenderStep carrega a MESMA frase de doc client-only e falha em SILENCIO em producao real, logo a frase nao implica erro; (2) o portao de RenderStepped e checagem legada de 2014 anterior a Capabilities, enquanto PreRender e de ~2021 e declara Capabilities=[Basic] -- nenhuma evidencia de que a checagem legada foi religada ao nome novo; (3) fato novo levantado nesta decisao, que a pesquisa nao tinha: src/cli/ScriptRunner.luau NUNCA executa LocalScript, entao a exposicao de PreRender no LuauBench e quase nula (ganho da mudanca ~zero) enquanto o risco de comissao e concreto e nao-local (ModuleScript compartilhado que conecta sem guarda e e required do servidor -> crash no meio do require, cascata em todo consumidor a jusante, em codigo que roda limpo no Roblox real). Enquadramento que dissolve a aparente incoerencia: PreRender nunca foi o irmao poupado de RenderStepped -- pertence ao balde client-only ja deliberadamente nao varrido em B.2 (UserInputService, GuiService, Players.LocalPlayer), e RenderStepped e a UNICA excecao recortada desse balde, do tamanho exato da evidencia que a sustenta. Regra fixada (B.5.5): estender RejectingSignal exige evidencia direta de erro NAQUELE membro; analogia/nome/frase de doc nao bastam. Reabre so com citacao ao vivo de PreRender:Connect() num Script de servidor em RCC -- pesquisa documental ja se esgotou; o que fecha e smoke test contra servidor publicado. Nenhuma mudanca de comportamento: gerou apenas task-services-012 (atualizacao textual de comentarios). Decisao completa: .claude/agents-memory/arquiteto-services-2026-09-05.md, secao \"Decisao de fidelidade 2026-09-05 (3)\" (citavel como B.5)."
     },
     {
       "id": "task-runtime-025",
@@ -1018,7 +1019,7 @@
       "id": "task-cli-009",
       "title": "Decidir o que fazer com $properties/Source declarados no nó RAIZ do .project.json",
       "description": "Achado BAIXO do revisor-cli na revisao de task-cli-004 (.claude/agents-memory/revisor-cli-treematerializer-2026-09-05.md). O contrato InstancePlan (fixado em task-cli-003) nao carrega $properties/Source do no raiz do projeto para o resto do pipeline -- TreeMaterializer, portanto, nunca os aplica, e isso acontece em silencio (nenhum warning). Impacto real provavelmente baixo (o no raiz normalmente e o DataModel, que na pratica ninguem declara $properties/Source para), mas e uma divergencia nao declarada tecnicamente violando a regra 00 ('divergencia de comportamento e sempre declarada'). Precisa de decisao do arquiteto: (a) TreePlanner passa a emitir um warning quando o no raiz declara $properties/Source ignorados, ou (b) documentar explicitamente como limitacao aceita e aponta pro usuario nunca fazer isso. Nao mexer em codigo antes dessa decisao -- e mudanca de contrato do InstancePlan, cruza a fronteira ja fixada em task-cli-003.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "arquiteto",
       "reviewer": "revisor-cli",
       "wave": 21,
@@ -1330,6 +1331,26 @@
       "updatedAt": "2026-09-05",
       "result": "workspaceInstance ganhou narrowing explicito com error() em portugues no ramo inalcancavel (laco anterior ja criou Workspace). TreeMaterializer.luau: so comentarios reescritos (cabecalho + bloco de justificativa), pre-validacao Services.IsServiceClass/IsSimulatedClass byte-a-byte identica. Ripple em 4 specs (narrowing honesto de Workspace/ServerScriptService/ReplicatedStorage/StarterPlayer). Zero :: novo, zero any novo, luau-lsp limpo.",
       "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu tudo: rodou os 15 specs de cli + 8 de runtime individualmente -- resultado real 186/186 cli + 166/166 runtime, zero regressao. Numero do self-report do coder (216/216 cli, 157/157 runtime) NAO bateu com a reproducao (cli superestimado, runtime subestimado) -- nao e regressao funcional (tudo verde de verdade), so imprecisao de contagem no relatorio, registrado como ressalva nao bloqueante. Confirmou error() de workspaceInstance genuinamente inalcancavel lendo o codigo, mensagem em portugues sem exit code novo, diff de TreeMaterializer.luau so-comentario confirmado, materialize/not-a-service e materialize/service-not-simulated disparando com mesmo Code/Message, ripple nos specs honesto, pipeline ponta a ponta rodado (lune run main.luau run fixtures/run-e2e/basic, exit 0)."
+    },
+    {
+      "id": "task-services-012",
+      "title": "Atualizar comentarios de PreRender em RunService (behavior + spec) para citar B.5 como decisao fechada",
+      "description": "Consequencia textual de task-services-008 (decisao do arquiteto). NENHUMA mudanca de comportamento -- behavior/RunService.luau e RunService.spec.luau estao corretos como estao, PreRender continua conectavel e nunca disparando. O problema e so o TOM dos comentarios: eles hoje descrevem a falta de evidencia como pendencia viva (\"nao ha evidencia de que erre no servidor\"), e a decisao agora esta fechada com justificativa positiva. LER .claude/agents-memory/arquiteto-services-2026-09-05.md, secao \"Decisao de fidelidade 2026-09-05 (3) -- RunService.PreRender fica conectavel\" (citavel como B.5) ANTES de editar; e o unico insumo necessario. Tres pontos a mexer: (1) src/services/behavior/RunService.luau, cabecalho, linhas ~31-35 (o trecho que comeca em \"PreRender (o nome moderno de RenderStepped...)\"): trocar a justificativa \"porque nao ha evidencia de que erre no servidor e errar sem confirmacao falha por COMISSAO\" pelo enquadramento de B.5.2 (PreRender pertence ao balde client-only nao varrido de B.2 -- UserInputService/GuiService/Players.LocalPlayer --, e RenderStepped e a UNICA excecao recortada desse balde, do tamanho da evidencia que a sustenta) mais o motivo curto de B.5.3/B.5.4 (contraexemplo BindToRenderStep: mesma frase de doc client-only, falha em SILENCIO em producao real, logo frase de doc nao implica erro; e o custo de comissao concreto: ModuleScript compartilhado que conecta sem guarda e e required do servidor crasharia no meio do require, em cascata, em codigo que roda limpo no Roblox real). Citar \"parte B.5\" em vez de \"parte B.4\". Mencionar em uma linha o gatilho de reabertura de B.5.6 (citacao ao vivo de PreRender:Connect() num Script de servidor em RCC; pesquisa documental esgotada). (2) src/services/behavior/RunService.luau, comentario inline em ~105-107 (dentro do Initialize): mesma troca de referencia B.4 -> B.5, uma linha, sem repetir o argumento inteiro do cabecalho. (3) src/services/behavior/RunService.spec.luau, linha ~132: a mensagem do assert diz \"nao ha evidencia de que erre no servidor (... parte B.4)\" -- passar para a formulacao de decisao fechada citando parte B.5. O assert da linha ~143 e o titulo do teste da linha ~124 podem ficar como estao (descrevem comportamento, nao pendencia), mas se o titulo do teste soar a pendencia aberta, ajustar tambem. NAO mexer em RejectingSignal.luau (a decisao nao muda nada nele), NAO mexer no gerador nem em generated/, NAO mexer em tools/capabilities.lock.json.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 31,
+      "tags": [
+        "services",
+        "fidelidade",
+        "documentacao"
+      ],
+      "priority": "low",
+      "acceptance": "Comentarios de PreRender em behavior/RunService.luau (cabecalho + inline) e a mensagem de assert de RunService.spec.luau citam \"parte B.5\" e descrevem a decisao como fechada com a justificativa positiva de B.5.2/B.5.3/B.5.4, sem nenhum trecho sugerindo pendencia em aberto; gatilho de reabertura de B.5.6 mencionado em uma linha no cabecalho; nenhuma mudanca de comportamento -- a suite de services continua passando identica, PreRender segue conectavel e nunca disparando.",
+      "depends": [],
+      "note": "Puramente textual, gerada pelo fecho de task-services-008. Nao bloqueia nada.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
     }
   ]
 }
