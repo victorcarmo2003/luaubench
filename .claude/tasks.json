@@ -1666,7 +1666,7 @@
       "id": "task-valuetypes-003",
       "title": "Enum: tools/generate-enums.luau + generated/EnumData.luau + types/Enum.luau (Enums/Enum/EnumItem)",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Maior alavanca da leva 1 (secao 10): milhares de propriedades do dump sao Category=Enum, o $properties do Rojo resolve enum por nome de item, e TweenInfo/Font/Faces/Axes dependem disso. tools/generate-enums.luau (ARQUIVO NOVO, exclusivo desta tarefa) le .cache/api-dump/28360dea....json e emite src/valuetypes/generated/EnumData.luau -- 629 enums, 3611 itens, ~64KB, carrega em ~8.5ms (medido nesta sessao). Espelha tools/generate-services.luau: mesmo api-dump.lock.json, mesmo cabecalho GERADO-nao-editar, mesmo relatorio de contagem. SAO TRES TIPOS, nao um (secao 3.2, confirmado por pesquisa): o global Enum e typeof Enums (:GetEnums()); Enum.KeyCode e typeof Enum (:GetEnumItems/:FromName/:FromValue); Enum.KeyCode.Space e typeof EnumItem (.Name/.Value/.EnumType, tostring Enum.KeyCode.Space). Construcao PREGUICOSA e memoizada por enum -- tocar Enum.KeyCode materializa so os itens do KeyCode. Itens INTERNADOS (mesma referencia sempre): P7 nao confirmou se o Roblox garante rawequal, e internar satisfaz as duas hipoteses.",
-      "column": "review",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 40,
@@ -1679,7 +1679,8 @@
       "updatedAt": "2026-09-05",
       "depends": [
         "task-valuetypes-002"
-      ]
+      ],
+      "reviewResult": "APROVADO COM RESSALVAS (apos fix). Revisor achou 1 ALTO real: Enum.spec.luau usava :: any 32x (viola regra sem any). Coder corrigiu com o mesmo padrao unknown/probe ja usado em Color3.spec.luau/Userdata.spec.luau. Verificado por mim (orquestrador): grep :: any vazio, lune run 30/30 passou. Demais achados do revisor: MEDIO (tamanho real do EnumData.luau ~103KB nao reconciliado no cabecalho do gerador contra o design escolhido, so contra o rejeitado) e BAIXO (fragilidade latente: Methods tem prioridade sobre GetProperty, item de enum futuro chamado FromName/FromValue/GetEnumItems seria sombreado -- ausente no dump atual, documentado). Nenhum GRAVE. Fabrica unica, imutabilidade, isolamento de territorio intactos. Load time medido pelo revisor: 9.71-10.10ms. Lazy construction confirmada por medicao (KeyCode.Space=0.0025ms vs GetEnums total=8.29ms). Relatorio: .claude/agents-memory/revisor-valuetypes-enum-2026-09-05.md"
     },
     {
       "id": "task-valuetypes-004",
