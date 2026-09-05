@@ -1,0 +1,18 @@
+# Build output
+/bin/
+*.exe
+!.rokit/*.exe
+
+# Dependências geradas por gerenciador de pacote (Wally, se vier a ser usado)
+Packages/
+ServerPackages/
+luau_packages/
+
+# Editor / OS
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Ambiente local
+.env
+.dev.vars

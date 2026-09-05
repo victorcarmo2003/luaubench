@@ -1,0 +1,421 @@
+{
+  "columns": [
+    "todo",
+    "in-progress",
+    "review",
+    "done"
+  ],
+  "updatedAt": "2026-09-04",
+  "tasks": [
+    {
+      "id": "task-runtime-001",
+      "title": "Implementar Signal/Connection genérico",
+      "description": "Criar src/runtime/Signal.luau com o sistema de eventos genérico usado por Instance, Scheduler e (depois) services. Exportar export type Connection = {Connected: boolean, Disconnect: (self: Connection) -> ()} e export type Signal<T...> = {Connect, Once, Wait, DisconnectAll}, mais export type FireableSignal<T...> = Signal<T...> & {Fire: (self: FireableSignal<T...>, T...) -> ()} (não exposto publicamente fora de quem possui o objeto). Signal.new<T...>(): FireableSignal<T...>. Wait() cede a coroutine chamadora até Fire ser chamado. Sem dependências. Desenho completo em .claude/agents-memory/arquiteto-runtime-2026-09-04.md, secao 'Signal.luau'.",
+      "column": "done",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 1,
+      "reviewResult": "REPROVADO na integração inicial (conjunto com task-runtime-002/003), CORRIGIDO por task-runtime-008 (ThreadBroker.luau + patch em Wait/Fire), APROVADO COM RESSALVAS na revisão final. Ver .claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md.",
+      "tags": [
+        "runtime",
+        "core",
+        "events"
+      ],
+      "priority": "high",
+      "acceptance": "Connect/Once/DisconnectAll funcionam; Fire dispara callbacks na ordem de Connect; Once desconecta após primeira chamada; Wait() bloqueia a coroutine chamadora e retorna os args do próximo Fire; teste cobrindo os quatro comportamentos na mesma tarefa; --!strict sem any.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04",
+      "result": "src/runtime/Signal.luau + src/runtime/Signal.spec.luau criados. 6/6 testes passando via lune run; luau-lsp analyze --platform=standard em Signal.luau sem erros (0 ocorrências de `any`). Ver relatório coder-runtime para detalhes de design (Listener==Connection para manter Connected em sincronia, Fire itera snapshot, Wait usa Once+coroutine.resume sem tocar Scheduler)."
+    },
+    {
+      "id": "task-runtime-002",
+      "column": "done",
+      "reviewResult": "REPROVADO na integração inicial (GRAVE: WaitForChild com timeout não respeitava o timeout sob Scheduler:Run real), CORRIGIDO por task-runtime-008 (ramo gerido de WaitForChild via ThreadBroker), APROVADO COM RESSALVAS na revisão final. Ver .claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md.",
+      "title": "Implementar classe base Instance (hierarquia + eventos + propriedade genérica)",
+      "description": "Criar src/runtime/Instance.luau: export type Instance com ClassName/Name/Parent, eventos Changed/ChildAdded/ChildRemoved/AncestryChanged/Destroying, métodos GetChildren/GetDescendants/FindFirstChild/FindFirstChildOfClass/FindFirstChildWhichIsA/FindFirstAncestor/WaitForChild/IsA/IsDescendantOf/IsAncestorOf/ClearAllChildren/Destroy/GetFullName. Atribuição de .Parent intercepta via metatable (__newindex) e dispara os eventos na ordem documentada no desenho (unlink/link -> ChildRemoved no pai antigo -> ChildAdded no pai novo -> AncestryChanged na instância e descendentes, raiz primeiro -> Changed('Parent') só na instância reparentada). RISCO NÃO RESOLVIDO (sinalizado pelo arquiteto): essa ordem NÃO foi confirmada contra o comportamento real do Roblox nesta sessão -- a pesquisa salva até agora (.claude/agents-memory/pesquisa-scheduler-lune-2026-09-04.md) cobre task.wait/Heartbeat/Stepped e WaitForChild, mas NÃO cobre a ordem Parent/Changed/ChildAdded/AncestryChanged. Isso NÃO bloqueia o início da implementação: implemente seguindo a ordem acima como ponto de partida, mas grave um comentário explícito no código, no ponto exato onde os quatro eventos são disparados, dizendo que essa ordem é uma HIPÓTESE não confirmada contra o Roblox real e cite este risco (pendência de pesquisador). revisor-runtime deve rejeitar a tarefa se esse comentário não estiver presente ou não descrever a ordem assumida. WaitForChild sem timeout bloqueia de verdade (nunca retorna nil cedo), usando ChildAdded + Scheduler para timeout quando fornecido (Instance.luau não importa Scheduler.luau diretamente -- receber a espera via o próprio Signal:Wait/composição documentada no desenho). Além do tipo público, expor funções de módulo (não na metatable, inalcançáveis via ':' pelo script do usuário): Instance.NewBase(className, name): Instance, Instance.GetPropertyRaw(instance, name): unknown, Instance.SetPropertyRaw(instance, name, value): () (dispara Changed), Instance.SetClassChain(instance, chain: {string}): () usado por IsA. Instance.luau NÃO importa ClassRegistry.luau (evita require circular -- ver seção Riscos do desenho). Depende de task-runtime-001 (Signal.luau).",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 2,
+      "tags": [
+        "runtime",
+        "core",
+        "instance",
+        "hierarchy",
+        "hipotese-nao-confirmada"
+      ],
+      "priority": "high",
+      "acceptance": "Instance.NewBase cria instância com Name/ClassName corretos; setar .Parent reparenta e dispara os eventos na ordem documentada; GetChildren/GetDescendants retornam na ordem certa; FindFirstChild encontra por nome (recursive opcional); WaitForChild sem timeout bloqueia até o filho aparecer (teste com task.spawn adicionando o filho depois) e nunca retorna nil cedo; com timeout, retorna nil após o tempo se o filho não aparecer; Destroy desconecta tudo e impede reparentar depois; teste cobrindo hierarquia + eventos + WaitForChild real na mesma tarefa; --!strict sem any; GetPropertyRaw/SetPropertyRaw/SetClassChain não aparecem na metatable pública; comentário explícito no código, no ponto de disparo dos eventos de reparenting, documentando a ordem assumida como hipótese não confirmada contra o Roblox real -- revisor-runtime cobra isso especificamente antes de aprovar.",
+      "depends": [
+        "task-runtime-001"
+      ],
+      "note": "Despachada em paralelo com task-runtime-001 por decisão explícita do usuário: o contrato de Signal.luau já está congelado no desenho do arquiteto, então Instance.luau é escrita contra esse contrato sem esperar o arquivo físico existir. Integração real reconciliada na revisão.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-003",
+      "title": "Implementar Scheduler (task.*, coroutine, Heartbeat/Stepped)",
+      "description": "Criar src/runtime/Scheduler.luau com export type TaskHandle = thread e export type Scheduler = {Spawn, Defer, Delay, Wait, Cancel, Heartbeat: Signal<number>, Stepped: Signal<number,number>, ThreadError: Signal<thread,string>, Run, StepOnce, IsAlive}. Scheduler.new(): Scheduler. task.wait/delay/spawn/defer cooperativos via scheduler, NUNCA Sleep bloqueante do SO. Ponto único de coroutine.resume: toda retomada de thread gerida passa por ele; se coroutine.resume retornar (false, err), disparar ThreadError:Fire(thread, err) e continuar (nunca propagar, nunca derrubar Run()). Run() continua enquanto IsAlive() (há TaskHandle pendente ou Connection viva em Heartbeat/Stepped) e shouldContinue() (se passado) não retornar false. Depende de task-runtime-001 (Signal.luau); roda em paralelo com task-runtime-002.",
+      "column": "done",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 2,
+      "reviewResult": "REPROVADO na integração inicial (GRAVE: Signal:Wait() resumia por fora do ponto único do Scheduler; MÉDIO: any evitável), CORRIGIDO por task-runtime-008 (driver do ThreadBroker + guarda de status + poda em IsAlive + any→unknown), APROVADO COM RESSALVAS na revisão final (achado novo MÉDIO: Cancel não desconecta listener, virou task-runtime-011). Ver .claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md.",
+      "tags": [
+        "runtime",
+        "core",
+        "scheduler",
+        "task"
+      ],
+      "priority": "high",
+      "acceptance": "task.wait/delay via Scheduler nunca bloqueiam o processo (teste: dois spawns concorrentes, um com wait mais longo, o outro roda enquanto o primeiro espera); erro dentro de uma thread spawnada dispara ThreadError e Run() continua rodando (teste explícito disso, é a prioridade máxima do revisor-runtime); Heartbeat/Stepped disparam a cada StepOnce/iteração do laço com deltaTime coerente; Cancel impede a retomada de uma thread pendente; IsAlive reflete corretamente threads/conexões vivas; teste cobrindo tudo isso na mesma tarefa; --!strict sem any.",
+      "depends": [
+        "task-runtime-001"
+      ],
+      "note": "Despachada em paralelo com task-runtime-001 por decisão explícita do usuário: o contrato de Signal.luau já está congelado no desenho do arquiteto. Integração real reconciliada na revisão.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-004",
+      "column": "done",
+      "result": "ClassRegistry.luau + ClassRegistry.spec.luau criados. 8/8 testes (4 do acceptance + 2 de robustez: ordem de registro fora de topológica, superclasse não registrada). Regressão total intacta (Signal 6/6, Instance 24/24, Scheduler 12/12, Integration 9/9). luau-lsp limpo, zero any. Achado ALTO (Construct antes de SetClassChain) CORRIGIDO por task-runtime-013.",
+      "reviewResult": "APROVADO COM RESSALVAS. Achado ALTO: ClassRegistry.new chama Construct(name) ANTES de Instance.SetClassChain -- IsA() dentro do próprio Construct devolve false incorretamente pra ancestrais durante a construção. Correção provavelmente muda a assinatura de ClassDescriptor.Construct (decisão de contrato, mandada ao arquiteto). MÉDIO: guarda de ciclo de herança sem teste. BAIXO x2: estado global sem reset (seguro só por isolamento de processo), error() sem localização inconsistente. Relatório: .claude/agents-memory/revisor-runtime-classregistry-2026-09-04.md.",
+      "title": "Implementar ClassRegistry (registro central de classes)",
+      "description": "Criar src/runtime/ClassRegistry.luau: export type ClassDescriptor = {ClassName, SuperClassName: string?, IsAbstract: boolean, IsService: boolean, Construct: (name: string?) -> Instance}. ClassRegistry.Register(descriptor): () (erro se ClassName já registrado). ClassRegistry.Get(className): ClassDescriptor?. ClassRegistry.IsRegistered(className): boolean. ClassRegistry.new(className, name): Instance -- erro \"classe '%s' não registrada\" se não encontrada, erro se IsAbstract, senão resolve a cadeia de SuperClassName e chama Instance.SetClassChain antes de devolver o resultado de descriptor.Construct(name). É esta função que services embrulha para virar o Instance.new que o sandbox expõe ao usuário. Depende de task-runtime-002 (Instance.luau, para o tipo Instance e SetClassChain).",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 3,
+      "tags": [
+        "runtime",
+        "core",
+        "class-registry"
+      ],
+      "priority": "high",
+      "note": "Prioridade elevada de medium para high com base no recon do testador (.claude/agents-memory/testador-*.md ou relatório na sessão de 2026-09-04): nenhum script real dos jogos do usuário roda ponta a ponta sem Instance.new(className) por nome -- é o bloqueio real de todo o resto.",
+      "acceptance": "Register rejeita ClassName duplicado com erro claro; Get/IsRegistered refletem o estado do registro; new() erra claramente para classe não registrada e para classe abstrata, nunca retorna nil silencioso; new() de uma classe com SuperClassName encadeado resolve a cadeia corretamente (testável via IsA na instância resultante, usando um Construct de teste); teste cobrindo os quatro comportamentos na mesma tarefa; --!strict sem any.",
+      "depends": [
+        "task-runtime-002"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-005",
+      "title": "Implementar DataModel (raiz da árvore, equivalente a game)",
+      "description": "Criar src/runtime/DataModel.luau: export type DataModel = Instance & {GetService: (self, className: string) -> Instance, FindService: (self, className: string) -> Instance?}. DataModel.new(): DataModel. GetService cria o singleton via ClassRegistry.new na primeira chamada (só se o ClassDescriptor tiver IsService = true, senão erro claro) e parenteia direto sob a raiz com Name == ClassName, igual ao Roblox real; chamadas seguintes devolvem o mesmo singleton. FindService só consulta, nunca cria. Depende de task-runtime-002 (Instance.luau) e task-runtime-004 (ClassRegistry.luau).",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 5,
+      "tags": [
+        "runtime",
+        "core",
+        "datamodel"
+      ],
+      "priority": "medium",
+      "acceptance": "DataModel.new() cria uma Instance raiz válida; GetService cria o singleton na primeira chamada e devolve o mesmo objeto em chamadas seguintes; GetService de uma classe registrada com IsService = false erra claramente; FindService nunca cria, só retorna o que já existe (nil caso contrário); a cadeia de classe do DataModel é decidida explicitamente (ver note), não deixada no default de NewBase por omissão; teste cobrindo isso com um ClassDescriptor de teste registrado ad-hoc; --!strict sem any.",
+      "note": "ATENÇÃO ao contrato novo de ClassRegistry (task-runtime-013): o ClassDescriptor passou de Construct: (name) -> Instance para Initialize: ((instance) -> ())? e ClassRegistry.new é quem chama NewBase + SetClassChain. Os ClassDescriptor de teste desta tarefa precisam usar o formato novo. Além disso, decisão pendente sinalizada pelo arquiteto em .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (2)': DataModel.new() cria a raiz por dentro de runtime, sem passar pelo ClassRegistry, logo nasce com o chain default {'DataModel','Instance'} -- no Roblox real a cadeia é DataModel -> ServiceProvider -> Instance. Decidir explicitamente aqui (aplicar a cadeia à mão via Instance.SetClassChain ou registrar DataModel no registry) e comentar a escolha no código; não deixar implícito.",
+      "depends": [
+        "task-runtime-002",
+        "task-runtime-004",
+        "task-runtime-013"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-006",
+      "column": "done",
+      "result": "Sandbox.luau + Sandbox.spec.luau criados. 7/7 testes. Whitelist de globals confirmada isolada (fs/net/process/serde/io/require inalcançáveis). Erro de compilação E de execução unificados no mesmo mecanismo de ThreadError (load rodando dentro da thread spawnada, não antes). Descoberta empírica: formato real de erro do Lune diverge do assumido no desenho (documentado, não adivinhado). Regressão total intacta. Pendências não-bloqueantes: sem teardown de Connection do ThreadError, OutputRecord sem stack traceback, print/warn sem line.",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor tentou escapar ativamente o isolamento (metatable/rawget/debug/_G/getfenv/corromper tabelas compartilhadas) -- nenhum GRAVE encontrado, tabelas compartilhadas confirmadas readonly. Achado ALTO: whitelist falta setmetatable/getmetatable/rawget/rawset/rawequal/rawlen/type -- confirmados seguros de expor, ausência quebra padrão de OOP real (bate com achado do testador). Virou task-runtime-015. MÉDIO/BAIXO: splitErrorMessage trunca erro multi-linha do usuário, Connection de ThreadError sem teardown (já sabido), parser de erro sem cobertura de degradação. Relatório: .claude/agents-memory/revisor-runtime-sandbox-2026-09-04.md.",
+      "title": "Implementar Sandbox de execução de script de usuário",
+      "description": "Criar src/runtime/Sandbox.luau: export type OutputLevel = 'print'|'warn'|'error', export type OutputRecord = {level, message, scriptName: string?, line: number?, timestamp: number}, export type SandboxGlobals = {[string]: unknown}, export type SandboxOptions = {scriptName: string, source: string, scheduler: Scheduler, extraGlobals: SandboxGlobals?, onOutput: (OutputRecord) -> ()}, export type SandboxResult = {thread: thread}. Sandbox.Run(options): SandboxResult roda options.source como UMA thread gerida por options.scheduler:Spawn (nunca coroutine.resume solto fora do Scheduler), com whitelist fixa de globals (task fechado sobre o scheduler, coroutine/math/string/table/os.clock/os.time/bit32/utf8/typeof/tostring/tonumber/pcall/xpcall/assert/select/pairs/ipairs/next, print/warn/error redirecionados para onOutput) mais options.extraGlobals mesclado -- NUNCA fs/net/process/serde/io cru do Lune. Sandbox se inscreve em scheduler.ThreadError, mantém mapa interno thread->scriptName (populado no Spawn) para formatar OutputRecord{level='error', scriptName, message, timestamp} antes de repassar a onOutput. RISCO NÃO RESOLVIDO, BLOQUEANTE (sinalizado pelo arquiteto): o mecanismo exato de compilar/rodar um chunk Luau com globals restritos dentro do processo Lune (provavelmente via biblioteca @lune/luau com um parâmetro de environment customizado) NÃO foi confirmado nesta sessão. PROTOCOLO OBRIGATÓRIO antes de escrever qualquer código de isolamento de globals: (1) verificar se já existe pesquisa salva em .claude/agents-memory/pesquisa-*.md cobrindo especificamente esse mecanismo (nome da função de load/compile do Lune, formato do parâmetro de 'environment' customizado); (2) na data de criação desta tarefa, o único arquivo existente é pesquisa-scheduler-lune-2026-09-04.md, que cobre task.spawn/wait/delay/Heartbeat/Stepped/WaitForChild -- ele NÃO cobre o mecanismo de sandbox de globals, então não conta como confirmação para este ponto; (3) se ao pegar esta tarefa ainda não existir um pesquisa-*.md que resolva especificamente essa dúvida, NÃO adivinhar a assinatura nem implementar por tentativa -- parar e devolver relatório curto para a thread principal pedindo que o pesquisador seja disparado para confirmar a API exata do Lune antes de qualquer código de isolamento ser escrito; (4) só prosseguir com a implementação depois que essa pesquisa existir e estiver referenciada no código. Depende de task-runtime-002 (Instance.luau, tipos) e task-runtime-003 (Scheduler.luau).",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 3,
+      "tags": [
+        "runtime",
+        "core",
+        "sandbox",
+        "security",
+        "pesquisa-pendente"
+      ],
+      "priority": "high",
+      "acceptance": "Se, no momento de execução desta tarefa, NÃO existir pesquisa-*.md confirmando o mecanismo de compilar/rodar um chunk Luau com globals restritos no Lune, o critério de pronto desta rodada é o relatório da coder-runtime pedindo que a thread principal dispare o pesquisador -- não código adivinhado; a tarefa volta para todo até a pesquisa existir. Uma vez confirmado o mecanismo: script com erro síncrono nunca derruba o processo, gera OutputRecord{level='error'} com scriptName correto via onOutput; erro dentro de task.spawn interno ao script também é capturado (mesmo mecanismo via ThreadError); print/warn chegam em onOutput em vez de stdout cru do Lune; script não consegue alcançar fs/net/process/serde/io (teste tentando acessar esses globals e confirmando que são nil/inexistentes no ambiente do script); teste cobrindo os quatro pontos acima na mesma tarefa; --!strict sem any; a API exata do Lune usada fica documentada no código com referência ao arquivo pesquisa-*.md correspondente.",
+      "depends": [
+        "task-runtime-002",
+        "task-runtime-003"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-007",
+      "title": "Criar src/runtime/init.luau (ponto de entrada público) + teste de integração do runtime",
+      "description": "Criar src/runtime/init.luau agregando e reexportando a API pública de todos os módulos anteriores sob os namespaces Runtime.Signal/.Instance/.ClassRegistry/.DataModel/.Scheduler/.Sandbox, exatamente como especificado na seção 'Contrato entre territórios' do desenho em .claude/agents-memory/arquiteto-runtime-2026-09-04.md -- esse é o único arquivo que services/cli devem importar (require direto de um módulo individual dentro de src/runtime/ por fora deste agregador é erro de design). Reexportar todos os export type listados no desenho (Signal<T...>, Connection, Instance, ClassDescriptor, DataModel, Scheduler, TaskHandle, SandboxOptions, SandboxResult, OutputRecord, OutputLevel). Incluir um teste de integração leve: registrar uma classe de teste via ClassRegistry.Register, criar DataModel, instanciar via ClassRegistry.new, montar hierarquia com .Parent, rodar um Sandbox.Run que usa Instance.new/task.wait/WaitForChild de verdade e confirma que um erro proposital não derruba o processo. Depende de todas as tasks anteriores (001-006).",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 6,
+      "tags": [
+        "runtime",
+        "core",
+        "public-api",
+        "integration"
+      ],
+      "priority": "high",
+      "acceptance": "require(runtime) expõe exatamente a superfície documentada no desenho, COM a correção de task-runtime-013: Runtime.Instance expõe apenas GetPropertyRaw e SetPropertyRaw, NÃO expõe NewBase (o único criador de instância disponível a services/cli passa a ser Runtime.ClassRegistry.new -- ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (2)', subseção 'Consequência: Runtime.Instance.NewBase sai da superfície pública'); ClassDescriptor reexportado é o formato novo (Initialize opcional, sem Construct); teste de integração fim-a-fim passa (registro de classe -> DataModel -> hierarquia -> Sandbox rodando script real -> erro capturado sem derrubar o processo); nenhum módulo interno de src/runtime/ precisa ser importado diretamente por fora deste agregador para os cenários testados; --!strict sem any.",
+      "depends": [
+        "task-runtime-001",
+        "task-runtime-002",
+        "task-runtime-003",
+        "task-runtime-004",
+        "task-runtime-005",
+        "task-runtime-006"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-008",
+      "title": "Criar ThreadBroker.luau e aplicar o patch de contrato Wait/resume em Signal/Instance/Scheduler",
+      "description": "Correção dos dois achados GRAVE + ALTO 3 + ALTO 4 + MÉDIO 5 do revisor-runtime. Desenho completo e assinaturas exatas em .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 — contrato Wait/resume' — LER ESSA SEÇÃO INTEIRA ANTES DE ESCREVER QUALQUER LINHA. Tarefa ATÔMICA: os quatro arquivos precisam mudar juntos, não dá para paralelizar entre agentes. (1) NOVO src/runtime/ThreadBroker.luau, módulo folha sem nenhuma dependência de módulo do runtime e sem @lune/task, exportando export type PackedArgs = {n: number, [number]: unknown}, export type Driver = {Resume: (co: thread, args: PackedArgs?) -> (), WakeAfter: (co: thread, seconds: number) -> (() -> ()), ReportError: (co: thread, message: string) -> ()} e as funções Adopt/Release/DriverOf/IsManaged/Resume/ReportError com as assinaturas exatas do desenho; storage é mapa fraco por chave com cast em duas etapas por unknown (padrão de Instance.luau:74), NUNCA any. (2) PATCH src/runtime/Signal.luau: Wait roteia a retomada por ThreadBroker.Resume(co, table.pack(...) :: ThreadBroker.PackedArgs) em vez de coroutine.resume direto; Fire isola cada listener com pcall individual, reporta via ThreadBroker.ReportError e re-lança o PRIMEIRO erro só DEPOIS do laço quando ninguém assumiu (nunca cancela os listeners seguintes). ATENÇÃO: pcall(listener.callback, ...) NÃO tipa em --!strict (verificado com luau-lsp: 'Function only returns 1 value, but 2 are required here') — usar a forma com closure de pack variádico explícito, igual a Scheduler.fireProtected. Tipos públicos Signal/FireableSignal/Connection NÃO mudam. (3) PATCH src/runtime/Instance.luau: WaitForChild ganha o ramo gerido para o caso com timeout (ThreadBroker.DriverOf(coroutine.running()) ~= nil -> ChildAdded:Connect + driver.WakeAfter + UM único coroutine.yield, sem nenhum timer nativo), mantendo INTACTO o ramo sem timeout e o ramo de polling nativo para thread não gerida; atualizar o comentário de cabeçalho e o bloco de RISCO das linhas 380-407 (o GRAVE 1 passa a estar resolvido, e a dependência de @lune/task precisa aparecer no cabeçalho — achado BAIXO 6). Instance.luau continua NÃO importando Scheduler.luau. Tipo público Instance NÃO muda. (4) PATCH src/runtime/Scheduler.luau: WaitingEntry ganha cancelled: boolean e resumeDueWaiting pula entradas canceladas; Internal ganha driver: ThreadBroker.Driver; resumeThread ganha guarda de status na entrada (no-op silencioso se não estiver 'suspended', poda o bookkeeping se 'dead', nunca ThreadError espúrio de 'cannot resume dead coroutine'); trackThread chama ThreadBroker.Adopt e Cancel chama ThreadBroker.Release; IsAlive poda threads mortas antes de responder; Scheduler.new constrói o driver com forward-declare de raw (cancelador de WakeAfter remove POR IDENTIDADE DA ENTRADA, nunca por thread); fireProtected FICA como rede de segunda linha; linha 432 troca :: any por :: unknown. Tipo público Scheduler NÃO muda — nenhum método novo, Scheduler:Await foi explicitamente REJEITADO pelo arquiteto. src/runtime/init.luau NÃO reexporta ThreadBroker.",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 2,
+      "tags": [
+        "runtime",
+        "core",
+        "scheduler",
+        "events",
+        "correcao-de-revisao"
+      ],
+      "priority": "high",
+      "acceptance": "ThreadBroker.luau existe com exatamente a superfície do desenho e sem nenhuma dependência de módulo do runtime; Signal.spec.luau continua 6/6 e Instance.spec.luau continua 24/24 SEM QUE ESSES DOIS ARQUIVOS SEJAM ALTERADOS (se algum precisar mudar, o patch está errado — parar e devolver ao arquiteto); Scheduler.spec.luau continua 12/12, incluindo o teste 'erro depois de Heartbeat:Wait vira ThreadError', que agora deve reportar a thread do waiter e não a hospedeira; luau-lsp analyze --platform=standard limpo nos quatro arquivos; zero ocorrências de 'any' em todo src/runtime/; nenhum coroutine.resume fora de ThreadBroker.luau (fallback standalone) e de Scheduler.resumeThread (ponto único do driver) — o revisor cobra isso com grep; tipos públicos Signal<T...>/Connection/Instance/Scheduler byte-a-byte iguais aos de hoje.",
+      "depends": [
+        "task-runtime-001",
+        "task-runtime-002",
+        "task-runtime-003"
+      ],
+      "note": "Bloqueia a reabertura de task-runtime-001/002/003. Nenhum outro agente pode tocar src/runtime/Signal.luau, Instance.luau ou Scheduler.luau enquanto esta tarefa estiver in-progress.",
+      "column": "done",
+      "reviewResult": "APROVADO COM RESSALVAS pelo revisor-runtime (reproduziu os 2 GRAVE + 2 ALTO corrigidos com testes próprios, não aceitou o relato do coder). Achado novo MÉDIO não bloqueante: Scheduler:Cancel() não desconecta Connection/listener que a thread cancelada tinha registrado num Signal alheio (ex: ChildAdded de um WaitForChild com timeout) — vira task-runtime-011. Relatório: .claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-009",
+      "title": "Criar Integration.spec.luau — testes que exercitam Signal + Instance + Scheduler juntos de verdade",
+      "description": "Os três specs atuais testam cada módulo isoladamente (ou com coroutine crua/mock no lugar do vizinho) — foi exatamente por isso que os dois bugs GRAVE passaram batido. Criar src/runtime/Integration.spec.luau cobrindo os 9 cenários listados na seção 'Testes de integração exigidos' de .claude/agents-memory/arquiteto-runtime-2026-09-04.md (Revisão pós-integração): (1) Spawn + Heartbeat:Wait + StepOnce -> IsAlive() == false; (2) Spawn + WaitForChild sem timeout + Parent -> IsAlive() == false; (3) Run() SEM shouldContinue termina sozinho nos dois casos (se usar guarda de tempo, assertar que não foi a guarda que parou o laço); (4) WaitForChild(nome, 0.05) dentro de Run() devolve nil com wall-clock em [0.05, 0.5] — repro exato do GRAVE 1, que hoje não resolve em 2s; (5) WaitForChild(nome, 5) sob StepOnce determinístico: 4x StepOnce(1) ainda esperando, o 5o resolve nil; (6) Heartbeat:Wait seguido de error -> ThreadError recebe o handle devolvido por Spawn, não a thread hospedeira; (7) corrida deadline x ChildAdded no mesmo tique -> resultado único e ZERO ThreadError espúrio de 'cannot resume dead coroutine'; (8) erro no primeiro de dois listeners -> o segundo roda mesmo assim; (9) regressão: rodar Signal.spec/Instance.spec/Scheduler.spec e confirmar 6/6, 24/24 e 12/12 sem alterar esses arquivos. Todo teste com timeout de wall-clock precisa de guarda para não pendurar o CI. Depende de task-runtime-008.",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 2,
+      "tags": [
+        "runtime",
+        "core",
+        "integration",
+        "testes"
+      ],
+      "priority": "high",
+      "acceptance": "Os 9 cenários rodam via lune run e passam; cada um falha de verdade se o patch de task-runtime-008 for revertido (o coder deve confirmar isso ao menos para os cenários 1, 4 e 6, que são os repros diretos dos achados GRAVE/ALTO); nenhum teste depende de sleep arbitrário para 'dar tempo'; --!strict sem any.",
+      "depends": [
+        "task-runtime-008"
+      ],
+      "column": "done",
+      "result": "Integration.spec.luau criado, 9/9 passando. Regressão 6/6+24/24+12/12 confirmada sem alterar os specs. Reprodução honesta dos achados GRAVE em sandbox isolado (GRAVE1 não estourou >2s neste ambiente, causa raiz provada por caminho determinístico alternativo — StepOnce desacoplado do relógio sem o ramo gerido).",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor confirmou os números e aceitou a prova alternativa do cenário 4 como suficiente. Achado novo MÉDIO: IsAlive() tem rede de segurança própria que mascara regressão isolada em Signal.luau nos cenários 1/2/3a/3b (só o 6 pegaria) — virou task-runtime-012. Relatório: .claude/agents-memory/revisor-runtime-integration-spec-2026-09-04.md.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-010",
+      "title": "Confirmar contra o Roblox real: SignalBehavior (Immediate vs Deferred) e WaitForChild resolvendo por rename",
+      "description": "Duas pendências abertas pelo arquiteto na seção 'Revisão pós-integração 2026-09-04' e nos 'Riscos residuais' de .claude/agents-memory/arquiteto-runtime-2026-09-04.md. NÃO bloqueia task-runtime-008/009 — roda em paralelo. (1) SignalBehavior: no Roblox real, quando uma thread suspensa em Event:Wait() é retomada? Imediatamente dentro da pilha do fire (comportamento 'Immediate') ou no próximo resumption point ('Deferred')? Qual é o padrão de lugares novos hoje, e o que muda para conexões via Connect além do Wait? O LuauBench implementou Immediate como decisão explícita e documentada — a pesquisa serve para confirmar/ajustar essa nota de fidelidade, e para dimensionar se migrar para Deferred vale a pena depois (o desenho já deixou o ponto de troca isolado em Driver.Resume). (2) WaitForChild: no Roblox real, renomear um filho JÁ EXISTENTE para o nome esperado resolve um WaitForChild pendente, ou só ChildAdded resolve? A implementação atual só escuta ChildAdded. Devolver fatos com fonte (documentação oficial da Roblox e/ou API Dump), sem inferir de memória, e salvar em .claude/agents-memory/pesquisa-signal-behavior-waitforchild-2026-09-04.md.",
+      "column": "done",
+      "agent": "pesquisador",
+      "reviewer": "revisor-runtime",
+      "wave": 2,
+      "tags": [
+        "runtime",
+        "pesquisa",
+        "fidelidade",
+        "roblox-api"
+      ],
+      "priority": "medium",
+      "acceptance": "Cada uma das duas perguntas respondida com fonte citada (URL/arquivo), marcando explicitamente o que ficou como 'não confirmado' em vez de preencher com suposição; relatório salvo no caminho indicado; recomendação clara de se alguma nota de fidelidade do desenho precisa mudar.",
+      "result": "SignalBehavior: Immediate diverge do padrão recomendado hoje (Deferred), mas fica como divergência documentada, não pendência. WaitForChild por rename: não confirmado por fonte primária, risco residual mantido, inferência aponta ChildAdded-only como provavelmente correto. Relatório: .claude/agents-memory/pesquisa-signal-behavior-waitforchild-2026-09-04.md.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-011",
+      "title": "Scheduler:Cancel() deve desconectar listeners de Signal registrados pela thread cancelada",
+      "description": "Achado MÉDIO do revisor-runtime na revisão de task-runtime-008 (.claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md), confirmado empiricamente: Scheduler:Cancel(handle) remove o bookkeeping da thread no Scheduler, mas não desconecta a Connection que essa thread tinha registrado num Signal alheio (ex: ChildAdded de um WaitForChild com timeout que corre via ThreadBroker, ou qualquer Signal:Wait() pendente). O listener fica pendurado até o evento disparar de novo (autolimpa sozinho aí, sem crash) ou para sempre se nunca disparar -- vazamento de memória/CPU de baixo grau, não corrompe estado. Não é regressão do patch de task-runtime-008, é lacuna pré-existente na fronteira Scheduler<->Signal que só ficou visível depois do bookkeeping de threads ficar correto. Não bloqueia release do runtime, mas services vai depender pesado de Cancel (ex: destruir um NPC no meio de um WaitForChild) então precisa ser resolvido antes de task-runtime-004/005/006 assumirem que Cancel é seguro sem vazar.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 6,
+      "tags": [
+        "runtime",
+        "scheduler",
+        "signal",
+        "cleanup",
+        "correcao-de-revisao"
+      ],
+      "priority": "medium",
+      "acceptance": "Scheduler:Cancel(handle) desconecta toda Connection que ThreadBroker/Scheduler sabe que pertence à thread cancelada, no momento do Cancel (não espera o evento disparar de novo); teste reproduzindo o cenário do achado (WaitForChild com timeout cancelado no meio, contagem de listeners do Signal correspondente cai a zero); Signal.spec/Instance.spec/Scheduler.spec/Integration.spec continuam passando sem alteração; --!strict sem any.",
+      "depends": [
+        "task-runtime-008"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-012",
+      "title": "Isolar cenários 1/2/3a/3b de Integration.spec.luau da rede de segurança de IsAlive()",
+      "description": "Achado MÉDIO do revisor-runtime na revisão de task-runtime-009 (.claude/agents-memory/revisor-runtime-integration-spec-2026-09-04.md). Scheduler.IsAlive() poda liveThreads por coroutine.status como rede de segurança (adicionada em task-runtime-008) -- isso é correto e desejado em produção, mas faz com que os cenários 1/2/3a/3b de Integration.spec.luau passem mesmo se APENAS Signal.luau regredir (Wait() voltando a coroutine.resume cru), porque a rede de segurança de IsAlive() se autocorrige a cada chamada independente do que Signal.luau faz. Só o cenário 6 (via ThreadError) pegaria essa regressão isolada. Adicionar aos cenários 1/2/3a/3b uma asserção adicional que não dependa só de IsAlive() -- por exemplo, inspecionar diretamente se a Connection que Signal:Wait() criou internamente foi desconectada, ou contar quantas vezes um hook de instrumentação foi chamado -- de forma que uma regressão confinada a Signal.luau também derrube esses cenários, não só o 6. Não enfraquecer a rede de segurança de IsAlive() em si (ela é uma correção deliberada de task-runtime-008).",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 6,
+      "tags": [
+        "runtime",
+        "testes",
+        "correcao-de-revisao"
+      ],
+      "priority": "low",
+      "acceptance": "Reverter só Signal.luau (Wait() para coroutine.resume cru, num teste local/scratch) faz pelo menos um dos cenários 1/2/3a/3b falhar, não só o 6; Integration.spec.luau continua 9/9 contra o código real; --!strict sem any.",
+      "depends": [
+        "task-runtime-009"
+      ],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-013",
+      "column": "done",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu as 3 verificações críticas ele mesmo (reversão da ordem, Initialize sem pcall, error(msg,3) no call site certo). Única ressalva BAIXO: rokit.toml criado fora do território declarado do coder-runtime (é território de cli pela regra 04) -- conteúdo correto e funcional, só fora de escopo, não bloqueante. Relatório: .claude/agents-memory/revisor-runtime-classregistry-initialize-2026-09-04.md.",
+      "result": "ClassRegistry.luau: campo Construct removido, Initialize: ((instance: Instance) -> ())? adicionado. ClassRegistry.new agora resolve a cadeia -> NewBase -> SetClassChain -> Initialize (sem pcall) -> return. error(msg, 3) nos dois pontos de resolveClassChain. Cabeçalho documenta invariante de processo único sem reset. ClassRegistry.spec.luau: 8 testes migrados para Initialize + 5 novos (IsA de ancestral indireto dentro do Initialize, ciclo mútuo, auto-referência, sem Initialize, Name default) = 13/13 passando. Reversão local confirmada: trocando a ordem para Initialize antes de SetClassChain, o teste de IsA-dentro-do-Initialize falhou de verdade (assert em ClassRegistry.spec:183), revertido de volta em seguida. Regressão: Signal 6/6, Instance 24/24, Scheduler 12/12, Integration 9/9, nenhum desses arquivos alterado. luau-lsp analyze --platform=standard limpo (exit 0) em ClassRegistry.luau + spec; zero ocorrências de 'any'.",
+      "title": "Inverter o contrato ClassDescriptor: ClassRegistry.new cria a base e aplica a cadeia antes do inicializador da classe",
+      "description": "Correção do achado ALTO + MÉDIO + BAIXO da revisão de task-runtime-004 (.claude/agents-memory/revisor-runtime-classregistry-2026-09-04.md). Decisão de contrato tomada pelo arquiteto: LER .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (2) — contrato ClassDescriptor.Construct' INTEIRA antes de escrever qualquer linha (ela traz o corpo novo de new() e o padrão canônico que services vai seguir). Escopo: src/runtime/ClassRegistry.luau + src/runtime/ClassRegistry.spec.luau, nenhum outro arquivo. (1) MUDANÇA DE CONTRATO: o campo Construct: (name: string?) -> Instance do ClassDescriptor deixa de existir e vira Initialize: ((instance: Instance) -> ())? — opcional, recebe uma instância base JÁ criada e JÁ com a cadeia de classes aplicada, só configura, não devolve nada. O rename Construct->Initialize é deliberado (um campo que recebe algo já construído não pode se chamar Construct) e é o que faz código escrito contra o contrato antigo virar erro de tipo em vez de mudança silenciosa. (2) ORDEM NOVA em ClassRegistry.new, que é o ponto inteiro da correção: lookup do descriptor -> guarda de IsAbstract -> resolveClassChain -> InstanceModule.NewBase(className, name) -> InstanceModule.SetClassChain(instance, chain) -> descriptor.Initialize(instance) se não for nil -> return instance. Com isso instance:IsA(ancestralIndireto) passa a responder corretamente DENTRO do próprio Initialize, e ClassName/identidade da tabela/default de Name deixam de ser confiados a cada classe de services. NÃO envolver Initialize em pcall: erro em construtor de classe é erro real e sobe para quem chamou. (3) error(msg, 3) nos dois pontos de resolveClassChain (ciclo e superclasse ausente) no lugar de error(msg, 0), para apontar para quem chamou ClassRegistry.new — mesmo alvo do error(msg, 2) usado dentro de new(); comentar no código que o nível 3 depende de resolveClassChain ter um único call site. (4) Cabeçalho do módulo passa a registrar a invariante 'ClassRegistry assume um processo por execução; não há desregistro nem reset' (achado BAIXO sobre estado global), e a ordem obrigatória do item 2 fica comentada no corpo de new(). (5) TESTES NOVOS no spec, além de migrar os 8 existentes para o formato Initialize: (a) regressão do achado ALTO — registrar C -> B -> A -> Instance e assertar, DE DENTRO do Initialize de C, que instance:IsA('A') e instance:IsA('B') são true (este teste tem que falhar se alguém reverter a ordem); (b) ciclo de herança mútuo (A.Super='B', B.Super='A') captura erro via pcall, não trava; (c) auto-referência direta (A.Super='A') idem; (d) descriptor sem Initialize (campo nil) instancia normalmente; (e) Name default — ClassRegistry.new('X') devolve Name=='X' e ClassRegistry.new('X','foo') devolve Name=='foo'. Depende de task-runtime-004.",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 4,
+      "tags": [
+        "runtime",
+        "core",
+        "class-registry",
+        "correcao-de-revisao",
+        "mudanca-de-contrato"
+      ],
+      "priority": "high",
+      "acceptance": "ClassDescriptor não tem mais o campo Construct; tem Initialize: ((instance: Instance) -> ())? opcional; ClassRegistry.new chama NewBase e SetClassChain antes de Initialize; teste (a) prova que IsA de ancestral indireto responde true dentro do próprio Initialize E falha se a ordem for revertida (o coder deve confirmar isso revertendo localmente antes de entregar); testes de ciclo mútuo e auto-referência passam via pcall sem travar; descriptor sem Initialize funciona; Name default correto nos dois casos; os 8 testes anteriores migrados continuam passando; regressão Signal 6/6, Instance 24/24, Scheduler 12/12, Integration 9/9 sem alterar esses arquivos; luau-lsp analyze --platform=standard limpo; zero ocorrências de any.",
+      "depends": [
+        "task-runtime-004"
+      ],
+      "note": "BLOQUEIA services. Nenhuma classe de services pode ser escrita contra o contrato antigo — é justamente por services ainda não existir que esta mudança é barata agora. Consequência de contrato que cai em task-runtime-007: src/runtime/init.luau NÃO deve reexportar Instance.NewBase (ver seção do arquiteto); GetPropertyRaw/SetPropertyRaw continuam exportados.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-014",
+      "column": "done",
+      "result": "Nenhuma fonte primária documenta o comportamento exato (é engine fechada em C++). Q3 confirmado com boa evidência: ler propriedade inexistente ERRA ('X is not a valid member of Y'), nunca devolve nil -- __index atual do LuauBench já diverge disso HOJE, independente de método. Q1 parcial: property real-porém-readonly erra com mensagem específica confirmada; caso exato 'nome existe mas é Function/Event' não confirmado, só inferência estrutural. Q2: nenhuma distinção conhecida entre método herdado e próprio da classe. Recomendação: SetClassMethods protegido contra escrita + corrigir __index pra errar (não nil) em qualquer membro desconhecido -- tratados juntos, mesma causa raiz. Relatório: .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md.",
+      "title": "Confirmar contra o Roblox real: é possível sobrescrever um método de classe numa Instance?",
+      "description": "Pendência adjacente aberta pelo arquiteto em .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (2)', subseção 'Pendência adjacente'. Precisa ser respondida ANTES de services escrever a primeira classe com método próprio. Contexto: no LuauBench, InstanceMeta.__index cai em data.properties[key] para qualquer chave desconhecida, então um método de classe concreta (workspace:Raycast, Players:GetPlayerByUserId) acabaria armazenado como valor em properties. __newindex só protege os métodos da própria Instance (Instance.luau:515), então o script do usuário conseguiria fazer workspace.Raycast = nil. Perguntas: (1) No Roblox real, atribuir sobre um método de uma Instance (ex.: workspace.Raycast = nil, ou game.GetService = print) erra, é silenciosamente ignorado, ou funciona? Erra com que mensagem? (2) O comportamento é o mesmo para método herdado de Instance (GetChildren) e para método específico da classe (Raycast)? (3) Ler uma propriedade inexistente numa Instance real erra ('X is not a valid member of Y') ou devolve nil? Isso decide se o fallback atual do __index para properties já diverge do real. Devolver fatos com fonte (documentação oficial da Roblox e/ou API Dump), marcando explicitamente o que ficou não confirmado, e salvar em .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md. NÃO implementar nada — o resultado volta ao arquiteto para decidir se entra um Instance.SetClassMethods (tabela de métodos separada, consultada por __index antes de properties e protegida por __newindex).",
+      "agent": "pesquisador",
+      "reviewer": "revisor-runtime",
+      "wave": 4,
+      "tags": [
+        "runtime",
+        "pesquisa",
+        "fidelidade",
+        "roblox-api",
+        "bloqueia-services"
+      ],
+      "priority": "medium",
+      "acceptance": "As três perguntas respondidas com fonte citada (URL/arquivo), marcando explicitamente o que ficou como não confirmado em vez de preencher com suposição; relatório salvo no caminho indicado; recomendação clara de se o desenho precisa de Instance.SetClassMethods e/ou de erro em leitura de membro inexistente, para o arquiteto decidir.",
+      "depends": [],
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-016",
+      "column": "done",
+      "result": "SetClassMethods implementado. Instance.spec 33/33 (24 originais intactos + 9 novos), ClassRegistry.spec 17/17 (13 + 4 novos). table.freeze/isfrozen confirmados funcionais no Lune. Comentarios de divergencia presentes nos fallbacks. Regressao total intacta (Signal 6/6, Scheduler 12/12, Integration 9/9, Sandbox 7/7). luau-lsp limpo, zero any.",
+      "reviewResult": "APROVADO, sem ressalva -- primeira aprovacao limpa. Revisor reproduziu os 7 pontos criticos (ordem __index, __newindex errando, SetClassMethods rejeitando os 3 casos invalidos, inacessibilidade pelo script, achatamento favorecendo classe mais concreta) e confirmou por evidencia indireta rigorosa que os 24+13 testes originais nao foram alterados. Relatorio: .claude/agents-memory/revisor-runtime-setclassmethods-2026-09-04.md.",
+      "title": "Instance.SetClassMethods + ClassDescriptor.Methods: método de classe fora de properties e protegido contra escrita",
+      "description": "Decisão de contrato do arquiteto fechando a 'Pendência adjacente' da revisão (2), com base na pesquisa de task-runtime-014. LER .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (3) — acesso a membro' INTEIRA antes de escrever qualquer linha. Escopo: src/runtime/Instance.luau, src/runtime/Instance.spec.luau, src/runtime/ClassRegistry.luau, src/runtime/ClassRegistry.spec.luau. Nenhum outro arquivo. Tarefa ATÔMICA (os dois módulos mudam juntos). (1) Instance.luau: export type ClassMethods = {[string]: unknown}; Internal ganha UM campo classMethods: ClassMethods?; nova função de módulo Instance.SetClassMethods(instance, methods: ClassMethods) -> () que guarda a REFERÊNCIA (nunca copia — uma tabela por classe, compartilhada por todas as instâncias) e valida, memoizando por IDENTIDADE DE TABELA num mapa fraco por chave (mesmo padrão de internals, Instance.luau:81): que a tabela esteja congelada, que todo valor seja função, e que nenhuma chave colida com a superfície fixa de Instance (ClassName/Name/Parent, os 5 sinais, os 14 métodos base) — colisão erra alto no load, nunca deixa um dos dois vencer em silêncio. (2) __index ganha o passo 4: métodos da classe concreta, consultados DEPOIS dos métodos base de Instance e ANTES de data.properties (a ordem base-antes-de-classe é escolha de caminho quente, não de semântica: colisão já foi rejeitada em SetClassMethods). (3) __newindex ganha o passo 6: escrever sobre método de classe ERRA (hoje só métodos base são protegidos, Instance.luau:515). (4) Mensagens de erro da família de acesso a membro passam para inglês/formato Roblox, conforme a tabela exata da seção do arquiteto: ClassName usa a string CONFIRMADA 'Unable to assign property ClassName. Property is read only'; sinal e método usam a aproximação de boa-fé declarada do LuauBench ('... is an event of X and cannot be reassigned' / '... is a method of X and cannot be reassigned') com comentário no ponto do erro dizendo que a string real do Roblox para esse caso NÃO foi confirmada, citando .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md. Mensagens fora de __index/__newindex (setParent, getInternal) NÃO mudam. (5) Comentário OBRIGATÓRIO no ponto exato do fallback final de __index (data.properties[key]) e do fallback final de __newindex, registrando a divergência conhecida e aceita: o Roblox real ERRA ('X is not a valid member of Y') e o LuauBench devolve nil / cria propriedade nova, porque enforçar isso exige um schema de propriedades por classe que só o dump fornece (ver task-runtime-018). revisor-runtime REPROVA se esses dois comentários não estiverem presentes. (6) ClassRegistry.luau: ClassDescriptor ganha Methods: InstanceModule.ClassMethods? (só os métodos que ESTA classe declara, nunca os herdados — espelha o campo Superclass do dump); cache module-local por ClassName com a tabela ACHATADA e CONGELADA, construída preguiçosamente no primeiro new (não no Register, mesma razão já documentada para resolveClassChain: services pode registrar fora de ordem topológica); achatamento percorre a cadeia resolvida DE TRÁS PARA FRENTE (resolveClassChain devolve {Concreta,...,Super,'Instance'}) para que a classe mais concreta sobrescreva a superclasse; ClassRegistry.new chama SetClassMethods DEPOIS de SetClassChain e ANTES de Initialize — é o ponto em que a identidade de classe fica definitiva e Initialize precisa poder chamar os métodos da própria classe. Classe sem Methods em nenhum elo da cadeia: pular a chamada, classMethods fica nil, comportamento idêntico ao de hoje. (7) Instance.SetClassMethods NÃO é reexportada por src/runtime/init.luau — mesma decisão e mesma razão de NewBase/SetClassChain (consequência para task-runtime-007). Confirmar na prática que table.freeze/table.isfrozen existem no Lune antes de apoiar a validação neles; se não existirem, parar e devolver ao arquiteto em vez de improvisar.",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 5,
+      "tags": [
+        "runtime",
+        "core",
+        "instance",
+        "class-registry",
+        "mudanca-de-contrato",
+        "bloqueia-services"
+      ],
+      "priority": "high",
+      "acceptance": "Instance.spec.luau continua 24/24 SEM QUE O ARQUIVO SEJA ALTERADO nos testes existentes (só testes NOVOS podem ser acrescentados) — se algum dos 24 precisar mudar, o patch está errado, parar e voltar ao arquiteto; testes novos cobrindo: método de classe é servido por __index e chamável com ':'; escrever sobre método de classe erra; escrever sobre método base erra; escrever sobre sinal erra; escrever sobre ClassName erra com a string confirmada; SetClassMethods rejeita tabela não congelada, valor não-função e chave que colide com a superfície fixa de Instance; método herdado de uma superclasse registrada é servido igual a método próprio (indistinguível do lado do script); classe mais concreta sobrescreve método da superclasse no achatamento; instância criada por NewBase direto (classMethods nil) mantém o comportamento de hoje; método de classe é chamável de DENTRO do próprio Initialize. Regressão: Signal 6/6, Scheduler 12/12, Integration 9/9, Sandbox 7/7, ClassRegistry (os 13 de task-runtime-013 migrados) sem alterar esses arquivos. luau-lsp analyze --platform=standard limpo; zero ocorrências de 'any'. Comentários de divergência presentes nos dois pontos de fallback.",
+      "depends": [
+        "task-runtime-013"
+      ],
+      "note": "task-runtime-013 fechou (done), então a dependência está satisfeita e esta tarefa já pode ser despachada — mas nenhum outro agente pode tocar src/runtime/Instance.luau ou ClassRegistry.luau enquanto ela estiver in-progress. BLOQUEIA services: nenhuma classe com método próprio pode ser escrita antes disto, senão o método vai parar em data.properties e o gerador inteiro precisa ser refeito. É justamente por services ainda não existir que a mudança é barata agora.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-017",
+      "title": "Confirmar o modelo de membro do Roblox API Dump (Scriptability, Default, MemberType, Tags, Security)",
+      "description": "Pré-requisito de desenho para task-runtime-018, aberto pelo arquiteto na seção 'Revisão pós-integração 2026-09-04 (3)' de .claude/agents-memory/arquiteto-runtime-2026-09-04.md, subseção 'Contrato-alvo da metade adiada'. NÃO bloqueia task-runtime-016 — roda em paralelo. O arquiteto se recusou deliberadamente a fixar PropertyDescriptor = {Default: unknown, ReadOnly: boolean} sem confirmação, porque fixar isso seria palpite sobre formato externo (regra 03). Perguntas, todas contra o Full-API-Dump.json oficial (MaximumADHD/Roblox-Client-Tracker) e/ou documentação oficial: (1) Como o dump modela escrituralidade de uma Property? O campo Scriptability existe e quais valores assume (ReadWrite/Read/Write/None/Custom)? Ele colapsa sem perda num booleano ReadOnly, ou Read e Write separados precisam ser representados? Como isso se relaciona com Tags ('ReadOnly', 'NotScriptable', 'Deprecated', 'Hidden')? (2) Como o valor Default de uma Property chega no dump — tipado, serializado como string, ausente para alguns tipos? O que aparece para propriedade de tipo Instance (default nil de verdade)? (3) MemberType assume exatamente quais valores (Property/Function/Event/Callback) e há membro que apareça em mais de uma categoria? (4) O dump alguma vez REDECLARA numa subclasse um membro já declarado na superclasse? Isso decide se o achatamento de task-runtime-016 pode ter colisão legítima entre classes de services. (5) O campo Security (por membro, possivelmente {Read, Write}) muda o que um Script comum consegue ler/escrever — precisa entrar no PropertyDescriptor? Devolver fatos com fonte (URL/arquivo/trecho do JSON), marcando explicitamente o que ficou não confirmado, e salvar em .claude/agents-memory/pesquisa-api-dump-membros-2026-09-04.md. NÃO implementar nada — o resultado volta ao arquiteto para fechar o formato de PropertyDescriptor antes de task-runtime-018 virar código.",
+      "column": "done",
+      "result": "Pesquisa contra Full-API-Dump.json real (commit 28360dea, 2026-09-03). Scriptability nao existe -- e Security{Read,Write} + tags ReadOnly/NotScriptable, independentes. Default sempre string, sentinelas para Instance-type (sempre nil). MemberType: 4 valores, nunca duplo. Dump REDECLARA membro em subclasse com assinatura diferente (19 pares confirmados) -- valida override por classe mais concreta do achatamento. Achado extra: raiz real da hierarquia e Object (Superclass==<<<ROOT>>>), nao Instance -- diverge do que ClassRegistry assume hoje, registrar para quando services mexer na cadeia real. Recomendacao de PropertyDescriptor: duas opcoes documentadas (A simples com ReadOnly booleano filtrado, B fiel com Readable/Writable separados) -- decisao do arquiteto antes de task-runtime-018. Relatorio: .claude/agents-memory/pesquisa-api-dump-membros-2026-09-04.md.",
+      "agent": "pesquisador",
+      "reviewer": "revisor-services",
+      "wave": 5,
+      "tags": [
+        "runtime",
+        "services",
+        "pesquisa",
+        "roblox-api",
+        "api-dump",
+        "bloqueia-services"
+      ],
+      "priority": "high",
+      "acceptance": "As cinco perguntas respondidas com fonte citada (URL/arquivo/trecho real do JSON, não de memória), marcando explicitamente o que ficou como não confirmado em vez de preencher com suposição; recomendação clara do formato de PropertyDescriptor que o LuauBench deve adotar, e se Security precisa entrar nele; relatório salvo no caminho indicado.",
+      "depends": [],
+      "note": "É também o insumo natural do gerador de services (regra 03) — a resposta aqui define o que o gerador precisa extrair do dump por membro, não só o PropertyDescriptor do runtime.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-018",
+      "title": "Schema de propriedades por classe: __index/__newindex erram para membro desconhecido e para propriedade somente-leitura",
+      "description": "Fecha a divergência conhecida e aceita registrada por task-runtime-016 nos comentários dos fallbacks de __index/__newindex. Contrato-alvo já decidido pelo arquiteto em .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção 'Revisão pós-integração 2026-09-04 (3)', subseção 'Contrato-alvo da metade adiada' — LER ANTES, e reconferir com o arquiteto se a resposta de task-runtime-017 mudar o formato de PropertyDescriptor (o campo ReadOnly: boolean é PROVISÓRIO justamente por isso). Contexto do porquê foi adiado: no Roblox real, ler propriedade inexistente ERRA ('X is not a valid member of Y', formato confirmado por citação verbatim em .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md) e o LuauBench devolve nil. Não dava para corrigir antes porque runtime não consegue distinguir propriedade válida com valor corrente nil (Humanoid.SeatPart, ObjectValue.Value) de typo — tabela Lua não armazena nil, então presença em data.properties não serve como schema. Escopo: (1) Instance.luau: export type PropertyDescriptor + export type ClassSchema; Internal ganha classSchema: ClassSchema?; nova função de módulo Instance.SetClassSchema(instance, schema) com a mesma disciplina de SetClassMethods (tabela achatada, congelada, compartilhada por classe, validação memoizada por identidade, NÃO reexportada em init.luau). (2) DOIS MODOS discriminados por classSchema ~= nil: leniente (classSchema nil, comportamento de hoje — é o caminho de NewBase direto, dos specs atuais e da raiz do DataModel enquanto não for registrada) e estrito (leitura de nome fora do schema erra com o formato confirmado '{key} is not a valid member of {ClassName} \"{GetFullName()}\"'; escrita de nome desconhecido idem; escrita em propriedade do schema sem escrituralidade de escrita erra com a string CONFIRMADA 'Unable to assign property {key}. Property is read only'). (3) ClassRegistry: ClassDescriptor ganha Properties; achatamento/cache/congelamento na mesma função que já achata Methods; ClassRegistry.new SEMEIA os defaults do schema direto no storage interno ANTES de Initialize — isso fecha de quebra a divergência 'Changed dispara para as propriedades semeadas no Initialize' registrada na revisão (2), e torna representável a propriedade com default nil. (4) Documentar como aproximação de boa-fé, não fidelidade byte-a-byte: error(msg, 2) prefixa arquivo:linha e o GetFullName do LuauBench já é aproximado (não omite game/DataModel).",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 7,
+      "tags": [
+        "runtime",
+        "core",
+        "instance",
+        "class-registry",
+        "fidelidade",
+        "mudanca-de-contrato"
+      ],
+      "priority": "medium",
+      "acceptance": "Instância COM schema: ler nome fora do schema erra e a mensagem contém 'is not a valid member of'; escrever nome fora do schema erra; escrever propriedade somente-leitura erra com a string confirmada 'Unable to assign property X. Property is read only'; ler propriedade do schema cujo default é nil devolve nil SEM errar (é o caso que motivou o schema — teste obrigatório); defaults do schema são semeados sem disparar Changed. Instância SEM schema (NewBase direto): comportamento idêntico ao de hoje, todos os specs anteriores intactos. Regressão total: Signal, Instance, Scheduler, Integration, Sandbox, ClassRegistry, mais o spec da primeira classe real de services. luau-lsp limpo; zero 'any'. Comentários de divergência que task-runtime-016 deixou nos fallbacks são REMOVIDOS ou reescritos aqui — não podem ficar descrevendo uma divergência que deixou de existir.",
+      "depends": [
+        "task-runtime-016",
+        "task-runtime-017"
+      ],
+      "note": "Deve entrar JUNTO com a primeira classe real de services (não antes): o modo estrito precisa nascer com pelo menos uma classe que o exercite de ponta a ponta, senão é código sem consumidor. Enquanto isso a divergência fica declarada no código pelos comentários de task-runtime-016 — não é omissão silenciosa.",
+      "createdAt": "2026-09-04",
+      "updatedAt": "2026-09-04"
+    }
+  ]
+}
