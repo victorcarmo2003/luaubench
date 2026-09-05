@@ -628,3 +628,213 @@ Nenhuma bloqueia o início; todas precisam ser respondidas antes de `revisor-ser
 2. String exata de `Instance.new` para classe inexistente e para classe `NotCreatable`.
 3. Propriedade com tag `Hidden` (sem `NotScriptable`) é acessível por script comum?
 4. `script.Source` lido de um `Script` comum: erra com "is not a valid member of", com mensagem de identidade/capability, ou devolve string vazia? E `RunService.RenderStepped` no servidor real — existe, erra, ou existe e nunca dispara?
+
+---
+
+## Revisão pós-pesquisa 2026-09-05 — `Capabilities` e `RenderStepped`
+
+Gatilho: `task-services-006`, relatório `.claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md`. Duas contradições reais com este desenho (mais uma inconsistência interna encontrada ao reescrever a regra). Esta seção **substitui** os trechos listados em "Correções ao texto acima (4)"; o resto do desenho continua válido.
+
+Os fatos desta seção foram **re-verificados por inspeção direta** nesta revisão, não herdados do relatório: o `Full-API-Dump.json` do commit fixado `28360dea` foi baixado de novo (8 006 149 bytes, bate com o lock) e o `content/en-us/scripting/capabilities.md` do `Roblox/creator-docs` foi baixado e lido. Marcados abaixo como **[verificado 09-05b]**.
+
+### Pendências 1, 2 e 3: fechadas sem mudança
+
+- **Membro vence filho** — **confirmado por fonte oficial** (`creator-docs`, `Instance.yaml`, seção `FindFirstChild`: *"When using the dot operator, properties take precedence over children if they share a name."*). A ordem de `__index` da Decisão 4 (membro nos passos 5/6, filho no 7) está certa. `task-runtime-021` segue como desenhada; o comentário no código deixa de dizer "assumido" e passa a citar a fonte.
+- **Mensagem de `Instance.new`** — mantida como aproximação de boa-fé de alta confiança; o comentário "string não confirmada byte-a-byte" continua obrigatório.
+- **`Hidden`** — **confirmado acessível por script comum** (3 fontes convergentes, incl. `Attachment.Position` no próprio dump). As 926 propriedades continuam entrando no schema. Nenhuma mudança.
+
+---
+
+### A. `Capabilities` é um quarto eixo do dump, e a Decisão 3 não o enxergava
+
+#### A.1 Formato real do campo [verificado 09-05b]
+
+`Capabilities` **não tem um formato só** — depende do `MemberType`:
+
+| `MemberType` | Formato de `Capabilities` | Ocorrências | Sem a chave |
+|---|---|---|---|
+| `Property` | objeto `{Read: {string}}` ou `{Read: {string}, Write: {string}}` | 2464 só com `Read`, 353 com `Read`+`Write` | 1221 |
+| `Function` | **array plano** `{string}` | 1780 | 1478 |
+| `Event` | **array plano** `{string}` | 636 | 451 |
+| `Callback` | **array plano** `{string}` | 13 | 5 |
+
+Consequências para o gerador, todas obrigatórias:
+- a chave `Capabilities` pode **estar ausente** (não `null`) — mesma disciplina já exigida para `Tags`;
+- em `Property`, a subchave `Write` pode estar ausente com `Read` presente;
+- tipar isso em Luau exige duas formas distintas (`{Read: {string}?, Write: {string}?}` vs `{string}`), não uma só;
+- **múltiplos nomes na lista são conjunção (E), não disjunção** — a doc oficial descreve o erro como *"the first capability that is missing"*, e `Workspace.Gravity` tem `Write: ["Basic","Physics"]` (precisa dos dois). O gerador testa **interseção** com o conjunto reservado, o que é correto sob semântica E.
+
+40 nomes distintos de capability aparecem no dump [verificado 09-05b].
+
+#### A.2 A leitura ingênua ("qualquer nome fora de `Basic` é restritivo") está errada e seria catastrófica
+
+O relatório de pesquisa já suspeitava disso; a inspeção fecha a questão com contraexemplos que são exatamente as classes da leva 1 [verificado 09-05b]:
+
+| Membro | `Security` | `Capabilities` | Acessível por script comum? |
+|---|---|---|---|
+| `Lighting.Ambient` (e as outras 22 de `Lighting`) | `None`/`None` | `Read: ["Environment"]` | óbvio que sim |
+| `Players.GetPlayers` / `Players.PlayerAdded` | `None` | `["Players"]` | óbvio que sim |
+| `Instance.Clone` | `None` | `["CreateInstances"]` | óbvio que sim |
+| `Player.Kick`, `Players.BanAsync` | `None` | `["Players","Consequences"]` | óbvio que sim |
+| `MessagingService.PublishAsync` | `None` | `["ServerCommunication"]` | óbvio que sim |
+| `Workspace.Gravity` | `None`/`None` | `Write: ["Basic","Physics"]` | óbvio que sim |
+
+Excluir por "não é `Basic`" apagaria **`Lighting` inteiro, `Players` inteiro e quase todo `StarterPlayer`** do schema — a falha por comissão mais cara possível. Rejeitado.
+
+#### A.3 O critério correto: capability **não concedível**, não "capability não-`Basic`"
+
+A doc oficial (`creator-docs`, `content/en-us/scripting/capabilities.md`) enumera **as capabilities que existem para serem concedidas a um container sandboxed** — 41 nomes, em quatro grupos (`Execution control`, `Instance access control`, `Script functionality control`, `Engine API access control`) [verificado 09-05b]. E declara que o sistema é *"all-or-nothing"* por padrão: um script **não** sandboxed detém implicitamente o conjunto concedível inteiro.
+
+Cruzando os 40 nomes do dump com os 41 nomes da doc [verificado 09-05b]:
+
+- **no dump e na doc:** 37 nomes → **concedíveis**, um script comum os tem, membro **entra** no schema.
+- **na doc e não no dump:** `AccessOutsideWrite`, `LoadString`, `RunClientScript`, `RunServerScript` — são capabilities de *script*, não de membro. Coerente: nunca aparecem em membro.
+- **no dump e NÃO na doc:** `InternalTest`, `PluginOrOpenCloud`, `RemoteCommand` — **três nomes, e só três.**
+
+Esses três não são categorias de sandboxing: são **portões de identidade/motor**, fora do conjunto que um script comum detém. Confirmado empiricamente para `PluginOrOpenCloud` pela citação literal de erro real do relatório (`"The current thread cannot read 'Source' (lacking capability PluginOrOpenCloud)"`), e coerente com o que `InternalTest` (56 funções internas: `CustomLog.GetLogPath`, `AnalyticsService.GetDurationLoggerTimestamp`) e `RemoteCommand` (`RemoteCommandService`) nomeiam.
+
+Nota sobre a lista sugerida no relatório do pesquisador: `Plugin`, `RobloxScript`, `RobloxEngine` e `CapabilityControl` **não** servem como reservadas — os três primeiros têm **zero ocorrências** no campo `Capabilities` deste dump (são valores do eixo `Security`, não deste), e `CapabilityControl` **está** na doc, é concedível (`Instance.Sandboxed`/`Instance.Capabilities` são escritos por script comum). A lista fechada é a de três nomes acima.
+
+#### A.4 Regra de emissão do gerador — versão que substitui a tabela da Decisão 3
+
+Definições, para um membro que a classe **declara** (herdado é achatamento do `ClassRegistry`, não do gerador):
+
+```
+required_read  = Property ? (Capabilities.Read  ?? {}) : (Capabilities ?? {})
+required_write = Property ? (Capabilities.Write ?? {}) : (Capabilities ?? {})
+Reserved       = { "InternalTest", "PluginOrOpenCloud", "RemoteCommand" }   -- de tools/capabilities.lock.json
+```
+
+Avaliada **em ordem**, primeiro casamento vence:
+
+| # | Condição no dump | Resultado |
+|---|---|---|
+| 1 | um nome em `required_read ∪ required_write` que **não está** em `grantable ∪ reserved` | **ABORTA a geração** — nomeia a capability e os membros afetados |
+| 2 | tag `NotScriptable` **OU** `Security.Read ~= "None"` **OU** tag `WriteOnly` | **excluído do schema** |
+| 3 | `required_read ∩ Reserved ~= {}` | **excluído do schema** ← NOVO |
+| 4 | `required_write ∩ Reserved ~= {}` (com `read` livre) | incluído, `ReadOnly = true` ← NOVO |
+| 5 | tag `ReadOnly` **OU** `Security.Write ~= "None"` | incluído, `ReadOnly = true` |
+| 6 | `Kind == "Event"` | incluído, `ReadOnly = true` (sempre) |
+| 7 | `Kind == "Callback"` | incluído, `ReadOnly = false` |
+| 8 | resto | incluído, `ReadOnly = false` |
+
+O passo 4 tem **zero casos neste dump** [verificado 09-05b] — está especificado por robustez, para que uma versão futura do dump não caia num buraco da regra. O passo 1 é a rede que impede que um nome novo de capability entre calado: abortar é o mesmo protocolo já usado para `Version ~= 1` (Decisão 2), e o gerador é dev-time e raro — o custo de um humano classificar um nome novo é baixo, o de uma exclusão silenciosa errada é alto.
+
+**Impacto medido do eixo novo [verificado 09-05b]:** 87 membros excluídos no dump inteiro (de ~8 400 que têm o campo). Na leva 1, **exatamente quatro**:
+
+| Membro | Motivo |
+|---|---|
+| `Script.Source` | `Read: ["PluginOrOpenCloud"]` |
+| `ModuleScript.Source` | idem |
+| `RunService.Misprediction` (Event) | `["Basic","PluginOrOpenCloud"]` |
+| `RunService.FrameNumber` | `Read: ["Basic","InternalTest"]` |
+
+`LocalScript.Superclass == "Script"` [verificado 09-05b] — `LocalScript` herda `Source` e cai na mesma exclusão pelo achatamento. Nada a fazer.
+
+#### A.5 Onde a lista vive: `tools/capabilities.lock.json` (arquivo novo)
+
+Proveniência diferente da do dump (doc, não dump) ⇒ arquivo próprio, ao lado de `tools/api-dump.lock.json`:
+
+```json
+{
+  "source": "Roblox/creator-docs",
+  "path": "content/en-us/scripting/capabilities.md",
+  "url": "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/scripting/capabilities.md",
+  "fetchedAt": "2026-09-05",
+  "grantable": ["AccessOutsideWrite","Animation","AssetCreateUpdate","AssetManagement","AssetRead","Audio","AvatarAppearance","AvatarBehavior","Basic","CSG","CapabilityControl","Capture","Chat","Consequences","CreateInstances","DataStore","DynamicGeneration","Environment","Groups","Input","LegacySound","LoadOwnedAsset","LoadString","LoadUnownedAsset","Logging","Material","Monetization","Network","Physics","PlatformAvatarEditing","Players","PromptExternalPurchase","RemoteEvent","RunClientScript","RunServerScript","ScriptGlobals","SensitiveInput","ServerCommunication","Social","Teleport","UI"],
+  "reserved": ["InternalTest","PluginOrOpenCloud","RemoteCommand"],
+  "note": "grantable = capabilities que a doc oficial enumera como concedíveis a um container sandboxed; um script NÃO sandboxed as detém todas (sistema all-or-nothing). reserved = nomes que aparecem no Capabilities do dump mas NÃO na doc — portões de identidade/motor que nenhum script comum detém. Classificar um nome novo é decisão humana explícita: o gerador aborta em vez de adivinhar."
+}
+```
+
+A URL aponta para `main` (não fixada por SHA) de propósito: a reprodutibilidade vem **deste arquivo committado**, não do fetch — o gerador **nunca** baixa a doc, só lê o `.json`. Divergência declarada: se a Roblox adicionar uma capability concedível nova, o gerador aborta até um humano atualizar este arquivo; é o comportamento desejado.
+
+#### A.6 O que **não** muda
+
+O LuauBench continua **sem simular `Capabilities` em runtime**: não há identidade de thread, não há container sandboxed, não existe a família de erro `"lacking capability ..."`. O que mudou é só que o **gerador dev-time lê o campo para decidir emissão**. Um plugin/CoreScript/thread OpenCloud real continua vendo mais superfície que o LuauBench — divergência já declarada, agora com o eixo certo.
+
+---
+
+### B. `RunService.RenderStepped`: LuauBench simula a **produção (RCC)**, não o bug do Studio
+
+#### B.1 Decisão
+
+**Conectar em `RunService.RenderStepped` erra no LuauBench.** "Existe e nunca dispara" era o comportamento de um **bug reconhecido do Studio** (ticket aberto pela Roblox, citado no relatório), não o do Roblox real — e o LuauBench já se declara `IsStudio() == false` e `IsServer() == true`. Manter o comportamento antigo seria imitar exatamente o ambiente que a própria simulação diz não ser. A regra 00 ("fidelidade com o Roblox real é o objetivo") decide sozinha aqui.
+
+#### B.2 Isto **não** abre o escopo de contexto client/server
+
+O LuauBench não modela `RunContext` e **não vai modelar nesta leva**. Ele é um servidor, sempre — decisão já tomada e já declarada. Sendo o contexto uma **constante deste build**, "erra ao conectar" é um valor fixo, não uma consulta a um subsistema que não existe. Nada de client/server entra agora.
+
+Limitação aceita e declarada: APIs client-only em geral (`UserInputService`, `GuiService`, `Players.LocalPlayer` e afins) **não** são varridas nem tratadas nesta leva — só `RenderStepped`, que é o único caso da leva 1 com evidência. Quando um `--client` existir, é a `message` do mecanismo abaixo que passa a ser condicional, num ponto só.
+
+#### B.3 Mecanismo: `src/services/RejectingSignal.luau` (módulo novo)
+
+Extensão do LuauBench, portanto **fora do namespace simulado de qualquer classe real** (regra 00) — vive em módulo próprio de `services`, nunca em `runtime` (que não pode conhecer classe por nome) e nunca em `generated/`.
+
+```luau
+--!strict
+-- Um Signal que existe, é legível como propriedade, e RECUSA conexão.
+-- Serve à superfície client-only enquanto o LuauBench é servidor fixo.
+
+-- Estruturalmente um Runtime.Signal<...>: Connect/Once/Wait erram com `message`
+-- em nível 2 (culpa o call site do script do usuário, convenção de Instance.luau);
+-- DisconnectAll é no-op.
+function RejectingSignal.new(message: string): Runtime.Signal<...unknown>
+```
+
+`ConnectParallel` não existe no `Signal` do runtime e **não** é inventado aqui. O tipo de retorno é `Signal<...unknown>` de propósito: o valor é guardado por `SetPropertyRaw`, que recebe `unknown` — não há alvo tipado a satisfazer, então não é preciso pack genérico nem cast cego. Se o Luau ainda assim recusar a construção, passar por `:: unknown ::` é aceitável **com comentário**; `any` continua proibido.
+
+`behavior/RunService.luau` instala no `Initialize`, sobre a entrada do schema, via `Runtime.Instance.SetPropertyRaw(instance, "RenderStepped", RejectingSignal.new(...))`. A ordem funciona sem nada novo: `ClassRegistry.new` semeia o `Signal` do evento **antes** de chamar `Initialize` (Decisão 6), então o `Initialize` só sobrescreve.
+
+**Ler** `RunService.RenderStepped` **não erra** — devolve o objeto. É `:Connect`/`:Once`/`:Wait` que erram. É o modelo honesto do que o motor checa (a mensagem real diz "event can only be **used** from local scripts", e a checagem é na conexão).
+
+Mensagem, pela regra de idioma dos erros (Decisão 5 — tem contraparte real ⇒ família Roblox, inglês, **sem** prefixo `[LuauBench]`):
+
+```
+RenderStepped event can only be used from local scripts
+```
+
+Comentada no código como **aproximação de boa-fé**: o texto vem de bug trackers de 2014–2024 (Anaminus/roblox-bug-tracker #636 e #365, ROBLOX/Studio-Tools #14), não de um teste ao vivo em 2026 — mesmo protocolo da mensagem de `Instance.new`.
+
+#### B.4 O que deliberadamente **não** recebe o mesmo tratamento
+
+- **`RunService.PreRender`** (o nome moderno de `RenderStepped`, presente no dump [verificado 09-05b]): continua **existindo e nunca disparando**. Não há evidência de que ele erre no servidor, e o princípio da Decisão 3 vale aqui igual — errar sem confirmação é falhar por **comissão** (quebra código válido), o pior dos dois lados. Vai para as pendências novas.
+- **`RunService:BindToRenderStep`/`UnbindFromRenderStep`**: continuam com o stub `[LuauBench] ... is not simulated by LuauBench yet` do `ClassBuilder`. Já erram alto; a única diferença seria o texto, e não há evidência para trocar.
+- **Aliasar `RenderStepped` para `Heartbeat`**: continua rejeitado. Esta decisão é o oposto disso.
+
+---
+
+### C. Consistência achada ao reescrever a regra: o filtro nunca era aplicado a `MethodNames`
+
+A Decisão 3 dizia *"para cada membro `Property`/`Event`/`Callback`"*. `MethodNames` vem dos membros `Function`, e **nenhum filtro era aplicado a eles** — `Players.CreateLocalPlayer` (`LocalUserSecurity`), `RunService:Pause`/`Run` (`PluginSecurity`), `Workspace:Set3dRenderingEnabled` (`RobloxScriptSecurity`) entrariam em `MethodNames` e ganhariam um stub `[LuauBench] ... not simulated yet`, sugerindo ao usuário que um dia serão simulados. No Roblox real um script comum **não vê** esses métodos: erram como membro inexistente.
+
+**Correção:** os passos 1, 2 e 3 da tabela de A.4 valem também para `Function` → o membro simplesmente **não entra em `MethodNames`**. Os passos 4–8 não se aplicam (método não tem escrituralidade).
+
+**Impacto medido [verificado 09-05b]:** dump inteiro — 1502 funções mantidas, 1691 excluídas por `Security`, 65 por capability reservada. Leva 1 — 143 mantidas, **60 excluídas por `Security`, 0 por capability**; as maiores contribuições são `RunService` (17 de 28), `Workspace` (11 de 18), `WorldRoot` (11 de 38), `Players` (12 de 36).
+
+Consequência observável: `RunService:Pause()` erra `Pause is not a valid member of RunService` em vez de `[LuauBench] ... not simulated yet`. É a mensagem correta — é o que o Roblox real diz para um script comum.
+
+---
+
+### Correções ao texto acima (4) — o que esta seção substitui no desenho original
+
+| Trecho original | Situação |
+|---|---|
+| Decisão 3, tabela "Regra de emissão do gerador" | **substituída** pela tabela de A.4 (+ eixo `Capabilities`, + passo de abort, + aplicação a `Function`) |
+| Decisão 3, "os três eixos independentes do dump (`Security{Read,Write}`, tag `ReadOnly`, tag `NotScriptable`)" | **corrigido**: são **quatro** eixos — `Capabilities` é o quarto |
+| Decisão 3, "porque o LuauBench não simula identidade nem `Capabilities`" | **precisado**: o *runtime* continua não simulando; o *gerador* passa a ler o campo (A.6) |
+| Contrato `services` → `cli`: *"`Script.Source` é `PluginSecurity` no dump"* | **factualmente errado** — `Security` é `None`/`None`; o portão é `Capabilities.Read == ["PluginOrOpenCloud"]`. **A conclusão prática não muda**: fora do schema, `cli` usa `Get/SetPropertyRaw` |
+| Fidelidade vs. pragmatismo, linha `Script.Source` | mesma correção de justificativa; conclusão intacta |
+| Fidelidade vs. pragmatismo, linha `RunService.RenderStepped` ("existe no schema e nunca dispara") | **substituída** por B: existe no schema, **conectar erra**; `PreRender` é que fica como "existe e nunca dispara" |
+| Fidelidade vs. pragmatismo, linha "Propriedades `Hidden` — não confirmada" | **confirmada**; deixa de ser pendência |
+| Fidelidade vs. pragmatismo, linha "Ordem membro-vence-filho — assumida" | **confirmada por fonte oficial**; deixa de ser pendência |
+| "NÃO fazer agora": *"Não simular `Security`/`Capabilities`/identidade de thread"* | **continua valendo em runtime**, com a ressalva de A.6 |
+| "NÃO fazer agora": *"Não aliasar `RenderStepped` para `Heartbeat`"* | **continua valendo** |
+| Módulos de `services` | **+ `src/services/RejectingSignal.luau`** (B.3) |
+| Ferramentas de `services` | **+ `tools/capabilities.lock.json`** (A.5) |
+
+### Pendências novas para o `pesquisador` (`task-services-007`, três perguntas — não bloqueiam)
+
+1. `RunService.PreRender` conectado do lado servidor em produção real: erra como `RenderStepped` ou conecta e nunca dispara? (Decide se B.4 muda.)
+2. `InternalTest` e `RemoteCommand` bloqueiam mesmo um script comum não-sandboxed? Uma citação de erro real com qualquer um dos dois fecha o critério de A.3; hoje ele é sustentado por `PluginOrOpenCloud` + ausência na doc oficial. (Decide se `RunService.FrameNumber` fica fora do schema.)
+3. Texto atual (2026) da recusa de `RenderStepped` no servidor — a família está documentada, o texto exato não foi visto ao vivo. Confirmar se ainda é `"RenderStepped event can only be used from local scripts"` ou se migrou para o formato de capability.
