@@ -997,7 +997,7 @@
       "id": "task-cli-008",
       "title": "Limite duro de profundidade de recursao em TreePlanner (defesa em profundidade alem da normalizacao de path)",
       "description": "Recomendacao nao-bloqueante do revisor-cli na revisao de fechamento de task-cli-003 (.claude/agents-memory/revisor-cli-cycle-fix-2026-09-05.md). A normalizacao de path (normalizePath) fecha o ciclo real de projeto aninhado, mas o revisor testou um vetor mais estreito e nao coberto: case-insensitivity de path no Windows (typo de case entre pastas que deveriam ser o mesmo caminho) -- nao trava, termina em poucos saltos, mas a cadeia reportada no diagnostico fica confusa. Symlinks tambem nao sao cobertos pela normalizacao textual (sem tocar filesystem). Adicionar um limite duro de profundidade de recursao em TreePlanner.Plan (contador simples, independente de deteccao de ciclo por path) como rede de seguranca complementar -- se estourar o limite, erro claro dizendo que a profundidade maxima foi atingida, nunca hang nem estouro de pilha, mesmo em casos que a normalizacao de path nao cobre.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 18,
@@ -1009,6 +1009,8 @@
       ],
       "priority": "low",
       "acceptance": "TreePlanner.Plan aborta com erro claro apos um limite fixo de profundidade de projeto aninhado (documentar o numero escolhido e a justificativa); teste com case-insensitivity do Windows (dois nomes de pasta diferindo so em maiusculas apontando um pro outro) nao trava e produz erro de limite, nao cadeia confusa; regressao total de cli intacta; --!strict sem any.",
+      "result": "Contador depth roteado pelas 4 funcoes mutuamente recursivas, checado antes de qualquer I/O, MAX_PLAN_DEPTH=200 (sondado empiricamente contra o limite real da pilha do Lune). Tocou Messages.luau alem do territorio declarado (justificado: regra do arquivo exige toda string user-facing centralizada la, mesmo padrao ja usado em task-cli-003). Achado importante: case-insensitivity do Windows ja era coberto pelo cycleGuard/normalizePath pre-existente (converge sozinho) -- o novo limite cobre e recursao de pasta comum sem protecao anterior (o que symlink/junction produziria). 197/197 cli (31/31 TreePlanner.spec, era 29).",
+      "reviewResult": "APROVADO. Revisor rodou 197/197 ele mesmo (corrigiu imprecisao aritmetica do coder que disse 198), rastreou o contador nas 4 funcoes confirmando incremento correto sem amarracao a path, reproduziu com driver proprio (500 pastas, nomes diferentes dos do coder) confirmando erro claro em 0.13s, sondou a margem real da pilha do Lune (estoura perto de ~6665, margem >15x confirmada), confirmou case-insensitivity fecha via mecanismo antigo (correcao factual da premissa, nao desvio), avaliou o toque em Messages.luau como justificado e aditivo (leu a regra real do arquivo, nao exige tarefa separada). Achado BAIXO: contagem do coder imprecisa (198 vs 197 real), sem impacto funcional.",
       "depends": [
         "task-cli-003"
       ],

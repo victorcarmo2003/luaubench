@@ -1,0 +1,9 @@
+{
+  "name": "CaseCycleA",
+  "tree": {
+    "$className": "DataModel",
+    "Vendor": {
+      "$path": "../CaseB"
+    }
+  }
+}

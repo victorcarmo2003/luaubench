@@ -14,6 +14,7 @@
 	Roda com `lune run src/cli/TreePlanner.spec.luau`.
 ]]
 
+local fs = require("@lune/fs")
 local process = require("@lune/process")
 local Diagnostics = require("./Diagnostics")
 local ProjectFile = require("./ProjectFile")
@@ -851,6 +852,138 @@ test("Plan: par pai->filho fixo é MUTUAMENTE EXCLUSIVO por parentClassName -- '
 	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/missing-class-name' -- a inferência de filho fixo NUNCA deveria disparar pro pai errado")
 	if diagnostic ~= nil then
 		assert(diagnostic.NodePath == "tree.StarterPlayer.Terrain", "Diagnostic deveria nomear o nó certo")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-008: limite duro de profundidade de recursão -- rede de segurança COMPLEMENTAR ao
+-- cycleGuard/normalizePath testado acima (aquele só cobre CICLO DE PROJETO ANINHADO; o vetor de
+-- PASTA COMUM -- filhos descobertos por `fs.readDir`, sem nenhum "$path" novo a cada nível -- não
+-- tinha NENHUMA proteção de ciclo antes desta tarefa; é o que um symlink/junction de pasta
+-- apontando de volta pra um ancestral produziria). Ver `TreePlanner.MAX_PLAN_DEPTH`, no módulo,
+-- pro número escolhido e a justificativa completa.
+--------------------------------------------------------------------------------------------------
+
+test("Plan: cadeia de pastas reais mais funda que TreePlanner.MAX_PLAN_DEPTH aborta com 'plan/max-depth-exceeded', nunca hang nem stack overflow cru", function()
+	-- Gerada em disco EM TEMPO DE TESTE, fora de `src/cli/fixtures/` (mesma disciplina da
+	-- investigação do revisor em revisor-cli-cycle-fix-2026-09-05.md -- scratch fora do
+	-- território, removido por completo ao final): um fixture ESTÁTICO com 200+ pastas
+	-- aninhadas seria um artefato de repositório absurdo (caminho gigante, risco de MAX_PATH do
+	-- Windows em quem clonar sem long paths habilitado).
+	local tempRoot = process.env.TEMP or process.env.TMP
+	assert(tempRoot ~= nil, "TEMP/TMP precisa existir no ambiente pra este teste gerar a cadeia de pastas")
+	if tempRoot == nil then
+		return
+	end
+
+	local scratchRoot = `{tempRoot}/luaubench-treeplanner-max-depth-spec`
+	-- Limpa resíduo de uma rodada anterior que talvez tenha abortado antes da limpeza.
+	if fs.isDir(scratchRoot) then
+		fs.removeDir(scratchRoot)
+	end
+	fs.writeDir(scratchRoot)
+
+	-- Cadeia de pastas comuns (SEM "$path" em nenhum nível -- descobertas por `fs.readDir`,
+	-- exatamente o vetor sem proteção nenhuma antes desta tarefa) -- 10 níveis além do limite,
+	-- pra provar que o contador para ANTES do fim da árvore real, não por coincidência de tamanho.
+	local deepBase = scratchRoot .. "/deep"
+	fs.writeDir(deepBase)
+	local currentPath = deepBase
+	local levelsToCreate = TreePlanner.MAX_PLAN_DEPTH + 10
+	for _ = 1, levelsToCreate do
+		currentPath = currentPath .. "/lvl"
+		fs.writeDir(currentPath)
+	end
+
+	fs.writeFile(
+		scratchRoot .. "/default.project.json",
+		[[{
+	"name": "MaxDepthProbe",
+	"tree": {
+		"$className": "DataModel",
+		"Vendor": {
+			"$path": "deep"
+		}
+	}
+}]]
+	)
+
+	local bag = Diagnostics.newBag()
+	local project = ProjectFile.Read(scratchRoot .. "/default.project.json", bag)
+	assert(project ~= nil, `ProjectFile.Read deveria ter conseguido ler o projeto gerado (bag: {#bag:All()} diagnostic(s))`)
+	if project == nil then
+		fs.removeDir(scratchRoot)
+		return
+	end
+
+	-- `pcall` aqui não é só estilo -- é PARTE do que este teste prova: se a implementação tivesse
+	-- um bug e deixasse a recursão passar do limite, o próprio Luau lançaria um erro cru de
+	-- "stack overflow" (reproduzido isoladamente fora deste módulo, com a mesma forma de
+	-- recursão mútua, antes de implementar a correção -- ver comentário de `MAX_PLAN_DEPTH` em
+	-- `TreePlanner.luau`) -- SEM isto, esse erro derrubaria o spec inteiro sem limpar
+	-- `scratchRoot`. `TreePlanner.Plan` NUNCA deveria lançar -- deveria sempre devolver `nil` com
+	-- um Diagnostic (regra 04).
+	local planOk, planResultOrError = pcall(function()
+		return TreePlanner.Plan(project :: ProjectFile.Project, FAKE_OPTIONS, bag)
+	end)
+
+	-- Limpeza ANTES dos asserts que podem reprovar o teste -- nunca deixa resíduo em disco, mesmo
+	-- se alguma asserção abaixo falhar.
+	fs.removeDir(scratchRoot)
+
+	assert(planOk, `Plan NUNCA deveria lançar um erro cru (ex.: stack overflow nativo) -- deveria devolver nil com um Diagnostic. Erro: {tostring(planResultOrError)}`)
+
+	local plan = planResultOrError :: TreePlanner.InstancePlan?
+	assert(plan == nil, "profundidade além do limite deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostic = findByCode(bag, "plan/max-depth-exceeded")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/max-depth-exceeded'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "estourar o limite de profundidade deveria ser Severity 'error'")
+		assert(
+			string.find(diagnostic.Message, tostring(TreePlanner.MAX_PLAN_DEPTH), 1, true) ~= nil,
+			`Message deveria citar o número do limite ({TreePlanner.MAX_PLAN_DEPTH}). Message: {diagnostic.Message}`
+		)
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- Case-insensitivity de path no Windows (achado do revisor, revisor-cli-cycle-fix-2026-09-05.md,
+-- "Julgamento da pendência declarada"): duas pastas reais diferindo só em maiúscula/minúscula na
+-- REFERÊNCIA (nunca no nome real em disco -- NTFS proíbe dois nomes que só diferem em case no
+-- mesmo diretório), cada uma apontando "de volta" pra outra via "$path" com "..".
+--
+-- IMPORTANTE (documentado aqui pra não virar surpresa em revisão): com EXATAMENTE duas pastas
+-- reais envolvidas, este cenário SEMPRE converge sozinho via o `cycleGuard` PRÉ-EXISTENTE (não
+-- precisa do limite de profundidade novo) -- é estrutural, não sorte desta fixture específica:
+-- cada arquivo de projeto tem um "$path" FIXO (conteúdo estático) referenciando o outro, e um
+-- ".." sempre REESCREVE por completo o último segmento do caminho (o `stack` de
+-- `normalizePath` descarta o segmento errado, não importa o case usado pra chegar até ele) --
+-- então a partir da segunda vez que o MESMO arquivo real é revisitado, a string produzida é
+-- IDÊNTICA a uma visita anterior, e o `cycleGuard` (chave = string exata) sempre fecha o ciclo em
+-- poucos saltos. Reproduz o que o revisor mediu manualmente (4 saltos, cadeia com o nome errado
+-- no meio) -- prova que o comportamento não regrediu com a task-cli-008. O teste ACIMA (cadeia de
+-- pastas comuns) é quem prova o limite de profundidade em si, pro vetor que o `cycleGuard` de
+-- fato NÃO cobre (pasta comum, sem "$path" repetido nenhum -- ver comentário completo ali).
+--------------------------------------------------------------------------------------------------
+
+test("Plan: duas pastas diferindo só em maiúscula/minúscula (Windows) apontando uma pra outra não trava -- termina via o cycleGuard existente, não precisa do limite de profundidade", function()
+	local startClock = os.clock()
+	local plan, bag = planFixture("nested-project-cycle-case-insensitive/CaseA")
+	local elapsedSeconds = os.clock() - startClock
+
+	assert(plan == nil, "ciclo via case-insensitivity deveria impedir Plan de devolver um InstancePlan")
+	assert(elapsedSeconds < 10, `Plan não deveria demorar mais que alguns segundos -- levou {elapsedSeconds}s (indício de hang)`)
+
+	-- Ainda é o `plan/nested-project-cycle` PRÉ-EXISTENTE que fecha este caso (ver comentário
+	-- grande acima) -- nunca `plan/max-depth-exceeded` (esse cenário nem chega perto do limite).
+	local cycleDiagnostic = findByCode(bag, "plan/nested-project-cycle")
+	assert(cycleDiagnostic ~= nil, "deveria haver um Diagnostic 'plan/nested-project-cycle' -- o cycleGuard existente deveria fechar este ciclo sozinho")
+	assert(findByCode(bag, "plan/max-depth-exceeded") == nil, "este cenário NÃO deveria alcançar o limite de profundidade -- só duas pastas reais, sempre converge antes")
+
+	if cycleDiagnostic ~= nil then
+		assert(cycleDiagnostic.Severity == "error", "ciclo deveria ser Severity 'error'")
+		assert(string.find(cycleDiagnostic.Message, "->", 1, true) ~= nil, "Message deveria listar a CADEIA (separador '->')")
 	end
 end)
 

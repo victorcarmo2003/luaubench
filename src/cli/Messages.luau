@@ -271,6 +271,15 @@ function Messages.PlanNestedProjectCycle(chain: { string }): string
 	return `Cyclic nested project detected: {table.concat(chain, " -> ")}.`
 end
 
+-- task-cli-008: defesa em profundidade COMPLEMENTAR ao ciclo acima -- dispara quando um contador
+-- de profundidade (independente de qualquer path) estoura, nunca quando um ciclo de "$path" é
+-- detectado (esse caso já usa `PlanNestedProjectCycle`, acima). Cobre vetores que a detecção de
+-- ciclo por path não cobre (loop de pasta comum via symlink/junction, sem "$path" nenhum
+-- envolvido) -- ver `TreePlanner.MAX_PLAN_DEPTH` pro número escolhido e a justificativa completa.
+function Messages.PlanMaxDepthExceeded(nodePath: string, maxDepth: number): string
+	return `"{nodePath}" exceeded the maximum tree depth LuauBench allows ({maxDepth} levels of nested folders/projects) -- this is a hard safety limit, independent of "$path" cycle detection, meant to catch recursion loops that path normalization cannot see (e.g. a Windows case-insensitive folder alias, or a directory symlink/junction pointing back at an ancestor) without ever hanging or overflowing the native stack. A legitimate project should never be this deep.`
+end
+
 function Messages.PlanNestedProjectChildrenIgnored(nodePath: string): string
 	return `"{nodePath}" has both a "$path" that resolves to a nested project and its own named children in the project file -- only the nested project's own tree is used; the named children were ignored.`
 end

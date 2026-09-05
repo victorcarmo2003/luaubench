@@ -108,6 +108,36 @@ export type PlanOptions = {
 
 local TreePlanner = {}
 
+-- LIMITE DURO DE PROFUNDIDADE DE RECURSÃO (task-cli-008) -- rede de segurança COMPLEMENTAR ao
+-- `cycleGuard`/`normalizePath` (comentário grande no cabeçalho do arquivo, "CORREÇÃO"). Aquele
+-- mecanismo só cobre CICLO DE PROJETO ANINHADO (chave = caminho absoluto normalizado de um
+-- "$path" que resolve a outro `.project.json`) -- ele NÃO cobre um loop de PASTA COMUM (filhos
+-- descobertos via `fs.readDir` em `planChildrenOf`, sem nenhum "$path" novo em cada nível), que
+-- nunca passa pelo `cycleGuard`. Um symlink/junction de pasta apontando de volta pra um
+-- ancestral causaria recursão real sem limite nenhum antes desta tarefa (a API `fs` do Lune
+-- 0.10.5 não expõe sequer como CRIAR um pra testar aqui, mas nada impede o projeto do usuário de
+-- ter um). Este contador é a defesa: incrementado a CADA NÍVEL DE RECURSÃO REAL (um filho de
+-- pasta via `planChildrenOf`/`planChildNode`, OU entrar num projeto aninhado via
+-- `planProjectTree`) -- nunca amarrado a um path específico, então pega QUALQUER vetor de
+-- recursão sem limite, não só os dois mencionados acima (case-insensitivity de path no Windows
+-- incluída -- ver teste dedicado em `TreePlanner.spec.luau`, que também documenta por que ESSE
+-- vetor específico, com só duas pastas envolvidas, já termina sozinho via `cycleGuard` em poucos
+-- saltos, sem precisar deste limite).
+--
+-- NÚMERO ESCOLHIDO: 200. Justificativa:
+--   - Projeto Rojo real legítimo raramente passa de umas poucas dezenas de níveis de PASTA (a
+--     árvore de instâncias de um jogo real, mesmo grande, não costuma passar de ~20-30 níveis de
+--     profundidade); projeto aninhado (pacote Wally vendorizado) raramente passa de 2-3 níveis
+--     encadeados. 200 dá margem de sobra (~5-10x) pra qualquer combinação razoável dos dois sem
+--     nunca ser confundido com um projeto real.
+--   - Sondado empiricamente (`lune run` de um script fora deste módulo, removido depois) que a
+--     MESMA FORMA de recursão mútua usada aqui (`resolveCore` -> `planChildrenOf` ->
+--     `planChildNode` -> `resolveCore`, ~4 chamadas de função por nível) só estoura a pilha
+--     nativa do Luau do Lune perto de ~5000 níveis -- 200 para MUITO antes disso (margem de
+--     ~25x), então o Diagnostic claro abaixo sempre dispara antes de qualquer risco de "stack
+--     overflow" cru vazando pro usuário (regra 04: nunca stack trace cru).
+local MAX_PLAN_DEPTH = 200
+
 --------------------------------------------------------------------------------------------------
 -- Tipos internos (não exportados -- só usados pela recursão deste módulo)
 --------------------------------------------------------------------------------------------------
@@ -583,6 +613,10 @@ local resolveCore: (
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	-- task-cli-008: profundidade de recursão REAL acumulada até este nó (ver `MAX_PLAN_DEPTH`,
+	-- acima) -- não confundir com `#cycleChain` (que só cresce ao entrar num projeto aninhado);
+	-- esta conta TAMBÉM cada nível de pasta comum.
+	depth: number,
 	ctx: PlanContext
 ) -> CoreResolution?
 
@@ -595,6 +629,7 @@ local planChildrenOf: (
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	depth: number,
 	ctx: PlanContext
 ) -> { PlanNode }
 
@@ -607,6 +642,7 @@ local planChildNode: (
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	depth: number,
 	ctx: PlanContext
 ) -> PlanNode?
 
@@ -614,6 +650,7 @@ local planProjectTree: (
 	project: ProjectFile.Project,
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
+	depth: number,
 	ctx: PlanContext
 ) -> (RootResolution?, { PlanNode })
 
@@ -629,10 +666,26 @@ resolveCore = function(
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	depth: number,
 	ctx: PlanContext
 ): CoreResolution?
 	local bag = ctx.Bag
 	local options = ctx.Options
+
+	-- task-cli-008: checado ANTES de qualquer trabalho (inclusive I/O) -- ver `MAX_PLAN_DEPTH`,
+	-- acima do arquivo, pro número escolhido e a justificativa completa. Contador simples,
+	-- independente de `cycleGuard`/`normalizePath` -- cobre vetor de recursão de PASTA COMUM
+	-- (sem "$path" nenhum envolvido), que a detecção de ciclo por path nunca cobre.
+	if depth > MAX_PLAN_DEPTH then
+		bag:Add({
+			Severity = "error",
+			Code = "plan/max-depth-exceeded",
+			Message = Messages.PlanMaxDepthExceeded(nodePath, MAX_PLAN_DEPTH),
+			NodePath = nodePath,
+			FilePath = currentProjectFilePath,
+		})
+		return nil
+	end
 
 	local explicitClassName: string? = nil
 	if jsonNode ~= nil then
@@ -875,7 +928,9 @@ resolveCore = function(
 		local newCycleChain = copyStringList(cycleChain)
 		table.insert(newCycleChain, nestedProjectFilePath)
 
-		local nestedRoot, nestedChildren = planProjectTree(nestedProject, newCycleGuard, newCycleChain, ctx)
+		-- task-cli-008: entrar num projeto aninhado É um nível de recursão real (mesma família do
+		-- "filho de pasta" contado em `planChildrenOf`, abaixo) -- soma ao contador, nunca reseta.
+		local nestedRoot, nestedChildren = planProjectTree(nestedProject, newCycleGuard, newCycleChain, depth + 1, ctx)
 		if nestedRoot == nil then
 			-- Erro já reportado dentro da resolução da raiz do projeto aninhado.
 			return nil
@@ -1080,6 +1135,7 @@ planChildrenOf = function(
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	depth: number,
 	ctx: PlanContext
 ): { PlanNode }
 	if core.IsNestedProject then
@@ -1160,7 +1216,10 @@ planChildrenOf = function(
 			adjacentMetaPath = metaTargets[childName]
 		end
 
-		local planned = planChildNode(spec, containerFolderPath, ownClassName, childNodePath, adjacentMetaPath, cycleGuard, cycleChain, currentProjectFilePath, ctx)
+		-- task-cli-008: cada filho de pasta é UM NÍVEL a mais que o pai (`core`) -- é este "+1",
+		-- repetido a cada chamada recursiva, que faz o contador crescer com a árvore real, nunca
+		-- amarrado a nenhum path específico (vetor de pasta comum, sem "$path" nenhum).
+		local planned = planChildNode(spec, containerFolderPath, ownClassName, childNodePath, adjacentMetaPath, cycleGuard, cycleChain, currentProjectFilePath, depth + 1, ctx)
 		if planned ~= nil then
 			table.insert(children, planned)
 		end
@@ -1178,6 +1237,7 @@ planChildNode = function(
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	currentProjectFilePath: string,
+	depth: number,
 	ctx: PlanContext
 ): PlanNode?
 	local core = resolveCore(
@@ -1192,13 +1252,14 @@ planChildNode = function(
 		cycleGuard,
 		cycleChain,
 		currentProjectFilePath,
+		depth,
 		ctx
 	)
 	if core == nil then
 		return nil
 	end
 
-	local children = planChildrenOf(core, spec.JsonNode, containerFolderPath, nodePath, core.ClassName, cycleGuard, cycleChain, currentProjectFilePath, ctx)
+	local children = planChildrenOf(core, spec.JsonNode, containerFolderPath, nodePath, core.ClassName, cycleGuard, cycleChain, currentProjectFilePath, depth, ctx)
 
 	return {
 		Name = spec.Name,
@@ -1212,7 +1273,13 @@ planChildNode = function(
 	}
 end
 
-planProjectTree = function(project: ProjectFile.Project, cycleGuard: { [string]: boolean }, cycleChain: { string }, ctx: PlanContext): (RootResolution?, { PlanNode })
+planProjectTree = function(
+	project: ProjectFile.Project,
+	cycleGuard: { [string]: boolean },
+	cycleChain: { string },
+	depth: number,
+	ctx: PlanContext
+): (RootResolution?, { PlanNode })
 	local core = resolveCore(
 		project.Tree,
 		"<root>",
@@ -1225,13 +1292,14 @@ planProjectTree = function(project: ProjectFile.Project, cycleGuard: { [string]:
 		cycleGuard,
 		cycleChain,
 		project.FilePath,
+		depth,
 		ctx
 	)
 	if core == nil then
 		return nil, {}
 	end
 
-	local children = planChildrenOf(core, project.Tree, project.FolderPath, project.Tree.NodePath, core.ClassName, cycleGuard, cycleChain, project.FilePath, ctx)
+	local children = planChildrenOf(core, project.Tree, project.FolderPath, project.Tree.NodePath, core.ClassName, cycleGuard, cycleChain, project.FilePath, depth, ctx)
 
 	-- task-cli-018 (Decisão 15): devolve o registro inteiro (`Source`/`SourcePath`/`Properties`
 	-- inclusos), não só o `ClassName` -- é isto que permite ao ramo de projeto aninhado de
@@ -1267,7 +1335,7 @@ function TreePlanner.Plan(project: ProjectFile.Project, options: PlanOptions, ba
 	local cycleGuard: { [string]: boolean } = { [normalizedProjectFilePath] = true }
 	local cycleChain: { string } = { normalizedProjectFilePath }
 
-	local rootResolution, roots = planProjectTree(project, cycleGuard, cycleChain, ctx)
+	local rootResolution, roots = planProjectTree(project, cycleGuard, cycleChain, 0, ctx)
 
 	if bag:HasErrors() then
 		return nil
@@ -1327,5 +1395,10 @@ function TreePlanner.Plan(project: ProjectFile.Project, options: PlanOptions, ba
 		Diagnostics = bag:All(),
 	}
 end
+
+-- Exportado só pra `TreePlanner.spec.luau` poder gerar uma cadeia de pastas mais funda que o
+-- limite sem duplicar o número mágico (task-cli-008) -- não é uma opção configurável, é o MESMO
+-- valor que `resolveCore` usa internamente (a constante `MAX_PLAN_DEPTH`, acima).
+TreePlanner.MAX_PLAN_DEPTH = MAX_PLAN_DEPTH
 
 return TreePlanner

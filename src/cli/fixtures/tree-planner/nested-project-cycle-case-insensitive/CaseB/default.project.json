@@ -1,0 +1,9 @@
+{
+  "name": "CaseCycleB",
+  "tree": {
+    "$className": "Folder",
+    "Back": {
+      "$path": "../casea"
+    }
+  }
+}
