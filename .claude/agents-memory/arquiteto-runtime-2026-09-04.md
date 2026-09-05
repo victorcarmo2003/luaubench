@@ -974,3 +974,112 @@ Ganho colateral que justifica a forma declarativa em vez de `Initialize` semeand
 - **Não** expor `SetClassMethods` em `src/runtime/init.luau`.
 - **Não** dar a cada instância a própria cópia da tabela de métodos — uma tabela congelada por classe, referência compartilhada.
 - **Não** reescrever `Instance.luau`/`ClassRegistry.luau`: são dois patches cirúrgicos sobre arquivos que passam nos próprios testes.
+
+---
+
+## Revisão pós-integração 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`
+
+**Gatilho:** `task-services-003` (primeira leva de classes reais) travou. `coder-services` reproduziu rodando de verdade: `game:GetService("ReplicatedStorage")` erra com `'ReplicatedStorage' é abstrata, não pode ser instanciada`. Bloqueia toda a família `GetService` da leva atual e a próxima (`task-services-004`, `Players`/`RunService`).
+
+### Diagnóstico — o defeito é de desenho, não de implementação
+
+O erro é meu, de 09-04. `ClassDescriptor.IsAbstract` foi desenhado com dois exemplos na cabeça (`Instance`, `PVInstance`) e batizado com o nome de um conceito que **o Roblox API Dump não tem**. O dump não marca classe abstrata; ele marca `NotCreatable` — e `NotCreatable` significa uma coisa só, estreita e precisa: **"`Instance.new` não cria isto"**. São 553 classes com a tag, e entre elas estão **as 334 `Service`**, que o motor do Roblox cria o tempo todo (é literalmente o que `GetService` faz).
+
+Quando `services` gerou as classes reais e traduziu `NotCreatable -> IsAbstract = true` — tradução **correta**, fiel ao dump e ao Roblox (`Instance.new("Workspace")` erra lá também) — a conflação virou bug: `ClassRegistry.new` rejeita `IsAbstract` incondicionalmente, e `DataModel:GetService` constrói o singleton **através** de `ClassRegistry.new`. Toda Service real passou a ser inconstruível.
+
+Duas coisas ortogonais estavam num campo só:
+
+| Conceito | Existe no dump? | Quem deve barrar | Exemplo |
+|---|---|---|---|
+| "script não pode criar" (`NotCreatable`) | **sim**, tag de classe | `Services.new` (o `Instance.new` do sandbox) | `Workspace`, `ReplicatedStorage`, `StarterPlayerScripts` |
+| "instância nunca existe, nem pelo motor" | **não**, seria heurística inventada | ninguém, hoje | `PVInstance`, `LuaSourceContainer` |
+
+O caso `StarterPlayerScripts` é o que fecha o argumento e derruba qualquer atalho: `IsAbstract = true` **e** `IsService = false` (verificado em `src/services/generated/classes/StarterPlayerScripts.luau`). Não é Service, logo `GetService` não o alcança, e mesmo assim o motor o cria — como filho fixo de `StarterPlayer`. Ou seja: a construção pelo motor **não** é um caso especial de `GetService`; é uma categoria própria.
+
+### Decisão — opção (b), com refinamentos
+
+**`ClassRegistry` passa a ter dois construtores:** a via pública com a política, e a via do motor sem ela.
+
+```luau
+-- Pública. Mantém a guarda de NotCreatable. Consumidores: `Services.new`, `cli` montando a árvore Rojo.
+function ClassRegistry.new(className: string, name: string?): Instance
+
+-- Via do motor. MESMA assinatura, MESMA construção, SEM a guarda de NotCreatable.
+-- A guarda de "classe não registrada" NÃO é pulada — essa continua valendo nas duas.
+function ClassRegistry.NewEngineInstance(className: string, name: string?): Instance
+```
+
+**Por que (b) e não (a) (remover a checagem de vez).** (a) é mais simples e tem um argumento de camada legítimo — o gate de `NotCreatable` é voltado ao script, e `Services.new` já o aplica. Mas `cli` também chama `ClassRegistry.new` direto, para materializar os nós do `.project.json` que não são Service (fluxo de dados do desenho de `services`). Sem a guarda, um `"$className": "PVInstance"` num `.project.json` (arquivo escrito pelo usuário, entrada não confiável para efeito de validação) passaria a construir silenciosamente uma instância de uma classe que nunca deveria existir — trocando um erro claro por um objeto malformado que só quebra três chamadas adiante. Isso é exatamente o que a regra 00 chama de divergência silenciosa. (a) compra simplicidade com a única camada que protege a entrada do usuário. Rejeitada.
+
+**Nome.** `NewEngineInstance`, não `NewInternal`. O que ela pula não é "internalidade" — é uma política, e a política tem um nome no domínio: no Roblox, quem cria apesar de `NotCreatable` é **o motor**. O nome tem que dizer isso, para que uma revisão futura consiga julgar um call site novo só de ler a linha. Verbosidade custa nada em 2-3 call sites.
+
+**Ela É reexportada por `init.luau`** — e isto é um desvio deliberado do precedente `NewBase`/`SetClassChain`/`SetClassMethods`/`SetClassSchema`, que ficam de fora. O precedente não se aplica: aquelas quatro produzem uma instância **malformada** se chamadas fora da ordem certa (sem cadeia, sem `ClassName` validado, sem defaults semeados) — é por isso que estão escondidas. `NewEngineInstance` produz uma instância **completa e válida**, idêntica à de `ClassRegistry.new`; ela só não aplica uma política cujo ponto de enforcement real (`Services.new`) está intacto e continua sendo o que o script enxerga. Esconder as quatro fecha um buraco de corretude; esconder esta fecharia só o acesso de `services` a algo de que ele precisa legitimamente.
+
+E precisa mesmo: `behavior/StarterPlayer.luau` tem que criar `StarterPlayerScripts` e `StarterCharacterScripts`, as duas `NotCreatable` e as duas `IsService = false`. Não há caminho por `GetService`.
+
+**Chamadores legítimos, lista fechada** (documentar no cabeçalho de `init.luau` e de `ClassRegistry.luau`):
+
+1. `runtime/DataModel.luau`, em `GetService` — construção do singleton de Service.
+2. `services`, dentro de um `Behavior.Initialize`, para criar filho fixo de uma classe.
+3. **`cli` nunca.** `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/`Services.new` para o resto — é o que preserva o erro claro em `$className` inválido no `.project.json`.
+
+**A guarda que `GetService` já tinha continua sendo a rede.** `GetService` checa `descriptor.IsService` antes de construir; trocar `new` por `NewEngineInstance` ali não abre buraco nenhum, porque a pergunta certa naquele ponto sempre foi "isto é um Service?", nunca "isto é criável por script?".
+
+### Efeito colateral obrigatório — o nível de erro de `resolveClassChain`
+
+`resolveClassChain` documenta hoje, no próprio comentário, que seus dois `error(..., 3)` dependem de ter **um único call site fora de tail call**, e avisa: *"Se algum dia esta função ganhar um segundo call site, essa conta muda e o nível precisa ser revisto."* Este é esse dia — `ClassRegistry.new` passa a alcançá-la com um frame a mais que `NewEngineInstance`. Nenhuma constante é correta para as duas profundidades.
+
+**Decisão: os dois `error` de `resolveClassChain` passam a nível 1** (o default — omitir o segundo argumento), e o comentário troca a aritmética de frames pela justificativa de independência de profundidade. Razão: são erros de **registro malformado** (`services` registrando um ciclo, ou uma superclasse que nunca foi registrada). A posição de quem chamou `new` não explica nada sobre a causa — a mensagem já nomeia as duas classes envolvidas, que é a informação acionável. Nível 1 aponta para a checagem dentro de `ClassRegistry.luau`, que é onde um desenvolvedor do LuauBench de fato quer pousar, e é **imune a mudança de profundidade para sempre** — o landmine morre aqui, não é adiado. Nível 0 foi considerado e descartado: descarta posição útil sem ganhar nada sobre o nível 1.
+
+**Auditoria obrigatória junto:** o mesmo raciocínio de profundidade vale para qualquer outro `error(..., 2)`/`error(..., 3)` alcançado pelo caminho novo. `coder-runtime` audita, na tarefa, os níveis de `Instance.NewBase`, `SetClassChain`, `SetClassMethods`, `SetClassSchema` e `resolveClassMethods`/`resolveClassSchema`, e corrige/documenta cada um que dependa de profundidade fixa.
+
+### O campo continua se chamando `IsAbstract` — por enquanto
+
+O nome está errado e eu não vou consertá-lo nesta tarefa. Renomear para `IsNotCreatable` atravessa `Types.GeneratedClass`, o gerador (`tools/generate-services.luau`), os 24 arquivos de `generated/classes/`, `generated/Manifest.luau`, `ClassBuilder.luau` e `Services.new` — uma leva inteira de `services` em movimento, para zero mudança de comportamento, no meio de uma tarefa bloqueada. Custo alto, benefício nenhum agora.
+
+Em vez disso, o comentário do campo em `ClassDescriptor` passa a dizer exatamente o que ele é, e o que ele **não** é:
+
+> `IsAbstract` traduz a tag `NotCreatable` do Roblox API Dump e significa exatamente uma coisa: **"`Instance.new` não cria isto"** — o gate voltado ao script, aplicado por `Services.new`. NÃO significa "nunca existe instância desta classe": toda `Service` é `NotCreatable` e mesmo assim o motor cria o singleton, e `StarterPlayerScripts` (`IsService = false`) é criada pelo próprio `StarterPlayer`. Construção pelo motor usa `NewEngineInstance`. O nome do campo é um resíduo do desenho de 09-04 e está errado; renome pendente, ver `arquiteto-runtime-2026-09-04.md`, "Revisão pós-integração 2026-09-05 (4)".
+
+**Gatilho do renome adiado:** a próxima tarefa que já for mexer no gerador por outro motivo (leva 3, tipos de valor `Vector3`/`CFrame`/`Enum`, que reescreve `Default` em todos os arquivos gerados de qualquer jeito). Renomear de carona ali custa quase nada. Renomear agora custa uma leva.
+
+### O buraco de teste — como isto passou por três revisões
+
+`DataModel.spec.luau` monta seus descriptors de Service com `IsAbstract = false` **hardcoded** (linha 51). Um `ClassDescriptor` com `IsService = true, IsAbstract = false` **não existe no Roblox** — nenhuma das 334 Services do dump tem essa forma. Os testes de `GetService` estavam todos verdes contra uma forma que a realidade nunca produz.
+
+Isso é o achado mais importante desta revisão, mais do que o fix em si: **um teste que usa um fixture impossível não está testando nada.** A correção não é só passar a flag certa — é que o fixture de Service **passe a nascer `IsAbstract = true` por default**, porque é o que um Service é. Um Service com `IsAbstract = false` no board de testes só deve aparecer se alguém deliberadamente escrever a exceção.
+
+### Divisão por território
+
+| Território | O que muda | Contrato com o vizinho |
+|---|---|---|
+| `runtime` | `ClassRegistry.luau` (dois construtores + nível de erro), `DataModel.luau` (`GetService` usa a via do motor), `init.luau` (reexporta `NewEngineInstance`), 3 specs | **Aditivo.** `ClassRegistry.new` mantém assinatura e semântica; `DataModel.GetService`/`FindService` mantêm assinatura. `services`/`cli` existentes não quebram. |
+| `services` | Nada nesta tarefa. Depois: `behavior/StarterPlayer.luau` usa `Runtime.ClassRegistry.NewEngineInstance`; os testes-gatilho de `Integration.spec.luau` invertem de "falha de propósito" para asserção normal | Consome a superfície nova por `require("../services")` -> `Runtime.ClassRegistry.NewEngineInstance` |
+| `cli` | Nada, hoje e depois | Proibido de chamar `NewEngineInstance` — documentado, não imposto em runtime |
+
+### Fidelidade vs. pragmatismo
+
+- **Exato:** `Instance.new` de classe `NotCreatable` continua errando, para toda classe, com a mensagem da família Roblox — igual ao Studio. `GetService` de Service `NotCreatable` passa a funcionar — igual ao Studio.
+- **Aproximado, declarado:** `NewEngineInstance` constrói **qualquer** classe registrada, inclusive as genuinamente abstratas (`PVInstance`, `LuaSourceContainer`). O motor real não faria isso. Aceito porque o dump não tem tag para "genuinamente abstrata" e derivá-la por heurística inventaria uma classificação que a fonte de verdade não contém (invariante 1). O risco é contido por construção, não por checagem: `GetService` filtra `IsService`, o outro chamador é um `Behavior.Initialize` curado à mão, e **nenhum caminho alcançável pelo script do usuário chega lá**. Se algum dia um `Behavior` construir `PVInstance` por engano, o resultado é um objeto inerte na árvore, não um crash nem uma mentira de API — e é revisável no diff, porque o nome da função grita.
+
+### O que deliberadamente NÃO fazer agora
+
+- **Não** remover a guarda de `ClassRegistry.new` (opção (a)) — perde a proteção da entrada do usuário via `cli`.
+- **Não** renomear `IsAbstract` -> `IsNotCreatable` — ver gatilho adiado acima.
+- **Não** criar campo declarativo `ClassDescriptor.FixedChildren: { string }?` para resolver o caso `StarterPlayer`. Considerado e rejeitado: superfície nova de contrato em `runtime` para servir **uma** classe, e incapaz de expressar aninhamento, nome customizado ou ordem — `StarterPlayer` voltaria a precisar de `Initialize` na primeira variação. `NewEngineInstance` resolve o caso geral com uma função.
+- **Não** derivar "genuinamente abstrata" por heurística (`NotCreatable and not Service and ...`) — inventaria classificação fora do dump.
+- **Não** dar a `cli` acesso legítimo a `NewEngineInstance`.
+- **Não** mexer em `Services.new` — já faz a coisa certa hoje.
+- **Não** editar `src/services/**` na tarefa de runtime, incluindo os testes-gatilho que vão inverter.
+
+### Nota para o usuário — o aviso da revisão (3) disparou
+
+A seção "Revisão pós-integração 2026-09-04 (3)" registrou: *"Este é o terceiro patch em `ClassRegistry.luau` na mesma sessão; se um quarto aparecer antes de `services` existir, isso é sinal de que o contrato está sendo descoberto por revisão em vez de desenhado."* **Este é o quarto.** A condição literal não se cumpriu (`services` agora existe), mas o espírito sim, e prefiro dizer isso do que deixar passar.
+
+Minha leitura honesta: este defeito específico **só era descobrível por contato com dado real do dump** — foi a tradução `NotCreatable -> IsAbstract` sobre 24 classes reais que expôs a conflação, e nenhuma revisão de mesa sobre descriptors fictícios a teria pego (prova: três revisões não pegaram, porque o fixture era impossível). E o fix é uma separação de política de 8 linhas, não um redesenho de contrato.
+
+Ainda assim, a recomendação fica registrada: **antes da leva 2 de `services` (`DataStoreService`/`HttpService`/`Players` completo), fazer uma passada única de revisão do `ClassDescriptor` inteiro com o usuário**, em vez de aceitar um quinto patch cirúrgico. Os candidatos já visíveis para essa passada: o renome de `IsAbstract`, se `IsService` deveria ser derivado em vez de declarado, e se `Initialize` precisa de uma forma declarativa de filho fixo depois de duas ou três classes precisarem dela.
+
+### Tarefa
+
+`task-runtime-023` — `coder-runtime`, território `src/runtime/ClassRegistry.luau` + `DataModel.luau` + `init.luau` + os 3 specs correspondentes. Lista completa de mudanças no `description` da tarefa em `.claude/tasks.json`.

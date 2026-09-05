@@ -74,6 +74,32 @@
 	`Runtime.Instance.GetPropertyRaw`/`SetPropertyRaw` CONTINUAM expostos: é o caminho tipado de
 	leitura/escrita de propriedade genérica que `services` usa para propriedade somente-leitura
 	do ponto de vista do script do usuário (ver ClassRegistry.luau, cabeçalho).
+
+	`Runtime.ClassRegistry.NewEngineInstance` (task-runtime-023) É REEXPORTADA -- e isto é um
+	DESVIO DELIBERADO do precedente logo acima (`Instance.NewBase`/`SetClassChain`/
+	`SetClassMethods`/`SetClassSchema` ficam de fora). O precedente não se aplica aqui: aquelas
+	quatro produzem uma instância MALFORMADA se chamadas fora da ordem certa (sem cadeia, sem
+	`ClassName` validado, sem defaults semeados) -- é por isso que ficam escondidas.
+	`NewEngineInstance` produz uma instância COMPLETA E VÁLIDA, idêntica à de `ClassRegistry.new`
+	-- ela só não aplica a política de `NotCreatable`, cujo ponto de enforcement real
+	(`Services.new`, dentro de `services`) está intacto e continua sendo o que o script do
+	usuário enxerga. Esconder as quatro fecha um buraco de corretude; esconder esta fecharia só o
+	acesso de `services` a algo de que ele precisa legitimamente: `behavior/StarterPlayer.luau`
+	tem que criar `StarterPlayerScripts` e `StarterCharacterScripts`, as duas `NotCreatable` e as
+	duas `IsService = false` -- inalcançáveis por `GetService`, e sem outro caminho de construção
+	disponível a `services`. Ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão
+	pós-integração 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em
+	`ClassRegistry`".
+
+	LISTA FECHADA de chamadores legítimos de `NewEngineInstance` (mesma lista do cabeçalho de
+	ClassRegistry.luau, repetida aqui porque é este arquivo que decide o que sai para fora de
+	`runtime`):
+	  1. `runtime/DataModel.luau`, em `GetService` -- construção do singleton de Service.
+	  2. `services`, dentro de um `Behavior.Initialize`, para criar filho fixo de uma classe.
+	  3. `cli` NUNCA -- `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
+	     `Services.new` para o resto; isso preserva o erro claro para um `"$className"` inválido
+	     vindo do `.project.json` (entrada não confiável do usuário) que `NewEngineInstance`,
+	     sem a guarda de `IsAbstract`, deixaria passar como instância malformada em silêncio.
 ]]
 
 local SignalModule = require("./runtime/Signal")
@@ -118,6 +144,9 @@ local Runtime = {
 		Get = ClassRegistryModule.Get,
 		IsRegistered = ClassRegistryModule.IsRegistered,
 		new = ClassRegistryModule.new,
+		-- Desvio deliberado do precedente NewBase/SetClassChain/SetClassMethods/SetClassSchema
+		-- (ver cabeçalho deste arquivo) -- task-runtime-023.
+		NewEngineInstance = ClassRegistryModule.NewEngineInstance,
 	},
 
 	DataModel = {

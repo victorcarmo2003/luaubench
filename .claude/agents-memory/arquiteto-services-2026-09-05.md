@@ -838,3 +838,19 @@ Consequência observável: `RunService:Pause()` erra `Pause is not a valid membe
 1. `RunService.PreRender` conectado do lado servidor em produção real: erra como `RenderStepped` ou conecta e nunca dispara? (Decide se B.4 muda.)
 2. `InternalTest` e `RemoteCommand` bloqueiam mesmo um script comum não-sandboxed? Uma citação de erro real com qualquer um dos dois fecha o critério de A.3; hoje ele é sustentado por `PluginOrOpenCloud` + ausência na doc oficial. (Decide se `RunService.FrameNumber` fica fora do schema.)
 3. Texto atual (2026) da recusa de `RenderStepped` no servidor — a família está documentada, o texto exato não foi visto ao vivo. Confirmar se ainda é `"RenderStepped event can only be used from local scripts"` ou se migrou para o formato de capability.
+
+---
+
+## Correção 2026-09-05 (2) — `IsAbstract` bloqueava `GetService` de toda Service real
+
+`task-services-003` esbarrou num bug de `runtime`, não de `services`: `ClassRegistry.new` rejeitava `IsAbstract` incondicionalmente, e como toda `Service` do dump carrega `NotCreatable` (traduzido corretamente por este desenho para `IsAbstract = true`), `DataModel:GetService` erava para **toda** Service real.
+
+**Decisão completa, diagnóstico e lista de mudanças:** `.claude/agents-memory/arquiteto-runtime-2026-09-04.md`, seção **"Revisão pós-integração 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`"**. Tarefa: `task-runtime-023`.
+
+O que muda para **este** desenho de `services`:
+
+- A superfície `runtime -> services` da seção "Contrato entre territórios" ganha uma linha:
+  `Runtime.ClassRegistry.NewEngineInstance(className: string, name: string?): Instance` — mesma assinatura de `.new`, sem a guarda de `NotCreatable`. **Único uso legítimo em `services`:** um `Behavior.Initialize` criando filho fixo da própria classe (hoje: `StarterPlayer` -> `StarterPlayerScripts`/`StarterCharacterScripts`, ambos `NotCreatable` **e** `IsService = false`, logo inalcançáveis por `GetService`).
+- `Services.new` **não muda** — já barra `IsAbstract` antes de chamar `ClassRegistry.new`, e continua sendo o ponto de enforcement do gate voltado ao script.
+- `Types.GeneratedClass.IsAbstract` **não é renomeado agora**. O nome está errado (o dump só tem `NotCreatable`); o renome fica de carona na leva 3 (tipos de valor), que já reescreve os arquivos gerados. Ver o gatilho registrado no desenho do runtime.
+- Os testes-gatilho que `task-services-003` deixou em `src/services/Integration.spec.luau` falhando de propósito devem **inverter** para asserção normal quando `task-runtime-023` fechar — trabalho de `coder-services`, na retomada de `task-services-003`.

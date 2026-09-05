@@ -23,6 +23,16 @@
 
 	Roda com `lune run src/runtime/ClassRegistry.spec.luau`. Depende de Instance.luau
 	(task-runtime-002, já presente) para os tipos/IsA usados nas asserções.
+
+	Testes NOVOS da task-runtime-023 (dois construtores -- `ClassRegistry.new`/
+	`ClassRegistry.NewEngineInstance` -- ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md,
+	"Revisão pós-integração 2026-09-05 (4)"), no final do arquivo: (f) `NewEngineInstance` sucede
+	num descriptor `IsAbstract = true` e devolve instância COMPLETA (cadeia, métodos, schema,
+	Signal fresco por Event, Initialize executado); (g) `NewEngineInstance` de classe não
+	registrada continua errando; (h) `NewEngineInstance` com/sem `name` explícito; (i)/(j) os
+	erros de ciclo de herança e superclasse órfã disparam com a mesma mensagem pelas DUAS
+	entradas. Nenhum dos testes acima (exceto a mensagem esperada de "TestAbstrata", atualizada)
+	foi alterado.
 ]]
 
 local process = require("@lune/process")
@@ -115,7 +125,11 @@ test("new() erra claramente para classe não registrada, nunca retorna nil silen
 	)
 end)
 
-test("new() erra claramente para classe abstrata, nunca retorna nil silencioso", function()
+-- Mensagem atualizada por task-runtime-023 (ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md,
+-- "Revisão pós-integração 2026-09-05 (4)"): a via pública (`ClassRegistry.new`) continua
+-- rejeitando `IsAbstract`, mas a mensagem agora nomeia a tag NotCreatable do dump e a saída
+-- (`ClassRegistry.NewEngineInstance`) em vez de dizer só "é abstrata".
+test("new() erra claramente para classe abstrata (NotCreatable), nunca retorna nil silencioso", function()
 	ClassRegistry.Register(makeDescriptor("TestAbstrata", nil, true, nil))
 
 	local ok, err = pcall(function()
@@ -123,7 +137,18 @@ test("new() erra claramente para classe abstrata, nunca retorna nil silencioso",
 	end)
 
 	assert(not ok, "new() de classe abstrata deveria erro, não devolver nil")
-	assert(string.find(tostring(err), "abstrata") ~= nil, `mensagem de erro deveria dizer 'abstrata', recebeu: {err}`)
+	assert(
+		string.find(tostring(err), "não é criável por script") ~= nil,
+		`mensagem de erro deveria dizer 'não é criável por script', recebeu: {err}`
+	)
+	assert(
+		string.find(tostring(err), "NotCreatable") ~= nil,
+		`mensagem de erro deveria citar a tag 'NotCreatable' do Roblox API Dump, recebeu: {err}`
+	)
+	assert(
+		string.find(tostring(err), "NewEngineInstance") ~= nil,
+		`mensagem de erro deveria nomear a saída 'ClassRegistry.NewEngineInstance', recebeu: {err}`
+	)
 end)
 
 test("new() de classe concreta sem SuperClassName devolve instância válida com Name/ClassName corretos", function()
@@ -560,6 +585,150 @@ test("Methods e Schema coexistem na mesma classe sem interferência (task-runtim
 		dynamic.NomeQueNaoExisteNoSchemaNemEmMethods = 1
 	end)
 	assert(not ok, "modo estrito deveria continuar valendo para escrita de nome desconhecido")
+end)
+
+--[[
+	Testes NOVOS da task-runtime-023 (ClassRegistry.NewEngineInstance -- ver
+	.claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão pós-integração 2026-09-05
+	(4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`"). Nenhum dos testes
+	acima foi alterado (exceto a mensagem esperada de "TestAbstrata", já atualizada acima).
+]]
+
+-- (f) NewEngineInstance sucede num descriptor IsAbstract = true e devolve instância COMPLETA --
+-- verifica as cinco coisas exigidas pelo acceptance, não só "não errou": cadeia aplicada,
+-- métodos de classe instalados e chamáveis, schema instalado com default semeado, Signal fresco
+-- por instância para entrada Kind == "Event", e Initialize executado.
+test(
+	"NewEngineInstance sucede num descriptor com IsAbstract = true e devolve instância COMPLETA (cadeia, métodos, schema, Signal fresco, Initialize)",
+	function()
+		local sawInitialize = false
+		local methods: InstanceModule.ClassMethods = {
+			Greet = function(): string
+				return "engine-hi"
+			end,
+		}
+		table.freeze(methods)
+		local schema = makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2, ReadOnly = false },
+			Added = { Kind = "Event", Default = nil, ReadOnly = true },
+		})
+
+		ClassRegistry.Register(makeDescriptor("TestEngineParent", nil, true, nil))
+		ClassRegistry.Register({
+			ClassName = "TestEngineInstanceFull",
+			SuperClassName = "TestEngineParent",
+			IsAbstract = true,
+			IsService = false,
+			Methods = methods,
+			Schema = schema,
+			Initialize = function(_instance: Instance)
+				sawInitialize = true
+			end,
+		})
+
+		local instance = ClassRegistry.NewEngineInstance("TestEngineInstanceFull", nil)
+		assert(instance ~= nil, "NewEngineInstance de um descriptor IsAbstract=true nunca deveria devolver nil")
+
+		-- (1) cadeia aplicada: IsA de um ancestral indireto responde true.
+		assert(instance:IsA("TestEngineParent"), "cadeia deveria ter sido aplicada -- IsA do ancestral deveria ser true")
+		assert(instance:IsA("Instance"), "cadeia deveria terminar em Instance")
+
+		-- (2) métodos de classe instalados e chamáveis.
+		type WithGreet = Instance & { Greet: (self: Instance) -> string }
+		local typed = (instance :: unknown) :: WithGreet
+		assert(typed:Greet() == "engine-hi", "método de classe deveria estar instalado e chamável")
+
+		-- (3) schema instalado com default semeado.
+		type Dynamic = { [string]: unknown }
+		local dynamic = (instance :: unknown) :: Dynamic
+		assert(dynamic.Gravity == 196.2, "schema deveria estar instalado com o Default semeado")
+
+		-- (4) Signal fresco por instância para entrada Kind == "Event".
+		assert(dynamic.Added ~= nil, "entrada Kind == 'Event' do schema deveria ter sido semeada com um Signal")
+		local otherInstance = ClassRegistry.NewEngineInstance("TestEngineInstanceFull", nil)
+		local otherDynamic = (otherInstance :: unknown) :: Dynamic
+		assert(dynamic.Added ~= otherDynamic.Added, "cada instância deveria ter seu próprio Signal, nunca compartilhado")
+
+		-- (5) Initialize executado.
+		assert(sawInitialize, "Initialize deveria ter sido executado por NewEngineInstance")
+	end
+)
+
+-- (g) A guarda de "classe não registrada" NÃO é pulada por NewEngineInstance -- só a guarda de
+-- IsAbstract é exclusiva de ClassRegistry.new.
+test("NewEngineInstance de classe não registrada continua errando (a guarda de registro não é pulada)", function()
+	local ok, err = pcall(function()
+		return ClassRegistry.NewEngineInstance("TestEngineClasseInexistente", nil)
+	end)
+
+	assert(not ok, "NewEngineInstance de classe não registrada deveria erro, não devolver nil")
+	assert(
+		string.find(tostring(err), "não registrada") ~= nil,
+		`mensagem de erro deveria dizer 'não registrada', recebeu: {err}`
+	)
+end)
+
+-- (h) name explícito vs. default, pela via do motor.
+test("NewEngineInstance com name explícito honra o nome; sem name, Name cai para o ClassName", function()
+	ClassRegistry.Register(makeDescriptor("TestEngineNameDefault", nil, true, nil))
+
+	local semNome = ClassRegistry.NewEngineInstance("TestEngineNameDefault", nil)
+	assert(semNome.Name == "TestEngineNameDefault", `Name deveria cair para o ClassName por default, recebeu: {semNome.Name}`)
+
+	local comNome = ClassRegistry.NewEngineInstance("TestEngineNameDefault", "foo")
+	assert(comNome.Name == "foo", `Name deveria ser o nome explícito passado, recebeu: {comNome.Name}`)
+end)
+
+-- (i) Erro de ciclo de herança dispara com a mesma mensagem pelas DUAS entradas -- é isto que
+-- fixa a mudança de nível de erro de resolveClassChain (nível 3 -> nível 1): o prefixo
+-- "arquivo:linha:" muda, mas nenhuma asserção aqui casa com esse prefixo, só com o conteúdo.
+test("erro de ciclo de herança dispara com a mesma mensagem pelas duas entradas (new e NewEngineInstance)", function()
+	ClassRegistry.Register(makeDescriptor("TestEngineCicloA", "TestEngineCicloB", false, nil))
+	ClassRegistry.Register(makeDescriptor("TestEngineCicloB", "TestEngineCicloA", false, nil))
+
+	local okNew, errNew = pcall(function()
+		return ClassRegistry.new("TestEngineCicloA", nil)
+	end)
+	assert(not okNew, "new() de um ciclo de herança deveria erro")
+	assert(
+		string.find(tostring(errNew), "ciclo de herança") ~= nil,
+		`mensagem de erro (via new) deveria mencionar 'ciclo de herança', recebeu: {errNew}`
+	)
+
+	local okEngine, errEngine = pcall(function()
+		return ClassRegistry.NewEngineInstance("TestEngineCicloA", nil)
+	end)
+	assert(not okEngine, "NewEngineInstance de um ciclo de herança deveria erro")
+	assert(
+		string.find(tostring(errEngine), "ciclo de herança") ~= nil,
+		`mensagem de erro (via NewEngineInstance) deveria mencionar 'ciclo de herança', recebeu: {errEngine}`
+	)
+end)
+
+-- (j) Erro de superclasse órfã dispara com a mesma mensagem pelas DUAS entradas. Nomes de classe
+-- distintos para cada entrada (registry é global, sem reset por processo -- ver cabeçalho de
+-- ClassRegistry.luau) para não colidir com nenhum outro teste deste arquivo.
+test("erro de superclasse órfã dispara com a mesma mensagem pelas duas entradas (new e NewEngineInstance)", function()
+	ClassRegistry.Register(makeDescriptor("TestEngineOrfaA", "TestEngineSuperInexistenteA", false, nil))
+	ClassRegistry.Register(makeDescriptor("TestEngineOrfaB", "TestEngineSuperInexistenteB", false, nil))
+
+	local okNew, errNew = pcall(function()
+		return ClassRegistry.new("TestEngineOrfaA", nil)
+	end)
+	assert(not okNew, "new() com superclasse órfã deveria erro")
+	assert(
+		string.find(tostring(errNew), "TestEngineSuperInexistenteA") ~= nil,
+		`mensagem de erro (via new) deveria citar a superclasse ausente, recebeu: {errNew}`
+	)
+
+	local okEngine, errEngine = pcall(function()
+		return ClassRegistry.NewEngineInstance("TestEngineOrfaB", nil)
+	end)
+	assert(not okEngine, "NewEngineInstance com superclasse órfã deveria erro")
+	assert(
+		string.find(tostring(errEngine), "TestEngineSuperInexistenteB") ~= nil,
+		`mensagem de erro (via NewEngineInstance) deveria citar a superclasse ausente, recebeu: {errEngine}`
+	)
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

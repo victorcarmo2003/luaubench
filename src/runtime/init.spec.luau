@@ -112,6 +112,19 @@ Runtime.ClassRegistry.Register({
 -- (ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"). `table.freeze` é
 -- exigência de `Instance.SetClassSchema` (chamada por `ClassRegistry.new`, nunca direto aqui --
 -- a função não é reexportada, ver cabeçalho de `init.luau`).
+-- Terceira classe de teste, task-runtime-023: IsAbstract = true (NotCreatable), para provar que
+-- Runtime.ClassRegistry.NewEngineInstance está exportada e constrói o que Runtime.ClassRegistry.new
+-- rejeitaria -- ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão pós-integração
+-- 2026-09-05 (4)".
+local ENGINE_ONLY_CLASS_NAME = "InitSpecEngineOnly"
+Runtime.ClassRegistry.Register({
+	ClassName = ENGINE_ONLY_CLASS_NAME,
+	SuperClassName = nil,
+	IsAbstract = true,
+	IsService = false,
+	Initialize = nil,
+} :: ClassDescriptor)
+
 local SCHEMA_CLASS_NAME = "InitSpecSchemaContainer"
 local schemaContainerSchema: ClassSchema = {
 	Label = { Kind = "Property" :: MemberKind, Default = "default-label", ReadOnly = false } :: MemberDescriptor,
@@ -286,6 +299,25 @@ test(
 
 		local runtimeDict: { [string]: unknown } = (Runtime :: unknown) :: { [string]: unknown }
 		assert(runtimeDict["ThreadBroker"] == nil, "Runtime.ThreadBroker não deveria estar reexportado (plumbing interno do Scheduler)")
+	end
+)
+
+-- task-runtime-023 (6a): Runtime.ClassRegistry.NewEngineInstance exportada e chamável -- constrói
+-- uma classe NotCreatable que Runtime.ClassRegistry.new rejeitaria. A asserção de vazamento (6b,
+-- teste acima) permanece intocada: NewEngineInstance é o ÚNICO acréscimo deliberado à lista de
+-- plumbing que fica de fora -- prova de que o desvio é pontual, não uma erosão geral da
+-- disciplina de esconder NewBase/SetClassChain/SetClassMethods/SetClassSchema/ThreadBroker.
+test(
+	"Runtime.ClassRegistry.NewEngineInstance está exportada e é chamável -- constrói uma classe NotCreatable que Runtime.ClassRegistry.new rejeitaria",
+	function()
+		local okNew = pcall(function()
+			return Runtime.ClassRegistry.new(ENGINE_ONLY_CLASS_NAME, nil)
+		end)
+		assert(not okNew, "Runtime.ClassRegistry.new deveria rejeitar uma classe NotCreatable (IsAbstract=true)")
+
+		local instance = Runtime.ClassRegistry.NewEngineInstance(ENGINE_ONLY_CLASS_NAME, nil)
+		assert(instance ~= nil, "Runtime.ClassRegistry.NewEngineInstance deveria construir a mesma classe sem a guarda de política")
+		assert(instance.ClassName == ENGINE_ONLY_CLASS_NAME, "ClassName da instância deveria ser o da classe pedida")
 	end
 )
 

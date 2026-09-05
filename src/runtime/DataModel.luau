@@ -12,6 +12,17 @@
 	nenhum nome de Service concreto (regra 02) — GetService/FindService operam só por
 	`className` (string) e pelo que ClassRegistry já sabe sobre essa classe.
 
+	DECISÃO task-runtime-023 (bug bloqueante achado por coder-services, ver
+	.claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão pós-integração
+	2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`):
+	`GetService` passou a chamar `ClassRegistryModule.NewEngineInstance` em vez de
+	`ClassRegistryModule.new`. Toda Service do Roblox API Dump carrega a tag `NotCreatable`
+	(traduzida para `ClassDescriptor.IsAbstract`) — e mesmo assim o motor cria o singleton; essa
+	tag barra `Instance.new`/`ClassRegistry.new` (a via PÚBLICA, com a política de script), nunca
+	a construção do motor. `Instance.new("Workspace")` CONTINUA errando pelo caminho do script
+	(via `Services.new`, que passa por `ClassRegistry.new`) — só a construção interna que
+	`GetService` faz é que muda de via.
+
 	DECISÃO DE CADEIA DE CLASSE (a pendência que este módulo precisa resolver explicitamente,
 	não deixar implícita): `DataModel.new()` cria a raiz por dentro de `runtime`, sem passar por
 	`ClassRegistry.new` — e não deveria passar. Não existe (e não deve existir) um jeito de
@@ -62,6 +73,10 @@ local DataModelMethods: InstanceModule.ClassMethods = {
 		if descriptor == nil then
 			error(`GetService: classe '{className}' não registrada em ClassRegistry`, 2)
 		end
+		-- A guarda aqui é `descriptor.IsService` (inalterada) — é ela, e só ela, que substitui a
+		-- checagem de `IsAbstract` que `ClassRegistry.new` faria: a pergunta certa neste ponto
+		-- sempre foi "isto é um Service?", nunca "isto é criável por script?" (toda Service real
+		-- é `NotCreatable`/`IsAbstract == true`, então checar isso aqui rejeitaria 100% delas).
 		if not descriptor.IsService then
 			error(
 				`GetService: '{className}' está registrada mas não é um Service (ClassDescriptor.IsService == false)`,
@@ -69,9 +84,14 @@ local DataModelMethods: InstanceModule.ClassMethods = {
 			)
 		end
 
-		-- `ClassRegistry.new` sem `name` explícito -> Name cai para o ClassName por default
-		-- (Instance.NewBase), replicando exatamente "Name == ClassName" do Roblox real.
-		local service = ClassRegistryModule.new(className, nil)
+		-- `ClassRegistry.NewEngineInstance` (task-runtime-023), não `ClassRegistry.new`: toda
+		-- Service do dump é `NotCreatable`, e `.new` rejeitaria incondicionalmente por
+		-- `IsAbstract`. `NewEngineInstance` é a via do motor -- mesma construção completa, sem a
+		-- guarda de política -- e `runtime/DataModel.luau:GetService` é um dos chamadores
+		-- legítimos listados no cabeçalho de ClassRegistry.luau. Sem `name` explícito -> Name cai
+		-- para o ClassName por default (Instance.NewBase), replicando "Name == ClassName" do
+		-- Roblox real.
+		local service = ClassRegistryModule.NewEngineInstance(className, nil)
 		service.Parent = self
 		return service
 	end,

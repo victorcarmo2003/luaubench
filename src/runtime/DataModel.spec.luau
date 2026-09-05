@@ -19,6 +19,16 @@
 
 	Roda com `lune run src/runtime/DataModel.spec.luau`. Depende de Instance.luau
 	(task-runtime-002) e ClassRegistry.luau (task-runtime-004/013), ambos já presentes.
+
+	Testes NOVOS da task-runtime-023 (ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md,
+	"Revisão pós-integração 2026-09-05 (4)"), no final do arquivo: `makeServiceDescriptor` deixou
+	de hardcodar `IsAbstract = false` (o fixture impossível que deixou o bug passar por três
+	revisões -- ver comentário da função) e os testes de GetService já rodam contra a forma
+	realista por causa disso; os 4 novos cobrem, explicitamente: (k) regressão nomeada pelo bug
+	-- GetService constrói o singleton com IsAbstract=true (a forma real de toda Service); (l)
+	ClassRegistry.new sobre o MESMO descriptor continua errando; (m) a forma StarterPlayerScripts
+	(IsAbstract=true, IsService=false) -- construível por NewEngineInstance, rejeitada por .new,
+	GetService continua errando por IsService==false.
 ]]
 
 local process = require("@lune/process")
@@ -44,11 +54,25 @@ end
 
 -- Descriptor de teste no formato NOVO: `Initialize` é opcional, recebe a instância JÁ criada e
 -- JÁ com a cadeia de classes aplicada por `ClassRegistry.new` — nunca cria nem devolve nada.
-local function makeServiceDescriptor(className: string, isService: boolean): ClassDescriptor
+--
+-- CORREÇÃO task-runtime-023 (O ACHADO MAIS IMPORTANTE da revisão que motivou esta tarefa -- ver
+-- .claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão pós-integração 2026-09-05 (4)",
+-- seção "O buraco de teste"): esta função hardcodava `IsAbstract = false` incondicionalmente. Um
+-- `ClassDescriptor` com `IsService = true` E `IsAbstract = false` NÃO EXISTE no Roblox real --
+-- nenhuma das 334 Services do dump tem essa forma (toda Service carrega a tag `NotCreatable`).
+-- Os testes de GetService rodavam, verdes, contra um fixture que a realidade nunca produz -- é
+-- por isso que três revisões não pegaram o bug de `GetService` chamando `ClassRegistry.new`
+-- (que rejeita `IsAbstract` incondicionalmente).
+--
+-- Ganha o parâmetro `isAbstract` (opcional): quando omitido, o DEFAULT passa a ser `isService`
+-- -- porque é exatamente o que um Service é (`IsService = true` -> `IsAbstract = true` por
+-- default). Um Service com `IsAbstract = false` só aparece se algum teste passar o parâmetro
+-- explicitamente, como exceção deliberada.
+local function makeServiceDescriptor(className: string, isService: boolean, isAbstract: boolean?): ClassDescriptor
 	return {
 		ClassName = className,
 		SuperClassName = nil,
-		IsAbstract = false,
+		IsAbstract = if isAbstract ~= nil then isAbstract else isService,
 		IsService = isService,
 		Initialize = nil,
 	}
@@ -158,6 +182,81 @@ test("GetService/FindService ficam protegidos contra sobrescrita (mesma discipli
 		`mensagem de erro deveria mencionar 'GetService', recebeu: {err}`
 	)
 end)
+
+--[[
+	Testes NOVOS da task-runtime-023 -- ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md,
+	"Revisão pós-integração 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em
+	`ClassRegistry`". Nenhum dos testes acima foi alterado além de `makeServiceDescriptor`.
+]]
+
+-- (k) TESTE DE REGRESSÃO nomeado pelo bug: GetService constrói o singleton para um descriptor
+-- com IsAbstract = true -- a forma real de TODA Service do Roblox (334/334 carregam a tag
+-- NotCreatable). Este é o teste que falhava ANTES desta tarefa (GetService passava por
+-- ClassRegistry.new, que rejeita IsAbstract incondicionalmente).
+test(
+	"REGRESSÃO (task-runtime-023): GetService constrói o singleton mesmo com IsAbstract = true, a forma real de toda Service do Roblox",
+	function()
+		ClassRegistry.Register(makeServiceDescriptor("TestServiceNotCreatable", true, true))
+		local dataModel = DataModel.new()
+
+		local service = dataModel:GetService("TestServiceNotCreatable")
+		assert(service ~= nil, "GetService nunca deveria devolver nil para um Service real (IsService=true, IsAbstract=true)")
+		assert(service.ClassName == "TestServiceNotCreatable", "ClassName do singleton deveria ser o da classe pedida")
+		assert(service.Name == "TestServiceNotCreatable", "Name do singleton deveria cair para o ClassName")
+		assert(service.Parent == dataModel, "o singleton deveria ser parenteado direto sob a raiz")
+
+		local second = dataModel:GetService("TestServiceNotCreatable")
+		assert(second == service, "chamadas seguintes deveriam devolver o MESMO objeto, não recriar")
+	end
+)
+
+-- (l) ClassRegistry.new sobre o MESMO descriptor continua errando -- as duas vias divergirem é
+-- o ponto inteiro da decisão do arquiteto (opção (b) refinada, não opção (a) de remover a
+-- guarda).
+test(
+	"ClassRegistry.new sobre o MESMO descriptor (IsService=true, IsAbstract=true) continua errando -- as duas vias divergem de propósito",
+	function()
+		ClassRegistry.Register(makeServiceDescriptor("TestServiceNotCreatableDirectNew", true, true))
+
+		local ok, err = pcall(function()
+			return ClassRegistry.new("TestServiceNotCreatableDirectNew", nil)
+		end)
+
+		assert(not ok, "ClassRegistry.new de um Service (NotCreatable) deveria continuar errando -- é a via pública, com a guarda")
+		assert(
+			string.find(tostring(err), "NewEngineInstance") ~= nil,
+			`mensagem de erro deveria citar 'NewEngineInstance', recebeu: {err}`
+		)
+	end
+)
+
+-- (m) Forma StarterPlayerScripts (IsAbstract=true, IsService=false): construível por
+-- NewEngineInstance, rejeitada por .new, e GetService dela CONTINUA errando -- porque a guarda
+-- de GetService é IsService, nunca IsAbstract.
+test(
+	"forma StarterPlayerScripts (IsAbstract=true, IsService=false): NewEngineInstance constrói, .new rejeita, GetService continua errando por IsService==false",
+	function()
+		ClassRegistry.Register(makeServiceDescriptor("TestStarterPlayerScriptsShape", false, true))
+		local dataModel = DataModel.new()
+
+		local instance = ClassRegistry.NewEngineInstance("TestStarterPlayerScriptsShape", nil)
+		assert(instance ~= nil, "NewEngineInstance deveria construir a forma StarterPlayerScripts (IsAbstract=true, IsService=false)")
+
+		local okNew = pcall(function()
+			return ClassRegistry.new("TestStarterPlayerScriptsShape", nil)
+		end)
+		assert(not okNew, "ClassRegistry.new deveria rejeitar a forma StarterPlayerScripts -- é NotCreatable")
+
+		local okService, errService = pcall(function()
+			return dataModel:GetService("TestStarterPlayerScriptsShape")
+		end)
+		assert(not okService, "GetService de uma classe com IsService=false deveria continuar errando, mesmo sendo IsAbstract=true")
+		assert(
+			string.find(tostring(errService), "não é um Service") ~= nil,
+			`mensagem de erro deveria dizer que a classe não é um Service (a guarda certa é IsService, não IsAbstract), recebeu: {errService}`
+		)
+	end
+)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

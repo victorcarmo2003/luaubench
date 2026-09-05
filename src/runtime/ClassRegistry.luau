@@ -15,13 +15,31 @@
 	`services` chama `Register` uma vez por classe coberta do API Dump, no carregamento do
 	módulo (efeito de `require("services")`, antes de qualquer `cli` tentar `new`). `cli`
 	(e o Sandbox, através do que `services` embrulhar em `extraGlobals.Instance.new`) chama
-	`ClassRegistry.new` para instanciar por nome — é esta função, e só ela, que cria a instância
-	base (via Instance.NewBase), aplica a cadeia de classes (via Instance.SetClassChain), instala
-	os métodos achatados da classe (via Instance.SetClassMethods) e instala + semeia o schema
+	`ClassRegistry.new` para instanciar por nome — a via PÚBLICA, com a política de `NotCreatable`
+	(ver campo `IsAbstract`, abaixo). `ClassRegistry.new` e `ClassRegistry.NewEngineInstance`
+	(task-runtime-023, ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão
+	pós-integração 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em
+	`ClassRegistry`") fazem a MESMA construção completa — criam a instância base (via
+	Instance.NewBase), aplicam a cadeia de classes (via Instance.SetClassChain), instalam os
+	métodos achatados da classe (via Instance.SetClassMethods) e instalam + semeiam o schema
 	achatado da classe (via Instance.SetClassSchema) ANTES de chamar o Initialize da classe
-	concreta. `Instance.NewBase` não é mais chamado por `services` (ver seção "Consequência:
-	Runtime.Instance.NewBase sai da superfície pública") — `ClassRegistry.new` é o único criador
-	de instância disponível a `services`/`cli`.
+	concreta — mas `ClassRegistry.new` aplica, ANTES de delegar, a guarda de `IsAbstract`
+	("`Instance.new` não cria isto", a tradução da tag `NotCreatable` do dump), e
+	`ClassRegistry.NewEngineInstance` não. `Instance.NewBase` não é mais chamado por `services`
+	(ver seção "Consequência: Runtime.Instance.NewBase sai da superfície pública") — as duas
+	funções acima são os únicos criadores de instância disponíveis a `services`/`cli`.
+
+	DOIS CONSTRUTORES, LISTA FECHADA DE CHAMADORES LEGÍTIMOS de `NewEngineInstance` (a via do
+	motor, sem a guarda de `IsAbstract` — a guarda de "classe não registrada" NÃO é pulada, essa
+	continua valendo nas duas vias):
+	  1. `runtime/DataModel.luau`, em `GetService` — construção do singleton de Service (toda
+	     Service do dump é `NotCreatable` e mesmo assim o motor a cria).
+	  2. `services`, dentro de um `Behavior.Initialize`, para criar filho fixo de uma classe
+	     (ex.: `StarterPlayer` criando `StarterPlayerScripts`/`StarterCharacterScripts`, as duas
+	     `NotCreatable` e `IsService = false` — inalcançáveis por `GetService`).
+	  3. `cli` NUNCA — `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
+	     `Services.new` para o resto, preservando o erro claro para um `"$className"` inválido
+	     vindo do `.project.json` (entrada não confiável do usuário).
 
 	Depende de: Instance.luau (tipo Instance, Instance.NewBase e Instance.SetClassChain, para
 	resolver IsA sem Instance.luau precisar conhecer ClassRegistry.luau — evita require
@@ -42,7 +60,20 @@ type Instance = InstanceModule.Instance
 export type ClassDescriptor = {
 	ClassName: string,
 	SuperClassName: string?, -- nil = herda direto de Instance
-	IsAbstract: boolean, -- ex.: "Instance"/"PVInstance" não instanciáveis via .new
+
+	-- `IsAbstract` traduz a tag `NotCreatable` do Roblox API Dump e significa exatamente uma
+	-- coisa: "`Instance.new` não cria isto" — o gate voltado ao script, aplicado por
+	-- `Services.new`. NÃO significa "nunca existe instância desta classe": toda `Service` é
+	-- `NotCreatable` e mesmo assim o motor cria o singleton, e `StarterPlayerScripts`
+	-- (`IsService = false`) é criada pelo próprio `StarterPlayer`. Construção pelo motor usa
+	-- `ClassRegistry.NewEngineInstance` (ver cabeçalho do módulo, lista fechada de chamadores
+	-- legítimos). O nome do campo é um resíduo do desenho de 09-04 e está errado; renome
+	-- pendente (para algo como `IsNotCreatable`), adiado até a leva 3 de `services` (tipos de
+	-- valor) mexer no gerador por outro motivo de qualquer jeito — ver
+	-- .claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão pós-integração 2026-09-05
+	-- (4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`".
+	IsAbstract: boolean,
+
 	IsService: boolean, -- true = DataModel:GetService cria singleton sob a raiz
 
 	-- Métodos que ESTA classe declara — nunca os herdados. Espelha como o Roblox API Dump modela
@@ -106,18 +137,28 @@ end
 
 -- Resolve a cadeia de superclasses de `descriptor` andando por `SuperClassName` através dos
 -- descriptors já registrados (nunca lendo o API Dump — isso é responsabilidade de `services`).
--- Feito em `new()`, não em `Register`, de propósito: `services` pode registrar classes fora de
--- ordem topológica (ex.: uma subclasse antes da sua superclasse), já que a cadeia só precisa
--- estar completa no momento em que alguém de fato instancia, não no momento do registro.
--- Termina sempre em "Instance": `SuperClassName == nil` (ou o literal "Instance", aceito pelo
--- mesmo motivo) é o contrato de "herda direto de Instance" — "Instance" nunca tem/precisa de
--- descriptor próprio aqui, é a base universal que `Instance.luau` já constrói via `NewBase`.
+-- Feito em `NewEngineInstance()`, não em `Register`, de propósito: `services` pode registrar
+-- classes fora de ordem topológica (ex.: uma subclasse antes da sua superclasse), já que a
+-- cadeia só precisa estar completa no momento em que alguém de fato instancia, não no momento
+-- do registro. Termina sempre em "Instance": `SuperClassName == nil` (ou o literal "Instance",
+-- aceito pelo mesmo motivo) é o contrato de "herda direto de Instance" — "Instance" nunca
+-- tem/precisa de descriptor próprio aqui, é a base universal que `Instance.luau` já constrói
+-- via `NewBase`.
 --
--- Nível 3 nos dois `error` abaixo (em vez de 0): `resolveClassChain` é local, chamada de um
--- único call site (`ClassRegistry.new`, logo abaixo) e não em posição de tail call, então o
--- nível 3 aponta para quem chamou `ClassRegistry.new` — o mesmo alvo do nível 2 usado dentro de
--- `new`. Se algum dia esta função ganhar um segundo call site, essa conta muda e o nível
--- precisa ser revisto.
+-- NÍVEL 1 (o default, omitido) nos dois `error` abaixo — task-runtime-023 mudou de nível 3 para
+-- nível 1 (ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, "Revisão pós-integração
+-- 2026-09-05 (4) — `NotCreatable` vs. abstrata: dois construtores em `ClassRegistry`", seção
+-- "Efeito colateral obrigatório"). Motivo: com o construtor separado em `ClassRegistry.new`/
+-- `ClassRegistry.NewEngineInstance`, esta função passou a ser alcançada em DUAS profundidades
+-- diferentes dependendo de qual das duas foi a entrada externa (`new` insere um frame de
+-- wrapper a mais antes de chegar aqui do que `NewEngineInstance` insere) — nenhuma constante de
+-- nível aponta para "quem chamou" corretamente nos dois casos ao mesmo tempo. São erros de
+-- REGISTRO MALFORMADO (`services` registrando um ciclo, ou uma superclasse que nunca foi
+-- registrada) — a posição de quem chamou `new`/`NewEngineInstance` não explica a causa, a
+-- mensagem já nomeia as duas classes envolvidas (a informação acionável), e nível 1 aponta para
+-- a checagem aqui dentro, IMUNE a qualquer mudança de profundidade futura — o landmine morre
+-- aqui, não é adiado. Nível 0 foi considerado e descartado: descarta a posição (ainda que
+-- inútil) sem ganhar nada sobre o nível 1.
 local function resolveClassChain(descriptor: ClassDescriptor): { string }
 	local chain: { string } = {}
 	local seen: { [string]: boolean } = {}
@@ -127,7 +168,7 @@ local function resolveClassChain(descriptor: ClassDescriptor): { string }
 
 	while true do
 		if seen[currentClassName] then
-			error(`ciclo de herança detectado na cadeia de classes envolvendo '{currentClassName}'`, 3)
+			error(`ciclo de herança detectado na cadeia de classes envolvendo '{currentClassName}'`)
 		end
 		seen[currentClassName] = true
 		table.insert(chain, currentClassName)
@@ -139,8 +180,7 @@ local function resolveClassChain(descriptor: ClassDescriptor): { string }
 		local superDescriptor = registry[currentSuperClassName]
 		if superDescriptor == nil then
 			error(
-				`classe '{currentClassName}' referencia superclasse '{currentSuperClassName}' não registrada em ClassRegistry`,
-				3
+				`classe '{currentClassName}' referencia superclasse '{currentSuperClassName}' não registrada em ClassRegistry`
 			)
 		end
 
@@ -151,6 +191,33 @@ local function resolveClassChain(descriptor: ClassDescriptor): { string }
 	table.insert(chain, "Instance")
 	return chain
 end
+
+--[[
+	AUDITORIA DE NÍVEL DE ERRO (task-runtime-023, mesma seção do arquiteto citada acima,
+	"Auditoria obrigatória junto"): o mesmo raciocínio de profundidade-dependente foi checado
+	para todo `error(..., N)` alcançável pelo caminho novo (`new`/`NewEngineInstance`).
+	Resultado — nada mais precisou mudar além de `resolveClassChain`, acima:
+
+	- `Instance.NewBase` — não tem nenhum `error()`. Fora do escopo da auditoria.
+	- `resolveClassMethods`/`resolveClassSchema` (esta abaixo, a de schema mais adiante) —
+	  nenhuma das duas tem `error()`; ambas só constroem a tabela achatada ou devolvem `nil`.
+	  Fora do escopo.
+	- `Instance.SetClassMethods`/`Instance.SetClassSchema` (Instance.luau) — têm `error(..., 2)`,
+	  mas o nível 2 aponta para "quem chamou SetClassMethods/SetClassSchema", e as duas são
+	  chamadas em um ÚNICO ponto, sempre de dentro de `NewEngineInstance` (nunca diretamente por
+	  `ClassRegistry.new`, que só delega). O frame extra que `new()` insere fica ACIMA de
+	  `NewEngineInstance` na pilha, não ENTRE `NewEngineInstance` e essas duas funções — então o
+	  nível 2 aponta sempre para a mesma linha (dentro de `NewEngineInstance`), não importa qual
+	  das duas entradas externas foi usada. Diferente de `resolveClassChain`: o problema ali era
+	  especificamente ela ser chamada de dentro de `NewEngineInstance` enquanto o PRÓPRIO
+	  `NewEngineInstance` passou a ter duas profundidades possíveis vistas de fora. Nenhuma
+	  mudança necessária.
+	- `getInternal` (Instance.luau, chamada internamente por SetClassChain/SetClassMethods/
+	  SetClassSchema, nível 3) — mesmo raciocínio do item acima: chamada num único ponto fixo
+	  dentro de cada uma dessas três funções, blindada do frame extra do wrapper pela mesma
+	  razão. Não fazia parte da lista nomeada pelo arquiteto, mas foi conferida por completude.
+	  Nenhuma mudança necessária.
+]]
 
 -- Achata `Methods` de cada elo de `chain` (já resolvida por resolveClassChain, formato
 -- {Concreta, ..., Super, "Instance"}) numa única tabela congelada, cacheada por `className`.
@@ -236,13 +303,17 @@ local function resolveClassSchema(className: string, chain: { string }): Instanc
 	return flattened
 end
 
-function ClassRegistry.new(className: string, name: string?): Instance
+-- Via do MOTOR: mesma assinatura e MESMA construção completa de `ClassRegistry.new` (abaixo),
+-- SEM a guarda de `IsAbstract` — a guarda de "classe não registrada" NÃO é pulada, continua
+-- valendo aqui também. Task-runtime-023, decisão do arquiteto (opção (b) refinada) — ver
+-- cabeçalho do módulo para a lista fechada de chamadores legítimos. Corpo idêntico ao que
+-- `ClassRegistry.new` tinha antes desta tarefa — só mudou de lugar, ordem preservada
+-- integralmente (resolver -> NewBase -> SetClassChain -> SetClassMethods -> SetClassSchema ->
+-- Initialize continua sendo a ordem load-bearing documentada em três lugares).
+function ClassRegistry.NewEngineInstance(className: string, name: string?): Instance
 	local descriptor = registry[className]
 	if descriptor == nil then
 		error(`classe '{className}' não registrada`, 2)
-	end
-	if descriptor.IsAbstract then
-		error(`'{className}' é abstrata, não pode ser instanciada`, 2)
 	end
 
 	-- Ordem obrigatória (task-runtime-013 fixou resolver->NewBase->SetClassChain->Initialize;
@@ -281,6 +352,27 @@ function ClassRegistry.new(className: string, name: string?): Instance
 	end
 
 	return instance
+end
+
+-- Via PÚBLICA, com a política de `NotCreatable`: rejeita `descriptor.IsAbstract` (script não
+-- pode criar isto — o Roblox real também erra: `Instance.new("Workspace")` estoura) e delega o
+-- resto para `NewEngineInstance`, acima. O lookup de `registry[className]` é feito aqui de novo
+-- (duplicado em relação ao que `NewEngineInstance` já faz) DE PROPÓSITO — mantém
+-- `NewEngineInstance` autossuficiente/chamável direto sem depender de um wrapper já ter
+-- validado o registro; não é duplicação acidental, revisor não precisa sinalizar.
+function ClassRegistry.new(className: string, name: string?): Instance
+	local descriptor = registry[className]
+	if descriptor == nil then
+		error(`classe '{className}' não registrada`, 2)
+	end
+	if descriptor.IsAbstract then
+		error(
+			`classe '{className}' não é criável por script (tag NotCreatable do Roblox API Dump); construção interna do motor usa ClassRegistry.NewEngineInstance`,
+			2
+		)
+	end
+
+	return ClassRegistry.NewEngineInstance(className, name)
 end
 
 return ClassRegistry
