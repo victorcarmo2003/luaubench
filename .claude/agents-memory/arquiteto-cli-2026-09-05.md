@@ -760,3 +760,314 @@ Toda aproximação da leva 1, explicitamente.
 ## Decisão que precisa do usuário
 
 **Idioma dos diagnósticos do próprio CLI** (`.project.json` inválido, flag desconhecida, arquivo não suportado). Recomendação: **inglês**, pelas razões da Decisão 13. A regra 00 diz "Resposta ao usuário: português (pt-BR)" numa seção que trata de artefatos de agente, e o LuauBench é publicado no Rokit para o ecossistema Roblox, onde toda a saída de motor já é inglês. **Todas as strings ficam em `src/cli/Messages.luau`** — reverter é editar um arquivo. Não implementei a escolha como irreversível de propósito.
+
+---
+
+# Revisão pós-implementação 2026-09-05 (task-cli-015) — filho fixo do motor: **adotar, não criar**
+
+Origem: achado do `coder-cli` em task-cli-014, confirmado e refinado pelo `revisor-cli`
+(`.claude/agents-memory/revisor-cli-fixedchildren-2026-09-05.md`, item 6). Segunda parede que
+bloqueia jogos Roblox reais: `TreePlanner` já infere `StarterPlayerScripts`/`StarterCharacterScripts`
+corretamente, mas `TreeMaterializer` não consegue materializá-los — `materialize/invalid-class`, e a
+subárvore inteira (incluindo LocalScript de câmera/controle, o local MAIS comum de um projeto real)
+é descartada.
+
+## A pergunta da task, e por que a resposta dela está errada
+
+A `task-cli-015` pede uma API de **criação** guardada por allowlist
+(`Services.NewFixedChild(className, name)`). **Rejeitado.** Criar é a operação errada, e não é uma
+questão de segurança — é de fidelidade:
+
+`StarterPlayer` é `IsService = true`/`Covered = true`, então o nó `StarterPlayer` do projeto já cai
+no ramo `IsServiceRoot` -> `game:GetService("StarterPlayer")`, que constrói o singleton via
+`Runtime.ClassRegistry.NewEngineInstance` e roda `behavior/StarterPlayer.luau:Initialize` — **que já
+criou os dois filhos fixos** (confirmado empiricamente pelo `revisor-cli`, item 5 do relatório dele:
+"StarterPlayer ja tem StarterPlayerScripts pre-criado pelo motor? true").
+
+Uma API de criação, por mais bem guardada que fosse, produziria um **irmão duplicado de mesmo nome**:
+`StarterPlayer` ficaria com DOIS filhos chamados `StarterPlayerScripts` — o do motor (vazio) e o do
+`.project.json` (com os scripts do usuário). `game.StarterPlayer.StarterPlayerScripts` e
+`FindFirstChild` no script do usuário resolveriam para o PRIMEIRO (o do motor, vazio), e o código
+real do usuário ficaria num órfão inalcançável por nome. Isso trocaria um erro alto e visível
+(`materialize/invalid-class`, o de hoje) por uma **divergência silenciosa** — exatamente o que a
+regra 00 proíbe, e estritamente pior que o estado atual.
+
+O Rojo real, sincronizando contra um `DataModel` vivo, também **nunca instancia** esses nós: ele faz
+merge dentro do filho que o motor já criou. A operação fiel é **adoção**, não criação.
+
+## Decisão
+
+**`TreeMaterializer` ganha um TERCEIRO ramo em `createInstance` que ADOTA a Instance que o motor já
+criou (`parent:FindFirstChild(node.Name)`), em vez de criar qualquer coisa.** Nenhuma API de criação
+nova existe em lugar nenhum.
+
+Consequências diretas, todas verificáveis:
+
+- **`runtime` não muda em nada.** Nenhuma linha, nenhuma reexportação nova. A "LISTA FECHADA de
+  chamadores legítimos de `NewEngineInstance`" no cabeçalho de `src/runtime/init.luau` fica
+  **literalmente intacta**, com `cli` continuando marcado como "NUNCA". O `revisor-cli` continua
+  cobrando isso por grep, com o mesmo critério de sempre.
+- **Nenhum novo bypass de `NotCreatable`/`IsAbstract` é criado** — nem guardado por allowlist, nem
+  de qualquer outra forma. Não existe caminho novo que construa uma classe abstrata.
+- **Pergunta 5 da task respondida por construção, não por guarda:** um script do usuário chamando
+  `Instance.new("StarterPlayerScripts")` de dentro do sandbox continua batendo em
+  `Services.new` -> `descriptor.IsAbstract == true` -> `Unable to create an Instance of type
+  "StarterPlayerScripts"`. Não há o que burlar, porque não há função nova de criação para alcançar.
+  A superfície de ataque adicionada por esta decisão é **zero** — não "pequena e guardada".
+
+## Onde vive a lista fechada, e por que **não** é a mesma de `SyncRules`
+
+Pergunta 3 da task. A resposta é: **duas listas, de propósito, porque são dois FATOS DIFERENTES com
+donos diferentes** — nenhuma é cópia da outra.
+
+| | `SyncRules.FIXED_CHILD_CLASS_NAMES` (`cli`) | `EngineFixedChildren` (`services`, novo) |
+|---|---|---|
+| Pergunta que responde | "que `ClassName` o **formato Rojo** infere para um nó chamado X sob um pai de classe Y?" | "que filhos o **motor do LuauBench** pré-cria dentro de uma instância da classe Y, e com que `ClassName`?" |
+| Fonte de verdade | `infer_class_name` do código-fonte do Rojo (ramos 2 e 3, hardcoded) | `src/services/behavior/**` — o que `Initialize` de fato cria |
+| Muda quando | o Rojo muda | a cobertura de `services` avança |
+| Dono | `cli` (é regra de sync, não de simulação) | `services` (é fato da simulação) |
+
+**As duas já divergem hoje, e essa divergência está correta:** `Workspace -> Terrain` está na lista
+do `SyncRules` (o Rojo real infere isso, e `TreePlanner` tem que reproduzir) e **NÃO** está na lista
+de `services` (o LuauBench não pré-cria `Terrain` — `Covered = false`, não existe
+`behavior/Workspace.luau`). Unificar as duas obrigaria a mentir em uma das direções: ou `TreePlanner`
+pararia de inferir `Terrain` (divergindo do Rojo), ou `services` afirmaria pré-criar algo que não
+pré-cria. Isso não é duplicação a eliminar — é a prova concreta de que são listas distintas.
+
+Além disso, fazer `SyncRules` ler de `services` quebraria a Decisão 6 (`SyncRules` é dados puros,
+zero acoplamento a `runtime`/`services`) e inverteria a semântica: a inferência do Rojo não depende
+do que o LuauBench simula.
+
+**Modo de falha se um dia divergirem por engano:** diagnóstico alto e nomeado
+(`materialize/fixed-child-missing`), nunca árvore errada em silêncio. É a mesma disciplina de
+"defesa em profundidade" que os ramos `materialize/service-name-mismatch`/`materialize/not-a-service`
+já seguem.
+
+**Dentro de `services`, a lista é única:** o mesmo módulo é consumido por
+`behavior/StarterPlayer.luau` (que CRIA) e por `init.luau` (que RESPONDE a pergunta) — nenhuma
+duplicação interna, e é impossível `services` afirmar pré-criar algo que seu próprio `Initialize`
+não cria.
+
+## Módulos
+
+### `src/services/EngineFixedChildren.luau` — NOVO (território `services`)
+
+Módulo folha. Declara os filhos que o motor simulado pré-cria por classe de pai. Sem I/O, sem
+`Context`, sem `ClassRegistry` — dados puros mais dois acessores.
+
+```luau
+export type EngineFixedChild = {
+    Name: string,
+    ClassName: string,
+}
+
+-- Ordem do array é a ordem em que `Initialize` deve criá-los (espelha a ordem do Explorer do
+-- Studio). Devolve `{}` (nunca `nil`) para uma classe sem filhos fixos.
+function EngineFixedChildren.Of(parentClassName: string): { EngineFixedChild }
+
+-- `true` só quando o trio bate exatamente uma entrada declarada.
+function EngineFixedChildren.Is(parentClassName: string, name: string, className: string): boolean
+```
+
+Conteúdo desta leva — **exatamente uma entrada**, e ela é derivada do que
+`behavior/StarterPlayer.luau` já faz hoje, não de uma decisão nova:
+
+```luau
+local ENGINE_FIXED_CHILDREN: { [string]: { EngineFixedChild } } = {
+    StarterPlayer = {
+        { Name = "StarterPlayerScripts", ClassName = "StarterPlayerScripts" },
+        { Name = "StarterCharacterScripts", ClassName = "StarterCharacterScripts" },
+    },
+}
+```
+
+`Workspace`/`Terrain` **NÃO** entra aqui até uma tarefa de cobertura de `services` simular `Terrain`
+de verdade E criar `behavior/Workspace.luau` que o pré-crie. Entrada aqui é uma afirmação de que a
+instância existe — declarar `Terrain` sem `behavior/Workspace.luau` faria `cli` procurar um filho que
+nunca é criado.
+
+### `src/services/behavior/StarterPlayer.luau` — PATCH (território `services`)
+
+`Initialize` deixa de ter os dois `NewEngineInstance` escritos à mão e passa a iterar
+`EngineFixedChildren.Of("StarterPlayer")`. Continua sendo o chamador #2 da lista fechada de
+`NewEngineInstance` (nada muda no contrato com `runtime`) — só deixa de ser a *fonte* da informação
+para passar a ser o *consumidor* dela.
+
+```luau
+Initialize = function(instance: Runtime.Instance): ()
+    for _, child in EngineFixedChildren.Of("StarterPlayer") do
+        local created = Runtime.ClassRegistry.NewEngineInstance(child.ClassName, child.Name)
+        created.Parent = instance
+    end
+end,
+```
+
+Atenção ao `Name`: hoje o código passa `nil` e a instância nasce com `Name == ClassName` (default de
+`NewEngineInstance`). Passar `child.Name` explicitamente produz o mesmo resultado para as duas
+entradas atuais (`Name == ClassName` nas duas) e torna o campo `Name` da tabela a fonte real do nome
+— sem isso, `EngineFixedChildren.Name` seria um campo decorativo que `cli` consultaria e `services`
+ignoraria.
+
+### `src/services/init.luau` — PATCH (superfície pública de `services`)
+
+Uma função nova, na mesma família de `IsServiceClass`/`GetSimulatedServiceClasses` (task-services-009):
+
+```luau
+-- PURA -- só lê `EngineFixedChildren.luau` (tabela estática). NÃO toca `Runtime.ClassRegistry` nem
+-- `Context`: SEGURA de chamar antes de `Services.Bootstrap`, mesma garantia de `IsServiceClass`.
+function Services.IsEngineFixedChild(parentClassName: string, name: string, className: string): boolean
+```
+
+Só o predicado sai para `cli`. `EngineFixedChildren.Of` fica interno — `cli` não tem uso legítimo
+para a lista completa, e expor menos mantém a regra 03 ("`cli` nunca conhece nome de classe").
+
+O trio de argumentos é deliberado: exigir que **Name E ClassName** batam mantém fiel o caso
+`"MyScripts": { "$className": "StarterPlayerScripts" }` sob `StarterPlayer` — o predicado devolve
+`false`, o nó cai no ramo normal `Services.new` e erra
+`Unable to create an Instance of type "StarterPlayerScripts"`, que é exatamente o que o Roblox real
+faria. Nenhum caso especial precisa ser escrito para isso.
+
+### `src/cli/TreeMaterializer.luau` — PATCH (território `cli`)
+
+Terceiro ramo em `createInstance`, **entre** o ramo `IsServiceRoot` e o `Services.new`:
+
+```luau
+-- Ramo 3 (task-cli-015): filho fixo do motor -- ADOTA a Instance que `behavior/<Pai>.luau` já criou
+-- dentro do pai, NUNCA cria uma nova (criar produziria um irmão duplicado de mesmo nome, e o
+-- `FindFirstChild`/acesso por ponto do script do usuário resolveria para o do motor, vazio -- ver
+-- arquiteto-cli-2026-09-05.md, seção task-cli-015). `parent.ClassName` é a única informação nova
+-- necessária, e já está disponível aqui: `PlanNode` NÃO precisa de campo novo.
+if Services.IsEngineFixedChild(parent.ClassName, node.Name, node.ClassName) then
+    local existing = parent:FindFirstChild(node.Name)
+    if existing == nil then
+        bag:Add({
+            Severity = "error",
+            Code = "materialize/fixed-child-missing",
+            Message = Messages.MaterializeFixedChildMissing(node.NodePath, node.ClassName, parent.ClassName),
+            NodePath = node.NodePath,
+        })
+        return nil
+    end
+    if existing.ClassName ~= node.ClassName then
+        bag:Add({
+            Severity = "error",
+            Code = "materialize/fixed-child-class-mismatch",
+            Message = Messages.MaterializeFixedChildClassMismatch(node.NodePath, node.ClassName, existing.ClassName),
+            NodePath = node.NodePath,
+        })
+        return nil
+    end
+    -- Devolve SEM tocar em `.Parent` -- já está parenteado pelo motor. Reatribuir o mesmo pai
+    -- dispararia ChildRemoved/ChildAdded/AncestryChanged espúrios (`Instance.luau` não trata
+    -- reparent para o mesmo pai como no-op garantido) -- divergência de eventos, regra 02.
+    return existing
+end
+```
+
+Os dois diagnósticos são **defesa em profundidade**, na mesma categoria de
+`materialize/service-name-mismatch`: só alcançáveis se `EngineFixedChildren` declarar algo que
+`behavior/**` não cria. Nenhum projeto de usuário os alcança hoje.
+
+`materializeNode` não muda: aplica `Source`/`$properties` e recursa na instância devolvida,
+adotada ou criada — aplicar `$properties` na instância do motor é precisamente o que o Rojo real faz
+ao sincronizar contra um place vivo.
+
+### `src/cli/Messages.luau` — PATCH (duas mensagens novas, inglês, família do arquivo)
+
+```luau
+function Messages.MaterializeFixedChildMissing(nodePath: string, className: string, parentClassName: string): string
+function Messages.MaterializeFixedChildClassMismatch(nodePath: string, expectedClassName: string, actualClassName: string): string
+```
+
+Nenhuma passa por `stripEngineErrorLocation` — não embrulham erro de `runtime`/`services`, são
+diagnósticos próprios de `cli`.
+
+### `src/cli/SyncRules.luau` — **NÃO MUDA**
+
+Registrado explicitamente para o revisor: qualquer PR desta leva que toque `SyncRules.luau` está
+errado. A tabela dele é o espelho do Rojo e continua listando `Workspace -> Terrain`.
+
+## Contrato entre territórios (delta)
+
+Acrescentar ao bloco "`services` → `cli`" da seção "Contrato entre territórios" acima:
+
+```luau
+Services.IsEngineFixedChild(parentClassName, name, className): boolean  -- NOVO (task-cli-015)
+                                                                       -- puro, seguro pré-Bootstrap
+```
+
+Ao bloco "`runtime` → `cli`": **nada**. `cli` já usa `Instance:FindFirstChild` e `.ClassName` pela
+superfície pública existente.
+
+## Fluxo de dados
+
+```
+.project.json: StarterPlayer/ (pasta) -> StarterPlayerScripts/ (pasta) -> Camera.client.luau
+   -> TreePlanner (task-cli-014): infere ClassName "StarterPlayerScripts" via SyncRules (regra Rojo)
+   -> TreeMaterializer:
+        nó "StarterPlayer"        -> IsServiceRoot -> game:GetService("StarterPlayer")
+             \_ services: behavior/StarterPlayer.Initialize itera EngineFixedChildren.Of e cria
+                os dois filhos via Runtime.ClassRegistry.NewEngineInstance
+        nó "StarterPlayerScripts" -> Services.IsEngineFixedChild("StarterPlayer", ...) == true
+                                  -> ADOTA parent:FindFirstChild("StarterPlayerScripts")
+        nó "Camera"               -> Services.new("LocalScript", "Camera") + .Parent = adotado
+   -> script do usuário vê: game.StarterPlayer.StarterPlayerScripts.Camera  (UMA instância, a certa)
+```
+
+## Divisão por território
+
+| Território | O que constrói | Contrato com o vizinho |
+|---|---|---|
+| `services` | `EngineFixedChildren.luau` (novo), patch em `behavior/StarterPlayer.luau`, `Services.IsEngineFixedChild` em `init.luau` | expõe SÓ o predicado a `cli`; segue sendo o chamador #2 de `NewEngineInstance` |
+| `cli` | terceiro ramo em `TreeMaterializer.createInstance`, 2 mensagens, fixture + specs | consome SÓ `Services.IsEngineFixedChild` + `Instance:FindFirstChild`/`.ClassName` (já públicos) |
+| `runtime` | **nada** | inalterado; proibição de `NewEngineInstance` para `cli` intacta |
+
+Série obrigatória: `services` **antes** de `cli` (`cli` chama uma função que precisa existir).
+
+## Fidelidade vs. pragmatismo
+
+**Exato:** a árvore resultante tem UMA `StarterPlayerScripts` dentro de `StarterPlayer`, criada pelo
+motor e populada pelo projeto — igual ao Roblox real e ao que o Rojo produz sincronizando contra um
+place vivo. `Instance.new("StarterPlayerScripts")` continua proibido ao script do usuário, igual ao
+Roblox real.
+
+**Divergência declarada (nova, registrar no cabeçalho de `EngineFixedChildren.luau`):** no Roblox
+real esses filhos são propriedade do motor e não podem ser destruídos nem substituídos por um
+script. No LuauBench a instância adotada é uma Instance simulada comum — um script do usuário
+consegue `game.StarterPlayer.StarterPlayerScripts:Destroy()`. Simular a imutabilidade exigiria um
+conceito de "instância protegida" que `runtime` não tem e que nenhum caso de uso desta fase pede.
+
+**Divergência já existente, reafirmada:** `Workspace.Terrain` continua sem existir
+(`Covered = false`). Depois desta task o nó `Terrain` de um `.project.json` erra
+`[LuauBench] Terrain exists in the Roblox API Dump (0.737.0.7371584) but is not simulated by
+LuauBench yet` — mensagem honesta, da família certa, sem prometer o que não há. Quando uma tarefa
+futura de `services` cobrir `Terrain` e criar `behavior/Workspace.luau`, basta **uma entrada nova**
+em `EngineFixedChildren.luau`; `cli` não muda nem uma linha. Esse é o teste real do desenho.
+
+## Riscos e decisões
+
+- **Ordem dos ramos.** `IsServiceRoot` fica primeiro, inalterado. Os dois ramos são mutuamente
+  exclusivos por construção (`IsServiceRoot` só é `true` quando o pai é o `DataModel`, e `DataModel`
+  não é chave de `EngineFixedChildren`), mas manter a ordem preserva o comportamento atual
+  byte-a-byte para todo projeto que já funciona.
+- **Adoção só quando o pai é o certo.** O predicado recebe `parent.ClassName` real (a instância já
+  materializada), não o `ClassName` planejado — um `StarterPlayer` que não seja o singleton
+  (ex.: `$className: "StarterPlayer"` num nó qualquer) sequer chega a existir, porque
+  `Services.new("StarterPlayer")` erra antes por `IsAbstract`. Não há caminho para adotar filho de um
+  pai falso.
+- **`EngineFixedChildren` mentindo.** Único modo de falha novo, e é alto e nomeado
+  (`materialize/fixed-child-missing`), nunca silencioso. O teste que fecha esse risco está no
+  acceptance de `services`: para toda entrada declarada, `game:GetService(<pai>)` de fato tem o filho.
+- **`while true do end` / `.project.json` inválido**: sem mudança — nenhum dos dois caminhos passa
+  por aqui.
+
+## O que deliberadamente NÃO fazer agora
+
+- **Nenhuma API de criação nova** (`Services.NewFixedChild` e variantes) — rejeitada acima.
+- **Não mexer em `SyncRules.luau`.**
+- **Não implementar `Terrain`** — tarefa própria de cobertura de `services`, com a hierarquia
+  `BasePart`/física que ela arrasta.
+- **Não generalizar para "adote qualquer filho pré-existente de mesmo nome"** — seria um merge
+  genérico que mascararia bug de duplicação em nó comum. A lista fechada é o ponto.
+- **Não mover a lista para `runtime`** — a regra 02 é explícita: `runtime` nunca conhece classe por
+  nome. Uma tabela de nomes concretos de classe lá dentro inverteria a dependência.

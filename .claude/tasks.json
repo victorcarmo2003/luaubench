@@ -855,7 +855,7 @@
       "title": "SyncRules (arquivo/pasta -> ClassName) + TreePlanner (.project.json + disco -> InstancePlan puro)",
       "description": "`SyncRules.luau`: dados puros, sem I/O, cabeçalho registrando 'Rojo v7.7.0, pesquisa de 2026-09-05'. Arquivos, primeira regra que casa vence (ordem significativa: .server.lua casa ANTES de .lua): `*.server.lua|luau`->Script, `*.client.lua|luau`->LocalScript, `*.lua|luau`->ModuleScript, `*.project.json|jsonc`->projeto aninhado, `*.meta.json|jsonc`->metadado do irmão (não é Instance). Fora da leva: `*.plugin.*`, `*.model.json`, `*.json`/`*.jsonc`, `*.toml`, `*.yml|yaml`, `*.csv`, `*.txt`, `*.rbxm|rbxmx` -> classificados como Unsupported e reportados. Diretórios, ordem de prioridade FIXA (o próprio Rojo comenta que não pode mudar por compatibilidade): (1) default.project.json|jsonc dentro -> projeto aninhado, vence TUDO inclusive init.*; (2) init.luau|lua -> ModuleScript; (3) init.server.* -> Script; (4) init.client.* -> LocalScript; (5) init.plugin.* e (6) init.csv -> Unsupported; (7) senão Folder. `TreePlanner.luau`: `Plan(project, {IsServiceClass}, bag) -> InstancePlan`. NÃO requer runtime nem services -- `IsServiceClass` é INJETADA, o que torna o módulo testável sem DataModel/Bootstrap. Resolve ClassName na precedência real do Rojo: $className explícito > classe do $path > inferência de Service (SÓ quando o pai é o DataModel); $className + $path juntos só é legal se o $path resolver para Folder; $path que resolve Folder sob a raiz com nome de Service -> a inferência de Service vence. $path é relativo à pasta do .project.json QUE DEFINE AQUELE NÓ (num projeto aninhado, à pasta dele) -- carregar o path do projeto corrente no walk, sem variável global de raiz. Path obrigatório ausente -> erro nomeando nó/campo/caminho absoluto tentado; path {optional} ausente -> nó omitido sem erro, com Diagnostic 'info' (só visível em --verbose). Projeto aninhado = recursão do mesmo parser, com PROTEÇÃO DE CICLO obrigatória (conjunto de caminhos absolutos de projeto no ramo corrente; ciclo -> erro listando a cadeia) -- é a única recursão não-limitada do território. Meta files: `<nome>.meta.json` aplica properties; `init.meta.json` aplica properties e className (className só pode sobrescrever se a pasta resolveu para Folder puro, igual ao Rojo); `id`/`ignoreUnknownInstances` no meta -> warning. $properties: só boolean/number/string entram no plano; array/objeto (Vector3/Color3/CFrame no formato ambíguo do Rojo) -> WARNING E PULA, nunca erro duro e nunca gravar a tabela crua (mentiria: não há tipos de valor até a leva 3 de services). $attributes -> warning listando os não aplicados. TODO arquivo Unsupported vira warning com o caminho real -- nunca omissão silenciosa (um .json que sumisse calado viraria um require falhando dez minutos depois). Nenhuma Instance é criada nesta tarefa. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 3, 4, 6, 7 e 8.",
       "column": "done",
-      "result": "SyncRules/TreePlanner criados. Corrigido apos reprovacao: normalizePath aplicada antes de usar path como chave do cycleGuard, fecha o GRAVE de ciclo de projeto aninhado. $className+path aninhado agora gera warning (fecha o MEDIO). 105/105 testes.",
+      "result": "SyncRules/TreePlanner criados. Corrigido apos reprovacao: normalizePath aplicada antes de usar path como chave do cycleGuard, fecha o GRAVE de ciclo de projeto aninhado. $className+path aninhado agora gera warning (fecha o MEDIO). 105/105 testes. || SyncRules.luau (ClassifyFile/ClassifyDir, dados puros) + TreePlanner.luau (Plan: Project+disco -> InstancePlan puro, IsServiceClass injetada, sem require de runtime/services) criados, com specs e 12 fixtures novos em src/cli/fixtures/tree-planner/. Messages.luau ganhou seção nova só de adições (append-only, confirmado por git diff sem linhas removidas). 43 testes novos (28 SyncRules + 15 TreePlanner); 103/103 no território (60 pré-existentes intactos). Verificação independente do orquestrador: rodou os 8 specs via `lune run` (bate 103/103), grep confirmou zero require de '../runtime'/'../services' em TreePlanner.luau e zero 'any' fora de comentário. Dois bugs reais pegos e corrigidos durante o dev (fsChildEntries não propagado; Source vs SourcePath trocados). Pendências declaradas: merge de $path-para-projeto-aninhado com filhos nomeados no mesmo nó não é suportado (usa só a árvore aninhada, com warning); projeto aninhado nunca é IsServiceRoot. Próxima peça: task-cli-004 (TreeMaterializer).",
       "reviewResult": "APROVADO. Revisor reconstruiu o exploit do zero (nomes/topologia proprios), testou ciclo de 4 projetos (alem do 2/3 do coder), testou auto-referencia real via .. genuino, testou case-insensitivity do Windows (vetor estreito, aceitavel adiar, recomendacao de limite duro de profundidade como defesa em profundidade). normalizePath validada nos 4 casos de borda. 105/105 confirmados, Messages.luau puramente aditivo. Fecha task-cli-003 de vez.",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
@@ -871,8 +871,7 @@
       "priority": "high",
       "acceptance": "SyncRules classifica as 5 formas suportadas de arquivo e as 7 de diretório na ordem certa (teste explícito de que .server.lua não cai em .lua e de que default.project.json vence init.luau); TreePlanner monta o InstancePlan de um fixture com Service inferido sem $className, Folder por pasta, ModuleScript por arquivo, init.luau virando ModuleScript-pasta, projeto aninhado e $path opcional ausente; ciclo de projeto aninhado erra listando a cadeia; $path obrigatório ausente erra nomeando nó/campo/caminho; $properties primitivo entra no plano e não-primitivo vira warning; arquivo não suportado vira warning com caminho; TreePlanner não requer runtime nem services (verificável por leitura); --!strict sem any; specs com fixtures próprios.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05",
-      "result": "SyncRules.luau (ClassifyFile/ClassifyDir, dados puros) + TreePlanner.luau (Plan: Project+disco -> InstancePlan puro, IsServiceClass injetada, sem require de runtime/services) criados, com specs e 12 fixtures novos em src/cli/fixtures/tree-planner/. Messages.luau ganhou seção nova só de adições (append-only, confirmado por git diff sem linhas removidas). 43 testes novos (28 SyncRules + 15 TreePlanner); 103/103 no território (60 pré-existentes intactos). Verificação independente do orquestrador: rodou os 8 specs via `lune run` (bate 103/103), grep confirmou zero require de '../runtime'/'../services' em TreePlanner.luau e zero 'any' fora de comentário. Dois bugs reais pegos e corrigidos durante o dev (fsChildEntries não propagado; Source vs SourcePath trocados). Pendências declaradas: merge de $path-para-projeto-aninhado com filhos nomeados no mesmo nó não é suportado (usa só a árvore aninhada, com warning); projeto aninhado nunca é IsServiceRoot. Próxima peça: task-cli-004 (TreeMaterializer)."
+      "updatedAt": "2026-09-05"
     },
     {
       "id": "task-cli-004",
@@ -1000,10 +999,17 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 18,
-      "tags": ["cli", "rojo", "seguranca", "defesa-em-profundidade"],
+      "tags": [
+        "cli",
+        "rojo",
+        "seguranca",
+        "defesa-em-profundidade"
+      ],
       "priority": "low",
       "acceptance": "TreePlanner.Plan aborta com erro claro apos um limite fixo de profundidade de projeto aninhado (documentar o numero escolhido e a justificativa); teste com case-insensitivity do Windows (dois nomes de pasta diferindo so em maiusculas apontando um pro outro) nao trava e produz erro de limite, nao cadeia confusa; regressao total de cli intacta; --!strict sem any.",
-      "depends": ["task-cli-003"],
+      "depends": [
+        "task-cli-003"
+      ],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     },
@@ -1015,10 +1021,16 @@
       "agent": "arquiteto",
       "reviewer": "revisor-cli",
       "wave": 21,
-      "tags": ["cli", "design", "backlog"],
+      "tags": [
+        "cli",
+        "design",
+        "backlog"
+      ],
       "priority": "low",
       "acceptance": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md (nova secao) escolhendo (a) ou (b), com justificativa; se (a), gera task nova de implementacao; se (b), Messages.luau/docs atualizados citando a limitacao.",
-      "depends": ["task-cli-003"],
+      "depends": [
+        "task-cli-003"
+      ],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     },
@@ -1030,7 +1042,11 @@
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 21,
-      "tags": ["runtime", "cosmetic", "backlog"],
+      "tags": [
+        "runtime",
+        "cosmetic",
+        "backlog"
+      ],
       "priority": "low",
       "acceptance": "Runtime.SandboxGlobals resolve como alias identico ao tipo real; cli pode trocar a forma estrutural em ScriptEnvironment.luau pelo alias sem mudanca de comportamento (nao obrigatorio nesta task, so o export); regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
@@ -1044,10 +1060,16 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 22,
-      "tags": ["cli", "correcao-de-revisao", "erro"],
+      "tags": [
+        "cli",
+        "correcao-de-revisao",
+        "erro"
+      ],
       "priority": "medium",
       "acceptance": "Erro de $properties invalido (nome inexistente e propriedade somente-leitura) nunca contem caminho absoluto de disco nem 'TreeMaterializer:NNN:' na mensagem entregue ao usuario -- so NodePath/Field/mensagem real do motor (ex: 'Gravty is not a valid member of ServerScriptService'); teste novo cobrindo isso (grep na mensagem renderizada por caminho tipo 'C:\\' ou 'D:\\' ou '.luau:'); regressao total intacta (404 testes); --!strict sem any.",
-      "depends": ["task-cli-006"],
+      "depends": [
+        "task-cli-006"
+      ],
       "result": "stripEngineErrorLocation(rawError) adicionada em TreeMaterializer.luau usando string.match(rawError, \"^.-:%d+: (.*)$\") -- o .- nao-guloso casa o PRIMEIRO <chunk>:<linha>: (call site interno de error(msg,2) no __newindex real), nunca um ': ' qualquer da mensagem real. Se nao casar, devolve a string original. Vive em TreeMaterializer.luau, nao em Messages.luau (cabecalho deste proibe ramificacao). 1 teste novo em TreeMaterializer.spec (9/9). Regressao total 405/405 (162 runtime + 73 services + 170 cli).",
       "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu tudo: 405/405 rodado por ele, testou o regex isoladamente com 7 casos adversariais, reverteu via git stash e confirmou que o teste novo falha de verdade sem o fix (reproduz o bug original), rodou o binario real end-to-end com $properties invalido (nome errado + somente-leitura) confirmando ausencia de path/linha interna preservando o texto real do motor. ACHADO ALTO NOVO (nao reportado pelo coder, achado por reproducao propria do revisor): a MESMA classe de vazamento persiste em TreeMaterializer.luau:251-262, caminho materialize/invalid-class (Messages.MaterializeInvalidClass, $className com typo) -- reproduzido com $className:'Frmae' gerando 'D:\\...\\TreeMaterializer:252: Unable to create an Instance of type Frmae'. Comentario pre-existente no cabecalho do arquivo afirma incorretamente que Services.new nao vaza -- ele tambem usa error(msg,2). Virou task-cli-011, despachada para correcao imediata.",
       "createdAt": "2026-09-05",
@@ -1061,10 +1083,16 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 23,
-      "tags": ["cli", "correcao-de-revisao", "erro"],
+      "tags": [
+        "cli",
+        "correcao-de-revisao",
+        "erro"
+      ],
       "priority": "high",
       "acceptance": "Erro de $className invalido/typo nunca contem caminho absoluto de disco nem 'TreeMaterializer:NNN:' na mensagem entregue ao usuario -- so o texto real do motor (ex: 'Unable to create an Instance of type \"Frmae\"'); teste novo cobrindo isso (mesmo padrao de grep usado em task-cli-010); comentario incorreto do cabecalho sobre Services.new corrigido; regressao total intacta (405 testes); --!strict sem any.",
-      "depends": ["task-cli-010"],
+      "depends": [
+        "task-cli-010"
+      ],
       "result": "stripEngineErrorLocation aplicada tambem no ponto de Messages.MaterializeInvalidClass (dentro de createInstance, pcall(Services.new)). Comentario incorreto do cabecalho (alegava que Services.new nao vaza) corrigido -- Services.new usa error(msg,2) internamente igual ao __newindex. 1 teste novo em TreeMaterializer.spec (10/10). Reproduziu o bug antes do fix via git stash (spec novo fora do stash, falhou citando TreeMaterializer:252 exatamente como o achado do revisor), restaurou, confirmou 10/10. Regressao total 406/406 (162 runtime + 73 services + 171 cli). Reproducao end-to-end com binario real confirmando mensagem final sem path/linha interna.",
       "reviewResult": "APROVADO. Revisor reproduziu tudo: 406/406 rodado por ele, leu o arquivo real confirmando stripEngineErrorLocation no ponto certo (TreeMaterializer.luau:282), reproduziu end-to-end com fixture descartavel + git stash confirmando o vazamento original e o fix, confirmou correcao do comentario do cabecalho lendo o texto atual. Caca ativa por terceiro caso: mapeou os 8 pcall reais de src/cli/*.luau um a um, nenhum outro embrulha API de runtime/services com error(msg,2) sem strip. Achou dois pontos SEM pcall (TreeMaterializer.luau:289 .Parent=parent; ScriptRunner.luau:132-134 leitura de Enabled) que teoricamente poderiam vazar do mesmo jeito mas confirmou reachability: estruturalmente inalcancaveis hoje. Achado BAIXO nao bloqueante, registrado como task-cli-012 (defesa em profundidade, baixa prioridade).",
       "createdAt": "2026-09-05",
@@ -1078,7 +1106,11 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 24,
-      "tags": ["cli", "defesa-em-profundidade", "backlog"],
+      "tags": [
+        "cli",
+        "defesa-em-profundidade",
+        "backlog"
+      ],
       "priority": "low",
       "acceptance": "Avaliar se vale envolver os dois pontos em pcall+stripEngineErrorLocation por simetria com applyProperties/createInstance, ou documentar explicitamente por que sao inalcancaveis e deixar como estao (decisao aceitavel se justificada); se proteger, regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
@@ -1092,7 +1124,12 @@
       "agent": "pesquisador",
       "reviewer": "revisor-cli",
       "wave": 25,
-      "tags": ["pesquisa", "rojo", "urgente", "correcao-de-revisao"],
+      "tags": [
+        "pesquisa",
+        "rojo",
+        "urgente",
+        "correcao-de-revisao"
+      ],
       "priority": "high",
       "acceptance": "Algoritmo real confirmado com fonte verificavel (codigo-fonte do Rojo, linha/arquivo citado); lista completa (ou confirmadamente exaustiva na versao pesquisada) de pares pai->filho fixo inferidos sem $className; ordem de precedencia frente a $path/$className/deteccao de Service documentada; pesquisa-formato-projeto-rojo-2026-09-05.md corrigido (nao um novo arquivo) citando a correcao explicitamente; resposta suficiente pra coder-cli implementar sem re-pesquisar.",
       "result": "Pesquisa anterior nao estava errada, estava INCOMPLETA -- leu a mesma funcao infer_class_name (src/snapshot_middleware/project.rs) mas so reportou 1 dos 3 ramos if/else if. Algoritmo real, exaustivo (confirmado por leitura literal do arquivo bruto, nao ha mais nenhum else if): DataModel->qualquer classe com tag Service (dinamico, ja documentado); StarterPlayer->StarterPlayerScripts/StarterCharacterScripts (hardcoded); Workspace->Terrain (hardcoded). Precedencia (match em snapshot_project_node): $className explicito > $path (quando nao resolve a Folder) > inferencia (Service ou filho fixo -- ramos mutuamente exclusivos por parent_class, nunca competem) > Folder generico do $path > erro plan/missing-class-name. Nao e mudanca de versao: StarterPlayer existe desde v6.0.0, Terrain desde v7.4.0-rc1 (bem antes da v7.7.0 fixada). pesquisa-formato-projeto-rojo-2026-09-05.md corrigido diretamente com secao 'Correcao 2026-09-05 (achado do testador)', codigo verbatim, tabela de versoes e analise de precedencia completa.",
@@ -1107,10 +1144,17 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 25,
-      "tags": ["cli", "correcao-de-revisao", "urgente", "rojo"],
+      "tags": [
+        "cli",
+        "correcao-de-revisao",
+        "urgente",
+        "rojo"
+      ],
       "priority": "high",
       "acceptance": "Os 3 projetos reais que o testador usou (Tiktok, Panic - CHESSS, TheGame) passam de TreePlanner.Plan sem [plan/missing-class-name] em StarterPlayerScripts (rodar de verdade contra os caminhos reais, read-only); cenario tests/scenarios/real-roblox-games-pipeline-smoke.scenario.luau atualizado refletindo o novo comportamento; teste unitario novo em TreePlanner.spec.luau cobrindo o(s) par(es) pai->filho fixo confirmado(s); regressao total intacta (406+ testes); --!strict sem any; SyncRules.spec/TreePlanner.spec sem quebrar nenhum teste de precedencia existente (ClassifyFile/ClassifyDir).",
-      "depends": ["task-cli-013"],
+      "depends": [
+        "task-cli-013"
+      ],
       "result": "SyncRules.luau ganhou tabela FIXED_CHILD_CLASS_NAMES (StarterPlayer->{StarterPlayerScripts,StarterCharacterScripts}, Workspace->{Terrain}) + funcao SyncRules.InferFixedChildClassName(parentClassName, name) -- dados puros, ramo 1 (DataModel->Service, dinamico) continua em TreePlanner.luau via options.IsServiceClass. TreePlanner.luau: serviceClassName renomeado pra inferredClassName, agora if/elseif mutuamente exclusivo por parentClassName (DataModel->IsServiceClass, senao SyncRules.InferFixedChildClassName); IsServiceRoot NAO ganhou ramo novo (decisao documentada no codigo: filhos fixos nao sao Services reais, IsService=false no dump, continuam materializados via Services.new comum). 4 fixtures novas em src/cli/fixtures/tree-planner/ (fixed-children, fixed-child-explicit-override, fixed-child-path-folder, fixed-child-wrong-parent) + 5 testes novos em TreePlanner.spec.luau (repro completo, precedencia $className explicito, precedencia $path->Folder, mutua exclusividade por pai errado) + 5 testes novos em SyncRules.spec.luau (InferFixedChildClassName direto). Cenario tests/scenarios/real-roblox-games-pipeline-smoke.scenario.luau reescrito: os 3 asserts de plan/missing-class-name viraram asserts de AUSENCIA desse diagnostico, com evidencia de progresso real (Tiktok e CHESSS chegam a EXECUTAR o script do servidor; TheGame para em plan/required-path-not-found, igual antes, so que sem o missing-class-name). Verificacao real (nao so unitaria): rodei lune run src/cli/main.luau run contra os 3 caminhos reais em C:/Users/hakor/Documents/Roblox-Games -- 0 ocorrencias de plan/missing-class-name nos 3; Tiktok e CHESSS avancam ate rodar Script real (exit 2 por outros erros legitimos: SoundService/Part nao simulados, StarterPlayerScripts nao instanciavel pela via publica -- filho fixo do motor --, HttpService nao registrada no CHESSS); TheGame para em plan/required-path-not-found (Wally nao instalado, achado incidental preexistente). Regressao: 425/425 testes passando em todos os 32 *.spec.luau do repo (find src tools -name '*.spec.luau'), 0 arquivos falhando; luau-lsp analyze --platform=standard limpo (zero diagnosticos) em SyncRules.luau/TreePlanner.luau/specs/scenario; zero 'any' nos arquivos tocados. API faltante sinalizada no relatorio do agente: StarterPlayerScripts/StarterCharacterScripts (e possivelmente Terrain, ainda IsAbstract=true no Manifest) nao sao instanciaveis por Services.new (via publica que TreeMaterializer usa pra todo no que nao e IsServiceRoot) -- so por NewEngineInstance (via do motor) -- decisao de servicos/runtime, fora do territorio cli, documentada mas nao resolvida aqui.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
@@ -1120,15 +1164,23 @@
       "id": "task-cli-015",
       "title": "ARQUITETURA URGENTE: mecanismo pra materializar filhos fixos do motor (StarterPlayerScripts/StarterCharacterScripts/Terrain) sem NewEngineInstance no cli",
       "description": "Achado do coder-cli e confirmado/refinado pelo revisor-cli na revisao de task-cli-014 (segunda maior parede que bloqueia projetos reais, logo depois da inferencia de ClassName ja corrigida). Agora que TreePlanner infere corretamente StarterPlayerScripts/StarterCharacterScripts/Terrain como ClassName, TreeMaterializer ainda falha ao materializa-los: sao filhos fixos do MOTOR (nao Services GetService()-aveis, IsService=false), mas TreeMaterializer so tem dois caminhos -- game:GetService(ClassName) pra IsServiceRoot, ou Services.new(ClassName,Name) pra todo o resto. Services.new falha pros 3: StarterPlayerScripts/StarterCharacterScripts por IsAbstract=true (fieis ao Roblox real -- nem la sao instanciaveis via Instance.new pelo USUARIO, so pelo motor), Terrain por Covered=false (nem simulado ainda, motivo diferente, tarefa separada de cobertura de services). O cli e EXPLICITAMENTE proibido de chamar Runtime.ClassRegistry.NewEngineInstance (cabecalho de src/runtime/init.luau) porque $className vem de arquivo do usuario e NewEngineInstance nao tem guarda de NotCreatable -- mas StarterPlayerScripts/StarterCharacterScripts SAO casos legitimos onde o cli PRECISA de um caminho tipo NewEngineInstance, so que restrito exatamente aos filhos fixos confirmados por task-cli-013 (nunca um $className arbitrario). Precisa de decisao do arquiteto: uma nova API publica de runtime/services (ex: Services.NewFixedChild(className, name) ou equivalente) que aceita SOMENTE a lista fechada de filhos fixos conhecidos (mesma tabela de SyncRules.FIXED_CHILD_CLASS_NAMES), preservando a guarda de seguranca (nao vira uma porta geral pra bypassar IsAbstract). Terrain fica fora do escopo desta decisao (e cobertura de services, nao mecanismo de materializacao -- ver task de cobertura separada se necessario). Blocker real: sem isso, TODO projeto Roblox real com StarterPlayerScripts populado (script de cliente) ainda falha materialize/invalid-class, mesmo com o ClassName ja correto.",
-      "column": "todo",
+      "column": "done",
       "agent": "arquiteto",
       "reviewer": "revisor-cli",
       "wave": 26,
-      "tags": ["arquitetura", "cli", "services", "runtime", "urgente", "rojo"],
+      "tags": [
+        "arquitetura",
+        "cli",
+        "services",
+        "runtime",
+        "urgente",
+        "rojo"
+      ],
       "priority": "high",
       "acceptance": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md (nova secao) ou arquivo novo se o escopo justificar, com o mecanismo exato (assinatura de funcao, onde vive -- services provavelmente, ja que e o territorio que hoje expoe Services.new -- e como preserva a guarda de seguranca contra $className arbitrario); vira tarefa(s) nova(s) de implementacao pro(s) territorio(s) certo(s) (services e/ou cli), com acceptance proprio incluindo teste que confirma que a nova API NAO aceita um className fora da lista fechada de filhos fixos.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md, secao 'Revisao pos-implementacao 2026-09-05 (task-cli-015) -- filho fixo do motor: adotar, nao criar'. A API de CRIACAO pedida pela task (Services.NewFixedChild) foi REJEITADA: StarterPlayer ja nasce com os dois filhos fixos criados por behavior/StarterPlayer.luau, entao criar produziria irmao DUPLICADO de mesmo nome e o script do usuario resolveria para o do motor (vazio) -- divergencia silenciosa, pior que o erro alto de hoje. Decisao: TreeMaterializer ADOTA a instancia existente via parent:FindFirstChild. runtime NAO muda (proibicao de NewEngineInstance para cli intacta), nenhum bypass novo de IsAbstract existe, Instance.new('StarterPlayerScripts') de dentro de um script continua bloqueado por construcao. Lista fechada nova vive em services (EngineFixedChildren.luau) e NAO substitui SyncRules.FIXED_CHILD_CLASS_NAMES -- sao dois fatos diferentes (regra do Rojo vs. fato da simulacao) que JA divergem corretamente em Workspace->Terrain. Desdobrada em task-services-010 (wave 27) e task-cli-016 (wave 28, depende da primeira)."
     },
     {
       "id": "task-runtime-029",
@@ -1138,9 +1190,60 @@
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 26,
-      "tags": ["runtime", "erro", "correcao-de-revisao", "i18n"],
+      "tags": [
+        "runtime",
+        "erro",
+        "correcao-de-revisao",
+        "i18n"
+      ],
       "priority": "medium",
       "acceptance": "game:GetService('X') pra classe nao registrada, chamado de dentro de um script do usuario, produz mensagem em ingles (nunca portugues) chegando ao stderr formatado; se o comportamento real do Roblox for confirmavel (pesquisador se houver duvida), a mensagem bate com a familia real; regressao total intacta; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-010",
+      "title": "EngineFixedChildren.luau + Services.IsEngineFixedChild (fonte unica dos filhos fixos do motor)",
+      "description": "Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, secao 'Revisao pos-implementacao 2026-09-05 (task-cli-015) -- filho fixo do motor: adotar, nao criar' -- LER A SECAO INTEIRA antes de escrever qualquer linha, em especial as subsecoes 'Onde vive a lista fechada' e 'Modulos'. (1) NOVO src/services/EngineFixedChildren.luau: modulo folha, dados puros, SEM I/O, SEM Context, SEM ClassRegistry. export type EngineFixedChild = { Name: string, ClassName: string }. Tabela local ENGINE_FIXED_CHILDREN: { [string]: { EngineFixedChild } } com EXATAMENTE uma chave nesta leva: StarterPlayer = { {Name='StarterPlayerScripts', ClassName='StarterPlayerScripts'}, {Name='StarterCharacterScripts', ClassName='StarterCharacterScripts'} } -- a ordem do array E a ordem de criacao. Workspace/Terrain NAO entra (Covered=false, nao existe behavior/Workspace.luau: declarar aqui faria cli procurar um filho que nunca e criado). Duas funcoes: EngineFixedChildren.Of(parentClassName: string): { EngineFixedChild } (devolve {} nunca nil) e EngineFixedChildren.Is(parentClassName: string, name: string, className: string): boolean (true so quando o TRIO bate uma entrada declarada). Cabecalho documenta a divergencia declarada: no Roblox real esses filhos sao propriedade do motor e nao podem ser destruidos por um script; no LuauBench a instancia e uma Instance simulada comum e Destroy() funciona. (2) PATCH src/services/behavior/StarterPlayer.luau: Initialize deixa de ter os dois NewEngineInstance escritos a mao e passa a iterar EngineFixedChildren.Of('StarterPlayer'), chamando Runtime.ClassRegistry.NewEngineInstance(child.ClassName, child.Name) -- passar child.Name EXPLICITAMENTE (hoje passa nil), senao o campo Name da tabela vira decorativo. Continua sendo o chamador #2 da lista fechada de NewEngineInstance -- nada muda no contrato com runtime. Atualizar o cabecalho do arquivo apontando que a fonte da informacao agora e EngineFixedChildren.luau. (3) PATCH src/services/init.luau: nova funcao publica Services.IsEngineFixedChild(parentClassName: string, name: string, className: string): boolean, delegando a EngineFixedChildren.Is. PURA -- so le a tabela estatica, NAO toca ClassRegistry nem Context, SEGURA de chamar antes de Services.Bootstrap (mesma garantia e mesmo estilo de comentario de IsServiceClass/GetSimulatedServiceClasses, task-services-009). Acrescentar a funcao a lista de 'UNICA superficie que cli enxerga' no cabecalho do arquivo. EngineFixedChildren.Of fica INTERNO -- nao reexportar. NAO criar nenhuma API de criacao (Services.NewFixedChild e variantes foram EXPLICITAMENTE rejeitadas pelo arquiteto -- ver a secao do desenho). NAO tocar em src/runtime/ nem em src/cli/.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 27,
+      "tags": [
+        "services",
+        "engine-fixed-children",
+        "starterplayer",
+        "contrato-com-cli",
+        "urgente"
+      ],
+      "priority": "high",
+      "acceptance": "EngineFixedChildren.luau existe com exatamente a superficie do desenho (Of/Is + o type EngineFixedChild) e sem nenhuma dependencia de Context/ClassRegistry/fs; Services.IsEngineFixedChild('StarterPlayer','StarterPlayerScripts','StarterPlayerScripts') == true e o mesmo para StarterCharacterScripts; TESTE DE GUARDA (exigido pelo acceptance da task-cli-015 original): a funcao devolve false para todo className fora da lista fechada -- cobrir ao menos ('StarterPlayer','Terrain','Terrain'), ('Workspace','Terrain','Terrain'), ('DataModel','StarterPlayerScripts','StarterPlayerScripts'), ('ReplicatedStorage','Folder','Folder') e o caso Name/ClassName cruzados ('StarterPlayer','MyScripts','StarterPlayerScripts') -- os cinco false; TESTE DE COERENCIA que fecha o unico modo de falha novo do desenho: para TODA entrada declarada em ENGINE_FIXED_CHILDREN, depois de Services.Bootstrap real, game:GetService(<classe do pai>):FindFirstChild(entry.Name) ~= nil E o ClassName do achado == entry.ClassName (e o teste que garante que services nunca afirma pre-criar algo que seu proprio Initialize nao cria); Services.IsEngineFixedChild funciona ANTES de Bootstrap (teste em processo limpo, igual ao de IsServiceClass); StarterPlayer continua nascendo com os dois filhos na mesma ordem (regressao de src/services/Integration.spec.luau secoes 1b e 6, sem alterar aquele arquivo); regressao total de src/services/*.spec.luau intacta; NENHUMA funcao nova de CRIACAO adicionada a Services (revisor-services confirma por leitura da superficie publica); nenhum arquivo fora de src/services/ tocado; --!strict, zero any, luau-lsp analyze --platform=standard limpo.",
+      "depends": [],
+      "note": "Bloqueia task-cli-016 (cli chama Services.IsEngineFixedChild, que precisa existir antes). Roda sozinha nesta leva -- nenhum outro territorio depende dela para comecar.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-016",
+      "title": "TreeMaterializer: terceiro ramo que ADOTA filho fixo do motor (StarterPlayerScripts/StarterCharacterScripts)",
+      "description": "Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, secao 'Revisao pos-implementacao 2026-09-05 (task-cli-015) -- filho fixo do motor: adotar, nao criar' -- LER A SECAO INTEIRA, em especial 'A pergunta da task, e por que a resposta dela esta errada' (o porque de ADOTAR e nao CRIAR) e a subsecao de src/cli/TreeMaterializer.luau, que traz o codigo exato do ramo. (1) PATCH src/cli/TreeMaterializer.luau, funcao createInstance: terceiro ramo ENTRE o ramo IsServiceRoot e o ramo Services.new. Condicao: Services.IsEngineFixedChild(parent.ClassName, node.Name, node.ClassName). Acao: parent:FindFirstChild(node.Name) e devolver a instancia encontrada SEM tocar em .Parent (ela ja esta parenteada pelo motor -- reatribuir o mesmo pai dispararia ChildRemoved/ChildAdded/AncestryChanged espurios, divergencia de eventos da regra 02). parent.ClassName e a unica informacao nova necessaria e JA esta disponivel -- PlanNode NAO ganha campo novo e TreePlanner.luau NAO e tocado. Dois diagnosticos de defesa em profundidade (mesma categoria de materialize/service-name-mismatch, so alcancaveis se services declarar algo que behavior/** nao cria): materialize/fixed-child-missing quando FindFirstChild devolve nil, e materialize/fixed-child-class-mismatch quando o ClassName do achado difere do node.ClassName -- os dois retornam nil (subarvore pulada, igual aos outros caminhos de falha). NUNCA Runtime.ClassRegistry.NewEngineInstance -- o cabecalho de src/runtime/init.luau continua listando cli como 'NUNCA' e este patch NAO muda isso; revisor-cli cobra por grep como sempre. Atualizar o cabecalho de TreeMaterializer.luau (hoje diz que ha SO DOIS caminhos) para descrever os tres, e explicar por que o terceiro ADOTA em vez de criar. (2) PATCH src/cli/Messages.luau: Messages.MaterializeFixedChildMissing(nodePath: string, className: string, parentClassName: string): string e Messages.MaterializeFixedChildClassMismatch(nodePath: string, expectedClassName: string, actualClassName: string): string -- ingles, familia do arquivo, NENHUMA passa por stripEngineErrorLocation (nao embrulham erro de runtime/services, sao diagnosticos proprios de cli). (3) Fixture nova em src/cli/fixtures/ com StarterPlayer/StarterPlayerScripts/ contendo um .client.luau, mais StarterCharacterScripts/, exercitando o caminho real ponta a ponta. src/cli/SyncRules.luau NAO MUDA -- qualquer diff nele nesta task esta errado (a tabela dele e o espelho do Rojo e continua listando Workspace->Terrain de proposito). Depende de task-services-010 (Services.IsEngineFixedChild precisa existir).",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 28,
+      "tags": [
+        "cli",
+        "materializer",
+        "rojo",
+        "starterplayer",
+        "urgente"
+      ],
+      "priority": "high",
+      "acceptance": "Um projeto com StarterPlayer/StarterPlayerScripts/Camera.client.luau materializa com ZERO diagnostico de erro, e a arvore final tem EXATAMENTE UMA instancia chamada StarterPlayerScripts dentro de StarterPlayer (assertar a contagem de filhos com esse nome -- e o repro direto do bug de duplicacao que motivou a decisao de adotar em vez de criar) com Camera dentro dela; rawequal entre a instancia adotada e game:GetService('StarterPlayer'):FindFirstChild('StarterPlayerScripts') (prova que ADOTOU, nao criou); mesmo teste para StarterCharacterScripts; $properties declarado no no StarterPlayerScripts e aplicado na instancia do motor; teste de que nenhum evento espurio de reparenting dispara na adocao (conectar ChildAdded/ChildRemoved/AncestryChanged no StarterPlayer antes de materializar o filho fixo e confirmar zero disparo para a instancia adotada); no com Name divergente ('MyScripts' com $className 'StarterPlayerScripts' sob StarterPlayer) NAO e adotado e erra com a familia Roblox 'Unable to create an Instance of type ...' via o ramo normal Services.new; no Terrain sob Workspace continua errando com a familia '[LuauBench] ... not simulated yet' (nao regride, nao passa a mentir); os dois diagnosticos novos tem teste proprio (alcancados com um InstancePlan/parent montado a mao, igual a disciplina dos outros diagnosticos de defesa em profundidade do arquivo); regressao total dos 32 *.spec.luau intacta, em especial TreeMaterializer.spec.luau, TreePlanner.spec.luau e SyncRules.spec.luau; tests/scenarios/real-roblox-games-pipeline-smoke.scenario.luau continua 3/3; grep confirma zero ocorrencia de NewEngineInstance em src/cli/**; git diff confirma que src/cli/SyncRules.luau e src/runtime/** e src/services/** nao foram tocados; --!strict, zero any, luau-lsp analyze --platform=standard limpo nos arquivos tocados.",
+      "depends": [
+        "task-services-010"
+      ],
+      "note": "Serie obrigatoria com task-services-010 -- NAO despachar em paralelo com ela: cli chama uma funcao de services que so existe depois daquela tarefa.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }
