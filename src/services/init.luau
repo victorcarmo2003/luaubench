@@ -37,27 +37,28 @@
 	alcançáveis agora -- o terceiro caso ("existe no dump, ainda não simulada") continua
 	implementado e comentado, sem dado real para disparar até task-services-005.
 
-	BLOQUEIO DE RUNTIME DESCOBERTO NESTA TAREFA (confirmado rodando de verdade, não suposição --
-	ver o relatório de task-services-003 para o desenho do fix e o repro completo): TODA classe
-	`Service` coberta por esta leva (ReplicatedStorage/ServerStorage/ServerScriptService/
-	ReplicatedFirst/StarterPack/StarterGui/StarterPlayer/Workspace/Lighting) carrega a tag
-	`NotCreatable` no dump -- fiel ao Roblox real (não dá para `Instance.new("Workspace")` lá
-	também) -- e o gerador traduz isso corretamente para `GeneratedClass.IsAbstract = true`. O
-	problema: `Runtime.ClassRegistry.new` rejeita `IsAbstract == true` INCONDICIONALMENTE, sem
-	distinguir "script chamando `Instance.new` numa classe não-criável" (o que a tag deveria
-	bloquear, e que `Services.new` abaixo já bloqueia por conta própria, ANTES de chamar
-	`ClassRegistry.new`) de "o motor construindo o singleton internamente" (o que
-	`DataModel:GetService`, em `src/runtime/DataModel.luau`, precisa fazer -- e o Roblox real
-	permite). Resultado confirmado: `game:GetService("ReplicatedStorage")` e
-	`game:GetService("Workspace")` ERRAM HOJE com `'{Classe}' é abstrata, não pode ser
-	instanciada` -- em vez de devolver o singleton. Isso está FORA do território deste módulo
-	(a rejeição vive em `src/runtime/ClassRegistry.luau`, chamada por `src/runtime/DataModel.luau`)
-	e não é contornável por `services` sem violar "não toque em `src/runtime/`". `Services.new`
-	abaixo NÃO é afetado para o caminho `Instance.new` do usuário (ele já barra classe abstrata
-	antes de chegar em `ClassRegistry.new` -- ver o comentário de `Services.new`), mas
-	`game:GetService(...)` de qualquer Service desta leva, e a criação dos filhos fixos de
-	`StarterPlayer`, ficam bloqueados até `coder-runtime` resolver isso (despachado pelo relatório
-	desta tarefa).
+	BLOQUEIO DE RUNTIME RESOLVIDO (retomada de task-services-003 -- estava documentado aqui como
+	bloqueio confirmado quando esta tarefa rodou pela primeira vez): TODA classe `Service` coberta
+	por esta leva (ReplicatedStorage/ServerStorage/ServerScriptService/ReplicatedFirst/StarterPack/
+	StarterGui/StarterPlayer/Workspace/Lighting) carrega a tag `NotCreatable` no dump -- fiel ao
+	Roblox real (não dá para `Instance.new("Workspace")` lá também) -- e o gerador traduz isso
+	corretamente para `GeneratedClass.IsAbstract = true`. O problema era que
+	`Runtime.ClassRegistry.new` rejeitava `IsAbstract == true` INCONDICIONALMENTE, sem distinguir
+	"script chamando `Instance.new` numa classe não-criável" (o que a tag deveria bloquear, e que
+	`Services.new` abaixo já bloqueia por conta própria, ANTES de chamar `ClassRegistry.new`) de "o
+	motor construindo o singleton internamente" (o que `DataModel:GetService`, em
+	`src/runtime/DataModel.luau`, precisa fazer -- e o Roblox real permite). `task-runtime-023`
+	resolveu com DOIS construtores em `Runtime.ClassRegistry` (ver
+	.claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão pós-integração 2026-09-05
+	(4)"): a via PÚBLICA (`ClassRegistry.new`) mantém a guarda de `IsAbstract`, e a via NOVA do
+	motor (`ClassRegistry.NewEngineInstance`, mesma construção completa, SEM a guarda) passou a ser
+	usada por `DataModel.GetService` -- e por `behavior/StarterPlayer.luau` (novo nesta retomada),
+	para os dois filhos fixos. Resultado confirmado agora (`Integration.spec.luau`, seções "1b" e
+	"6"): `game:GetService("ReplicatedStorage")`/`("Workspace")`/etc. devolvem o singleton, e
+	`StarterPlayer` nasce com `StarterPlayerScripts`/`StarterCharacterScripts`. `Services.new`
+	abaixo continua com o mesmo comportamento de sempre para o caminho `Instance.new` do usuário
+	(ele já barra classe abstrata antes de chegar em `ClassRegistry.new` -- ver o comentário de
+	`Services.new`) -- nada mudou aqui, o fix inteiro viveu em `src/runtime/`.
 
 	DIVERGÊNCIAS DE FIDELIDADE DESTA LEVA (regra 00: toda divergência é declarada, nunca
 	silenciosa -- "Fidelidade vs. pragmatismo" do desenho de `services`, seção homônima):

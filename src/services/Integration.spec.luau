@@ -14,37 +14,48 @@
 	`require` do Lune 0.10.5 já documentado em `init.spec.luau`/`src/runtime/init.spec.luau` -- só a
 	forma "estilo diretório" carrega o `init.luau` real a partir de um arquivo irmão.
 
-	BLOQUEIO DE RUNTIME CONFIRMADO NESTA TAREFA (não contornável dentro do território de
-	`services` -- ver o relatório do agente para o desenho do fix, despachado para
-	`coder-runtime`): `Runtime.ClassRegistry.new` rejeita `IsAbstract == true`
+	BLOQUEIO DE RUNTIME RESOLVIDO NESTA RETOMADA (estava documentado aqui como bloqueio confirmado
+	quando esta tarefa rodou pela primeira vez -- ver .claude/agents-memory/arquiteto-runtime-
+	2026-09-04.md, seção "Revisão pós-integração 2026-09-05 (4)", e `task-runtime-023` no board
+	para o desenho completo do fix): `Runtime.ClassRegistry.new` rejeitava `IsAbstract == true`
 	INCONDICIONALMENTE, e TODA classe `Service` desta leva (e `StarterPlayerScripts`/
 	`StarterCharacterScripts`, que não são Service mas também são `NotCreatable`) carrega
-	`IsAbstract = true` -- fiel ao dump. Isso bloqueia:
+	`IsAbstract = true` -- fiel ao dump. Isso bloqueava:
 	(1) `game:GetService(...)` de QUALQUER Service desta leva (ReplicatedStorage/ServerStorage/
 	    ServerScriptService/ReplicatedFirst/StarterPack/StarterGui/StarterPlayer/Workspace/
-	    Lighting) -- `DataModel:GetService` (código de `runtime`) chama `ClassRegistry.new`
-	    internamente e esbarra na mesma rejeição que deveria valer só para o script do usuário
+	    Lighting) -- `DataModel:GetService` (código de `runtime`) chamava `ClassRegistry.new`
+	    internamente e esbarrava na mesma rejeição que deveria valer só para o script do usuário
 	    tentando `Instance.new` direto.
 	(2) A criação dos filhos fixos de `StarterPlayer` (`StarterPlayerScripts`/
-	    `StarterCharacterScripts`), que teria que rodar dentro do `Initialize` de `StarterPlayer`
-	    -- também bloqueado, e em dobro: nem o CONTAINER (`StarterPlayer`) nem os FILHOS são
-	    instanciáveis hoje.
-	Os testes marcados "BLOQUEIO CONHECIDO" abaixo são GATILHOS DE REGRESSÃO deliberados: eles
-	afirmam o comportamento ERRADO de HOJE, com a mensagem exata. Se `coder-runtime` corrigir o
-	bug, estes testes VÃO FALHAR -- é o sinal para atualizar cada um ao caminho feliz (documentado
-	dentro de cada teste) e então implementar `behavior/StarterPlayer.luau`, que hoje não existe
-	por não haver como testá-lo (ver `src/services/behavior/Index.luau`, cabeçalho).
+	    `StarterCharacterScripts`), que precisava rodar dentro do `Initialize` de `StarterPlayer`
+	    -- também bloqueada, e em dobro: nem o CONTAINER (`StarterPlayer`) nem os FILHOS eram
+	    instanciáveis.
+
+	`task-runtime-023` resolveu com DOIS construtores em `Runtime.ClassRegistry`
+	(`src/runtime/ClassRegistry.luau`): a via PÚBLICA (`ClassRegistry.new`) mantém a guarda de
+	`IsAbstract` (script não pode `Instance.new` classe `NotCreatable` -- comportamento correto,
+	igual ao Roblox real), e a via NOVA do motor (`ClassRegistry.NewEngineInstance`, mesma
+	construção completa, SEM a guarda) passou a ser usada por `DataModel.GetService` (construção
+	do singleton de Service) e por `behavior/StarterPlayer.luau` (criação dos dois filhos fixos --
+	módulo novo desta retomada, com spec próprio em `behavior/StarterPlayer.spec.luau`). A seção
+	"6" abaixo, que continha os dois testes-gatilho de regressão desta tarefa (o sinal deliberado
+	de que o bug ainda existia), foi REESCRITA para o caminho feliz -- ver o comentário no início
+	dela. Uma nova seção "1b", logo após a seção 1, cobre `game:GetService` de ponta a ponta para
+	as 9 Services desta leva (as 8 listadas na retomada mais `Workspace`, testado pela mesma razão
+	-- é Service+NotCreatable como as outras 8, e a cobertura fica mais completa sem custo extra).
 
 	Onde a acceptance do board pede `rs.Modules.Combat`/`workspace:Set3dRenderingEnabled` (exemplos
-	que dependem de `GetService`, hoje bloqueado), os testes abaixo usam classes REAIS e
-	CONSTRUÍVEIS desta mesma leva como substituto equivalente (`Folder` no lugar de
-	`ReplicatedStorage` para resolução de filho por nome; `Folder:GetPropertyChangedSignal(...)`
-	no lugar de `workspace:Set3dRenderingEnabled` para método excluído por Security -- confirmado
-	empiricamente nesta tarefa que `GetPropertyChangedSignal` NÃO está em `Instance.MethodNames`,
-	logo não ganha stub `[LuauBench]`, e cai no fallback "is not a valid member of" de
-	`Runtime.Instance`) -- o MECANISMO testado (resolução de filho, filtro de Security/Capabilities
-	em `MethodNames`) é o mesmo independente de qual classe o exercita; a substituição está
-	documentada aqui e no relatório da tarefa, nunca escondida.
+	que dependem de `GetService` -- hoje DESBLOQUEADO, ver seção "1b"), as seções 2-5 abaixo
+	continuam usando classes REAIS e CONSTRUÍVEIS desta mesma leva como substituto equivalente
+	(`Folder` no lugar de `ReplicatedStorage` para resolução de filho por nome;
+	`Folder:GetPropertyChangedSignal(...)` no lugar de `workspace:Set3dRenderingEnabled` para
+	método excluído por Security -- confirmado empiricamente nesta tarefa que
+	`GetPropertyChangedSignal` NÃO está em `Instance.MethodNames`, logo não ganha stub
+	`[LuauBench]`, e cai no fallback "is not a valid member of" de `Runtime.Instance`) --
+	deliberadamente MANTIDAS como estão: o MECANISMO testado (resolução de filho, filtro de
+	Security/Capabilities em `MethodNames`) é o mesmo independente de qual classe o exercita, e a
+	seção "1b" já cobre `ReplicatedStorage`/`Workspace` de verdade via `GetService` -- duplicar as
+	seções 2-5 sobre a classe real não agregaria cobertura nova, só risco de diff desnecessário.
 
 	Roda com `lune run src/services/Integration.spec.luau`.
 ]]
@@ -137,6 +148,54 @@ test(
 					`mensagem deveria bater com a família Roblox (Decisão 5), recebeu: {err}`
 				)
 			end
+		end
+	end
+)
+
+--------------------------------------------------------------------------------------------------
+-- 1b. game:GetService(...) funciona para as Services desta leva (task-runtime-023 destravou
+--     Runtime.ClassRegistry.NewEngineInstance -- ver o cabeçalho do arquivo). Cobre as 8 Services
+--     listadas na retomada de task-services-003 mais Workspace (mesmo mecanismo, Service +
+--     NotCreatable como as outras). Players/RunService são deliberadamente EXCLUÍDAS aqui --
+--     estão registradas nesta leva (task-services-002) mas o COMPORTAMENTO delas (e a decisão de
+--     testar GetService para elas) é escopo de task-services-004, não desta retomada.
+--------------------------------------------------------------------------------------------------
+
+local SERVICES_THIS_LEVA: { string } = {
+	"ReplicatedStorage",
+	"ServerStorage",
+	"ServerScriptService",
+	"ReplicatedFirst",
+	"StarterPack",
+	"StarterGui",
+	"StarterPlayer",
+	"Lighting",
+	"Workspace",
+}
+
+test(
+	"game:GetService funciona para as Services desta leva: singleton criado, ClassName correto, parenteado sob game, e chamada repetida devolve o MESMO objeto",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		for _, className in SERVICES_THIS_LEVA do
+			local service = game:GetService(className)
+			assert(
+				service.ClassName == className,
+				`GetService('{className}') deveria devolver ClassName == '{className}', recebeu '{service.ClassName}'`
+			)
+			assert(
+				rawequal(service.Parent, game),
+				`GetService('{className}') deveria parentear o singleton direto sob a raiz (game), igual ao Roblox real`
+			)
+
+			local second = game:GetService(className)
+			assert(
+				rawequal(service, second),
+				`a segunda chamada a GetService('{className}') deveria devolver o MESMO objeto (singleton) -- rawequal falhou`
+			)
 		end
 	end
 )
@@ -306,63 +365,75 @@ test("cli grava/lê script.Source por Get/SetPropertyRaw, que NÃO passam pelo s
 end)
 
 --------------------------------------------------------------------------------------------------
--- 6. BLOQUEIO CONHECIDO -- gatilhos de regressão para o bug de runtime descoberto nesta tarefa
---    (ver cabeçalho do arquivo). Cada teste abaixo afirma o comportamento ERRADO de hoje; se
---    `coder-runtime` corrigir `ClassRegistry.new`/`DataModel.GetService`, estes testes FALHAM --
---    é o sinal para reescrevê-los ao caminho feliz descrito em cada comentário.
+-- 6. StarterPlayer nasce com os dois filhos fixos (behavior/StarterPlayer.luau, retomada desta
+--    tarefa) + regressão da via PÚBLICA continuando a rejeitar NotCreatable corretamente.
+--
+--    Os dois testes abaixo SUBSTITUEM os dois testes-gatilho de regressão ("BLOQUEIO CONHECIDO")
+--    que existiam aqui enquanto `task-runtime-023` estava pendente -- eles afirmavam de propósito
+--    o comportamento ERRADO de então (`game:GetService`/`ClassRegistry.new("StarterPlayerScripts")`
+--    ambos errando "'{Classe}' é abstrata, não pode ser instanciada"). Com o fix aplicado, os dois
+--    caminhos se separam como o desenho sempre previu: `GetService` (via do motor,
+--    `NewEngineInstance`) passa a FUNCIONAR; a via pública (`ClassRegistry.new`, o que um script
+--    tentando `Instance.new` alcançaria) continua ERRANDO -- mas com uma mensagem NOVA
+--    (`task-runtime-023` trocou o texto de "é abstrata" para a frase que nomeia
+--    NotCreatable/NewEngineInstance, ver `src/runtime/ClassRegistry.luau`). Cobertura unitária de
+--    `behavior/StarterPlayer.luau` isolada (sem `GetService`/`DataModel` no meio) vive em
+--    `behavior/StarterPlayer.spec.luau` -- os testes abaixo cobrem o caminho ponta a ponta.
 --------------------------------------------------------------------------------------------------
 
 test(
-	"BLOQUEIO CONHECIDO: game:GetService('ReplicatedStorage') ainda ERRA hoje (ClassRegistry.new rejeita IsAbstract mesmo vindo de GetService)",
+	"game:GetService('StarterPlayer') nasce com StarterPlayerScripts e StarterCharacterScripts, parenteados a ELE -- nunca a game",
 	function()
 		local scheduler = Runtime.Scheduler.new()
 		local game = Runtime.DataModel.new()
 		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
 
-		-- `game` já é `Runtime.DataModel`, que declara `GetService` tipado -- nenhum cast necessário.
-		local ok, err = pcall(function()
-			return game:GetService("ReplicatedStorage")
-		end)
+		local starterPlayer = game:GetService("StarterPlayer")
+		assert(
+			rawequal(starterPlayer.Parent, game),
+			"StarterPlayer deveria estar parenteado sob game -- é GetService quem parenteia, não o Initialize dele"
+		)
 
-		-- CAMINHO FELIZ, quando corrigido: `ok` deveria ser `true`, o retorno deveria ser uma
-		-- Instance com ClassName == "ReplicatedStorage", parenteada sob `game`, e uma SEGUNDA
-		-- chamada a GetService("ReplicatedStorage") deveria devolver o MESMO objeto (rawequal).
+		local starterPlayerScripts = starterPlayer:FindFirstChildOfClass("StarterPlayerScripts")
+		local starterCharacterScripts = starterPlayer:FindFirstChildOfClass("StarterCharacterScripts")
+
+		assert(starterPlayerScripts ~= nil, "StarterPlayer deveria nascer com um filho StarterPlayerScripts (behavior/StarterPlayer.luau, Initialize)")
+		assert(starterCharacterScripts ~= nil, "StarterPlayer deveria nascer com um filho StarterCharacterScripts (behavior/StarterPlayer.luau, Initialize)")
 		assert(
-			not ok,
-			"GATILHO DE REGRESSÃO: este teste espera que GetService ainda FALHE. Se passou a funcionar, o bug de " ..
-				"src/runtime/ClassRegistry.luau (IsAbstract bloqueando construção interna de Service) foi corrigido -- " ..
-				"reescreva este teste para o caminho feliz descrito no comentário acima."
+			rawequal((starterPlayerScripts :: Runtime.Instance).Parent, starterPlayer),
+			"StarterPlayerScripts deveria estar parenteado a StarterPlayer -- NUNCA a game (contrato do campo Initialize: nunca mexe no Parent da própria instância recebida)"
 		)
 		assert(
-			string.find(tostring(err), "'ReplicatedStorage' é abstrata, não pode ser instanciada", 1, true) ~= nil,
-			`mensagem de erro mudou de forma inesperada -- reconfirme o repro antes de mexer, recebeu: {err}`
+			rawequal((starterCharacterScripts :: Runtime.Instance).Parent, starterPlayer),
+			"StarterCharacterScripts deveria estar parenteado a StarterPlayer -- NUNCA a game"
 		)
+
+		-- Segunda chamada a GetService devolve o MESMO StarterPlayer (singleton) -- e portanto os
+		-- MESMOS filhos, sem duplicar (o Initialize só roda uma vez, na primeira construção).
+		local second = game:GetService("StarterPlayer")
+		assert(rawequal(starterPlayer, second), "segunda chamada a GetService('StarterPlayer') deveria devolver o MESMO objeto")
 	end
 )
 
 test(
-	"BLOQUEIO CONHECIDO: filhos fixos de StarterPlayer (StarterPlayerScripts/StarterCharacterScripts) ainda não são construíveis",
+	"a via PÚBLICA (Runtime.ClassRegistry.new) continua REJEITANDO StarterPlayerScripts -- script não pode Instance.new algo NotCreatable -- agora com a mensagem NOVA de task-runtime-023",
 	function()
-		-- Mesmo bug do teste acima, no segundo call site que o desenho de task-services-003 pedia
-		-- (StarterPlayer.Initialize criando estes 2 filhos). Testado direto via
-		-- Runtime.ClassRegistry.new (o que um `behavior/StarterPlayer.luau` teria que chamar) --
-		-- não há Services.new envolvido porque o problema é o mesmo em qualquer camada.
 		local ok, err = pcall(function()
 			return Runtime.ClassRegistry.new("StarterPlayerScripts", nil)
 		end)
-
-		-- CAMINHO FELIZ, quando corrigido: implementar src/services/behavior/StarterPlayer.luau
-		-- com Initialize criando StarterPlayerScripts/StarterCharacterScripts e parenteando cada
-		-- um a `self` (nunca setando o Parent da própria instância) -- ver a nota completa em
-		-- src/services/behavior/Index.luau.
 		assert(
 			not ok,
-			"GATILHO DE REGRESSÃO: este teste espera que a construção AINDA FALHE. Se passou a funcionar, implemente " ..
-				"behavior/StarterPlayer.luau (ver o comentário no caminho feliz acima) e mova este teste para lá."
+			"a via pública (ClassRegistry.new) deveria continuar rejeitando StarterPlayerScripts -- só NewEngineInstance (a via do motor, usada por GetService/Initialize) pode criá-la"
 		)
+		local message = tostring(err)
 		assert(
-			string.find(tostring(err), "'StarterPlayerScripts' é abstrata, não pode ser instanciada", 1, true) ~= nil,
-			`mensagem de erro mudou de forma inesperada, recebeu: {err}`
+			string.find(
+				message,
+				"classe 'StarterPlayerScripts' não é criável por script (tag NotCreatable do Roblox API Dump); construção interna do motor usa ClassRegistry.NewEngineInstance",
+				1,
+				true
+			) ~= nil,
+			`mensagem deveria ser a NOVA de task-runtime-023, não a antiga "é abstrata, não pode ser instanciada" (regressão desta retomada), recebeu: {message}`
 		)
 	end
 )
