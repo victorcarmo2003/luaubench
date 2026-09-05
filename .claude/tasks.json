@@ -456,7 +456,7 @@
       "id": "task-runtime-021",
       "title": "__index/__newindex resolvem filho por nome (ReplicatedStorage.Modules)",
       "description": "Achado do arquiteto ao desenhar services (2026-09-05) — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Decisão 4 — Como task-runtime-018 entra, e o buraco que ela abriria sozinha' INTEIRA antes de escrever qualquer linha. Contexto: InstanceMeta.__index (Instance.luau:493-539) resolve ClassName/Name/Parent -> sinais fixos -> métodos base -> métodos de classe -> data.properties[key]. NÃO existe nenhuma busca entre os filhos. No Roblox real, acesso a membro que não é membro da classe resolve para um FILHO de mesmo nome — 'ReplicatedStorage.Modules.Combat' é o padrão mais frequente do ecossistema Roblox inteiro. Hoje o LuauBench devolve nil (divergência silenciosa já ruim); com o modo estrito de task-runtime-018 ligado ANTES desta correção, viraria erro barulhento em código perfeitamente válido — regressão, não avanço. Por isso esta tarefa PRECEDE task-runtime-018. Escopo: src/runtime/Instance.luau + src/runtime/Instance.spec.luau, nenhum outro arquivo. (1) __index ganha um passo NOVO, imediatamente antes do fallback final: se a chave não foi resolvida como campo fixo/sinal/método base/método de classe/propriedade, procurar um filho direto de mesmo nome (equivalente a FindFirstChild(key) NÃO recursivo) e devolvê-lo se existir. Membro VENCE filho: a busca por filho vem DEPOIS de data.properties[key] ~= nil. (2) A ordem exata está escrita na Decisão 4 do desenho (passos 1..8) — implementar os passos que existem hoje (1..4, 6, 7 e o fallback leniente do 8); os passos 5 e 8-estrito são de task-runtime-018 e NÃO entram aqui. (3) __newindex NÃO ganha comportamento novo nesta tarefa (escrever sobre nome que é filho continua caindo no fallback leniente de hoje) — o erro correto para esse caso depende do schema e entra em 018; registrar isso em comentário. (4) HIPÓTESE NÃO CONFIRMADA, mesmo protocolo de task-runtime-002: a ordem 'membro vence filho' e o comportamento em colisão (workspace.Name havendo um filho chamado Name) NÃO foram confirmados contra o Roblox real nesta sessão — gravar comentário explícito no ponto exato do código dizendo que é hipótese, citando a tarefa de pesquisa task-services-006. revisor-runtime REPROVA se esse comentário não estiver presente. (5) Custo de performance: FindFirstChild é linear sobre children a cada miss de membro. Aceito nesta fase; se aparecer gargalo real, um índice por nome é tarefa própria — registrar a nota no código, não otimizar agora.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 7,
@@ -475,7 +475,9 @@
       ],
       "note": "BLOQUEIA task-runtime-018 e, por consequência, a primeira leva de services. Nenhum outro agente pode tocar src/runtime/Instance.luau enquanto esta tarefa estiver in-progress. Roda em PARALELO com task-services-001/002 (territórios distintos).",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "__index ganhou passo de resolucao de filho por nome (FindFirstChild nao-recursivo), rodando DEPOIS de data.properties (membro vence filho). __newindex sem mudanca de comportamento, so comentario. 42/42 testes (34 originais intactos + 8 novos). Comentario de hipotese nao confirmada presente, citando task-services-006. Regressao total intacta.",
+      "reviewResult": "APROVADO. Hipotese membro-vence-filho CONFIRMADA por task-services-006 (que terminou durante a propria revisao) via fonte oficial creator-docs. Revisor confirmou tudo rodando: 34 originais intactos, resolucao 2/3 niveis, precedencia com colisao real (propriedade/campo fixo/metodo base/metodo de classe todos vencendo filho), Parent=nil removendo da resolucao. Achado BAIXO: comentario de hipotese ficou desatualizado apos a confirmacao -- task-runtime-018 deve atualizar o texto quando tocar o trecho."
     },
     {
       "id": "task-runtime-022",
@@ -621,7 +623,7 @@
       "id": "task-services-006",
       "title": "Confirmar contra o Roblox real: membro vs. filho no __index, Instance.new de classe inválida, Hidden, Source, RenderStepped",
       "description": "Quatro pendências abertas pelo arquiteto em .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Pendências para o pesquisador'. NÃO bloqueia o início de nenhuma tarefa — roda em PARALELO com task-runtime-021 e com as tarefas de services —, mas todas precisam estar respondidas antes de revisor-services aprovar a primeira leva. (1) ORDEM MEMBRO VS. FILHO: no Roblox real, `instance.Foo` resolve para um FILHO chamado Foo quando Foo não é membro da classe — confirmar. E em colisão: havendo um filho chamado 'Name', `workspace.Name` devolve a propriedade ou o filho? A hipótese implementada em task-runtime-021 é 'membro sempre vence filho, FindFirstChild é a saída para o filho'. Confirmar também o que acontece ao ESCREVER num nome que é filho (`rs.Modules = 1`): erra, cria propriedade, ou substitui? (2) STRING EXATA de Instance.new para classe que não existe ('Instance.new(\"Frmae\")') e para classe NotCreatable ('Instance.new(\"Workspace\")') — a aproximação usada é `Unable to create an Instance of type \"X\"`, não confirmada. São a mesma mensagem nos dois casos? (3) Propriedade com tag `Hidden` no dump mas SEM `NotScriptable`: é acessível por um Script comum? A leitura assumida pelo gerador é que Hidden esconde do Property window do Studio, não do script — se estiver errado, 926 propriedades entram no schema indevidamente. (4) `script.Source` lido de um Script comum (Source é PluginSecurity no dump): erra com 'is not a valid member of', erra com mensagem de identidade/capability, ou devolve string vazia? E `RunService.RenderStepped` no SERVIDOR real: o membro existe, erra ao conectar, ou existe e nunca dispara? Devolver fatos com fonte (documentação oficial da Roblox e/ou o Full-API-Dump.json do commit 28360dea), marcando explicitamente o que ficar NÃO CONFIRMADO em vez de preencher com suposição, e salvar em .claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md. NÃO implementar nada — o resultado volta ao arquiteto se alguma resposta contradisser o desenho.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "pesquisador",
       "reviewer": "revisor-services",
       "wave": 7,
@@ -636,7 +638,8 @@
       "acceptance": "As quatro perguntas respondidas com fonte citada (URL/arquivo/trecho real), marcando explicitamente o que ficou não confirmado; relatório salvo no caminho indicado; recomendação clara de se alguma nota de fidelidade ou alguma regra de emissão do gerador precisa mudar — em especial se a hipótese 'membro vence filho' de task-runtime-021 ou a inclusão de Hidden no schema estiverem erradas.",
       "depends": [],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "Membro vence filho CONFIRMADO por fonte oficial (creator-docs, FindFirstChild). Instance.new invalido: alta confianca de mensagem unica Unable to create an Instance of type X nos dois casos. Hidden sem NotScriptable: CONFIRMADO acessivel (3 fontes independentes). CONTRADICOES com o desenho: (1) Script.Source erra por capability (nao por member-not-valid), premissa Source=PluginSecurity estava ERRADA (e Security=None, bloqueado por Capabilities que o gerador nao olha); (2) RenderStepped no servidor real ERRA ao conectar (nao existe-e-nunca-dispara, que era bug de Studio). Ambos precisam decisao do arquiteto antes de revisor-services aprovar leva 1. Relatorio: .claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md."
     }
   ]
 }

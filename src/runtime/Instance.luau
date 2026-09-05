@@ -547,12 +547,50 @@ InstanceMeta.__index = function(self: Instance, key: string): unknown
 
 	-- DIVERGÊNCIA CONHECIDA E ACEITA (task-runtime-016): no Roblox real, ler um nome que a classe
 	-- não declara ERRA ("X is not a valid member of Y", formato confirmado por citação verbatim
-	-- em .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md). Aqui cai em
-	-- data.properties[key] e devolve nil silenciosamente para nome desconhecido. Não é omissão:
-	-- é impossível diferenciar isso hoje de uma propriedade válida cujo valor corrente é nil
-	-- (ex.: Humanoid.SeatPart, ObjectValue.Value) sem um schema de propriedades por classe, que só
-	-- o Roblox API Dump fornece e que `services` ainda não gera — fecha em task-runtime-018.
-	return data.properties[key]
+	-- em .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md). Aqui, sem um schema
+	-- de propriedades por classe (que só o Roblox API Dump fornece e que `services` ainda não gera
+	-- — fecha em task-runtime-018), uma propriedade genérica já setada é servida abaixo; se não
+	-- houver propriedade com esse nome, a chave passa para a busca por filho (task-runtime-021,
+	-- logo abaixo) antes de finalmente cair em nil.
+	local propertyValue = data.properties[key]
+	if propertyValue ~= nil then
+		return propertyValue
+	end
+
+	--[[
+		task-runtime-021 — resolução de filho por nome (ex.: `ReplicatedStorage.Modules.Combat`).
+		Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, seção "Decisão 4 — Como
+		task-runtime-018 entra, e o buraco que ela abriria sozinha", "Ordem final de __index"
+		(passos 6/7): sem isto, o modo estrito que task-runtime-018 liga transformaria todo acesso
+		a filho por nome (o padrão mais frequente do ecossistema Roblox) num erro barulhento em
+		código válido.
+
+		HIPÓTESE NÃO CONFIRMADA CONTRA O ROBLOX REAL (mesmo protocolo de task-runtime-002 para a
+		ordem de eventos de reparenting): a pesquisa que confirmaria isto, task-services-006
+		("Confirmar contra o Roblox real: membro vs. filho no __index, ..."), está rodando em
+		paralelo e NÃO tinha respondido no momento em que este código foi escrito. Duas coisas são
+		assumidas aqui, nenhuma confirmada:
+		(a) MEMBRO VENCE FILHO — por isso a checagem de `propertyValue` acima roda ANTES desta
+		    busca por filho, e os campos fixos/sinais/métodos (passos 1-4, topo desta função) já
+		    interceptam a chave antes de chegarmos aqui. Em colisão real (ex.: um filho chamado
+		    "Name" ou "Destroy", ou uma propriedade genérica cujo nome também é o de um filho), a
+		    hipótese é que a Instance real do Roblox devolveria o membro/propriedade, nunca o
+		    filho — `FindFirstChild(key)` continua sendo a forma explícita de alcançar o filho
+		    nesse caso (ver testes correspondentes em Instance.spec.luau).
+		(b) A busca abaixo é não-recursiva e devolve exatamente o que `FindFirstChild(key)`
+		    devolveria — comportamento reaproveitado, nunca duplicado.
+
+		Se task-services-006 devolver o oposto (filho vence membro, ou uma regra mais específica
+		por tipo de membro), esta ordem muda e os testes que a fixam mudam junto — decisão de
+		revisor-runtime/arquiteto, não assumida por esta tarefa.
+
+		Custo de performance aceito nesta fase: esta busca é uma varredura LINEAR sobre os filhos
+		(Methods.FindFirstChild) a cada miss de membro — o mesmo custo de uma chamada explícita a
+		FindFirstChild, agora pago também no caminho implícito de __index. Se isso aparecer como
+		gargalo real (árvores com muitos filhos diretos e acesso por nome em laço quente), um
+		índice por nome é tarefa própria; não otimizado aqui.
+	]]
+	return Methods.FindFirstChild(self, key)
 end
 
 InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown): ()
@@ -601,6 +639,17 @@ InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown):
 	-- consegue distinguir "nome desconhecido" de "propriedade genérica legítima" aqui: cria a
 	-- propriedade em silêncio e dispara Changed. Fecha em task-runtime-018 quando o schema
 	-- existir (ver .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md).
+	--
+	-- task-runtime-021 (resolução de filho por nome, só em __index — ver comentário lá acima) NÃO
+	-- estende este fallback de propósito: escrever sobre um nome que hoje só existe como FILHO
+	-- (ex.: `rs.Modules = 1` quando `rs.Modules` é uma pasta) continua caindo aqui e cria uma
+	-- propriedade genérica homônima — o filho em si não é desparentado nem afetado, só passa a
+	-- ficar "encoberto" em leituras futuras por essa propriedade nova (propriedade vence filho,
+	-- mesma ordem de __index). O comportamento CORRETO para este caso no Roblox real — erra,
+	-- substitui, ou é rejeitado de outra forma — depende do schema e é decisão de
+	-- task-runtime-018 (ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 4",
+	-- "Ordem final de __newindex", passo 7, e a nota logo abaixo dela). É também uma das perguntas
+	-- em aberto na pesquisa task-services-006 ("o que acontece ao ESCREVER num nome que é filho").
 	data.properties[key] = value
 	data.changed:Fire(key)
 end

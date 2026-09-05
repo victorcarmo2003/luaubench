@@ -16,3 +16,6 @@ Thumbs.db
 # Ambiente local
 .env
 .dev.vars
+
+# Cache local do Roblox API Dump (baixado por URL fixada por SHA, nunca committado)
+.cache/

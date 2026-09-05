@@ -576,5 +576,103 @@ test("instância criada por NewBase direto (classMethods nil) mantém o comporta
 	assert(#fired == 1 and fired[1] == "SomeUnknownName", "deveria disparar Changed para a propriedade nova")
 end)
 
+--[[
+	Testes NOVOS da task-runtime-021 (resolução de filho por nome em __index/__newindex — ver
+	comentário de HIPÓTESE NÃO CONFIRMADA no ponto exato do código, dentro de InstanceMeta.__index
+	em Instance.luau, citando task-services-006). Nenhum dos 34 testes acima foi alterado.
+]]
+
+test("acessar por nome resolve para um filho direto quando não é membro (2 níveis, ReplicatedStorage.Modules)", function()
+	local rs = InstanceModule.NewBase("ReplicatedStorage", nil)
+	local modules = InstanceModule.NewBase("Folder", "Modules")
+	modules.Parent = rs
+
+	assert(asDynamic(rs).Modules == modules, "acessar rs.Modules deveria devolver o filho 'Modules'")
+end)
+
+test("acessar por nome resolve um neto encadeado (3 níveis, ReplicatedStorage.Modules.Combat)", function()
+	local rs = InstanceModule.NewBase("ReplicatedStorage", nil)
+	local modules = InstanceModule.NewBase("Folder", "Modules")
+	local combat = InstanceModule.NewBase("ModuleScript", "Combat")
+	modules.Parent = rs
+	combat.Parent = modules
+
+	local resolvedModules = asDynamic(rs).Modules
+	assert(resolvedModules == modules, "rs.Modules deveria resolver o filho direto")
+	assert(
+		asDynamic(resolvedModules :: Instance).Combat == combat,
+		"rs.Modules.Combat deveria resolver o neto encadeado, um nível de __index por vez"
+	)
+end)
+
+test("propriedade de mesmo nome VENCE o filho homônimo (hipótese 'membro vence filho', ver comentário em Instance.luau)", function()
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	local homonymousChild = InstanceModule.NewBase("Folder", "Combat")
+	homonymousChild.Parent = parent
+	InstanceModule.SetPropertyRaw(parent, "Combat", "sou a propriedade, não o filho")
+
+	assert(
+		asDynamic(parent).Combat == "sou a propriedade, não o filho",
+		"propriedade setada via SetPropertyRaw deveria vencer o filho homônimo"
+	)
+end)
+
+test("campo fixo Name vence filho homônimo chamado 'Name'", function()
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	local homonymousChild = InstanceModule.NewBase("Folder", "Name")
+	homonymousChild.Parent = parent
+
+	assert(parent.Name == "Pai", "parent.Name deveria continuar sendo o Name da própria instância, não o filho")
+	assert(parent:FindFirstChild("Name") == homonymousChild, "o filho 'Name' continua alcançável via FindFirstChild")
+end)
+
+test("método base Destroy vence filho homônimo chamado 'Destroy'", function()
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	local homonymousChild = InstanceModule.NewBase("Folder", "Destroy")
+	homonymousChild.Parent = parent
+
+	assert(typeof(asDynamic(parent).Destroy) == "function", "parent.Destroy deveria continuar sendo o método base, não o filho")
+	assert(parent:FindFirstChild("Destroy") == homonymousChild, "o filho 'Destroy' continua alcançável via FindFirstChild")
+end)
+
+test("nome sem membro e sem filho continua devolvendo nil (modo leniente intacto)", function()
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	assert(asDynamic(parent).NomeQueNaoExiste == nil, "nome sem membro e sem filho deveria continuar nil")
+end)
+
+test("remover o filho (Parent = nil) faz a leitura por nome voltar a nil", function()
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	local child = InstanceModule.NewBase("Folder", "Temporario")
+	child.Parent = parent
+
+	assert(asDynamic(parent).Temporario == child, "deveria resolver o filho enquanto ele está parenteado")
+
+	child.Parent = nil
+
+	assert(asDynamic(parent).Temporario == nil, "depois de desparentar, a leitura por nome deveria voltar a nil")
+end)
+
+test(
+	"escrever sobre um nome que hoje é filho cria propriedade genérica homônima sem afetar o filho (__newindex inalterado, comportamento correto fecha em task-runtime-018)",
+	function()
+		local parent = InstanceModule.NewBase("Folder", "Pai")
+		local child = InstanceModule.NewBase("Folder", "Modules")
+		child.Parent = parent
+
+		asDynamic(parent).Modules = "não deveria afetar o filho"
+
+		assert(
+			InstanceModule.GetPropertyRaw(parent, "Modules") == "não deveria afetar o filho",
+			"deveria ter criado a propriedade genérica com o valor atribuído"
+		)
+		assert(child.Parent == parent, "o filho não deveria ter sido desparentado nem destruído")
+		assert(parent:FindFirstChild("Modules") == child, "o filho continua alcançável via FindFirstChild")
+		assert(
+			asDynamic(parent).Modules == "não deveria afetar o filho",
+			"leitura por nome agora resolve a propriedade nova, que vence o filho (mesma ordem de __index)"
+		)
+	end
+)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)
