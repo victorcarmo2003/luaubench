@@ -35,12 +35,16 @@ local function fixturePath(name: string): string
 	return `{FIXTURES_ROOT}/{name}`
 end
 
--- As três classes "Service" fixas pra todo este spec -- nunca vem de `services` de verdade
--- (Decisão 3/4: `IsServiceClass` é sempre injetada).
+-- As classes "Service" fixas pra todo este spec -- nunca vem de `services` de verdade
+-- (Decisão 3/4: `IsServiceClass` é sempre injetada). `StarterPlayer` adicionada pra task-cli-014
+-- (é Service real no dump -- `Manifest.luau` confirma `IsService = true` -- precisa resolver como
+-- filho direto do DataModel pra que os testes de StarterPlayerScripts/StarterCharacterScripts,
+-- que são filhos DELA, façam sentido).
 local FAKE_SERVICE_CLASSES: { [string]: boolean } = {
 	ReplicatedStorage = true,
 	ServerScriptService = true,
 	Workspace = true,
+	StarterPlayer = true,
 }
 
 local FAKE_OPTIONS: TreePlanner.PlanOptions = {
@@ -535,6 +539,112 @@ test("InstancePlan.Diagnostics contém os mesmos diagnostics acumulados no Bag",
 	end
 	assert(#plan.Diagnostics == #bag:All(), "InstancePlan.Diagnostics deveria ter o mesmo tamanho que bag:All()")
 	assert(countByCode(bag, "plan/optional-path-omitted") == 1, "sanity check: exatamente 1 diagnostic de path opcional omitido")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- CORREÇÃO task-cli-014 (pesquisa-formato-projeto-rojo-2026-09-05.md, seção "Correção
+-- 2026-09-05"): inferência de ClassName pra filhos fixos conhecidos --
+-- StarterPlayer->{StarterPlayerScripts, StarterCharacterScripts} e Workspace->Terrain -- os dois
+-- ramos que faltavam de `infer_class_name`, além do já existente DataModel->Service. Bug real
+-- bloqueava 17/17 dos .project.json reais do usuário (todo projeto Rojo com StarterPlayerScripts
+-- populado, o padrão universal de `rojo init`).
+--------------------------------------------------------------------------------------------------
+
+test("Plan: StarterPlayer->StarterPlayerScripts/StarterCharacterScripts e Workspace->Terrain são inferidos SEM $className -- repro exato do bug real (17/17 projetos do usuário)", function()
+	local plan, bag = planFixture("fixed-children")
+	assert(not bag:HasErrors(), `fixture 'fixed-children' NÃO deveria produzir nenhum erro -- bag: {#bag:All()} diagnostic(s)`)
+	assert(plan ~= nil, "fixture 'fixed-children' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+
+	local starterPlayer = findRootByName(plan, "StarterPlayer")
+	assert(starterPlayer ~= nil, "deveria haver uma root 'StarterPlayer' (Service inferido -- ramo já existente, não é o novo)")
+	if starterPlayer == nil then
+		return
+	end
+	assert(starterPlayer.ClassName == "StarterPlayer", "StarterPlayer deveria manter seu próprio ClassName (Service)")
+	assert(starterPlayer.IsServiceRoot == true, "StarterPlayer sob a raiz É um Service de verdade -- IsServiceRoot deveria ser true")
+
+	local starterPlayerScripts = findChildByName(starterPlayer, "StarterPlayerScripts")
+	assert(starterPlayerScripts ~= nil, "StarterPlayer deveria ter um filho 'StarterPlayerScripts' SEM $className explícito (bug real)")
+	if starterPlayerScripts ~= nil then
+		assert(starterPlayerScripts.ClassName == "StarterPlayerScripts", `ClassName deveria ser inferido como 'StarterPlayerScripts', recebeu '{starterPlayerScripts.ClassName}'`)
+		assert(starterPlayerScripts.IsServiceRoot == false, "StarterPlayerScripts NÃO é um Service real (IsService=false no dump) -- IsServiceRoot deveria ficar false")
+	end
+
+	local starterCharacterScripts = findChildByName(starterPlayer, "StarterCharacterScripts")
+	assert(starterCharacterScripts ~= nil, "StarterPlayer deveria ter um filho 'StarterCharacterScripts' SEM $className explícito")
+	if starterCharacterScripts ~= nil then
+		assert(starterCharacterScripts.ClassName == "StarterCharacterScripts", `ClassName deveria ser inferido como 'StarterCharacterScripts', recebeu '{starterCharacterScripts.ClassName}'`)
+		assert(starterCharacterScripts.IsServiceRoot == false, "StarterCharacterScripts também não é Service")
+	end
+
+	local workspaceNode = findRootByName(plan, "Workspace")
+	assert(workspaceNode ~= nil, "deveria haver uma root 'Workspace'")
+	if workspaceNode == nil then
+		return
+	end
+
+	local terrain = findChildByName(workspaceNode, "Terrain")
+	assert(terrain ~= nil, "Workspace deveria ter um filho 'Terrain' SEM $className explícito (segundo par fixo confirmado)")
+	if terrain ~= nil then
+		assert(terrain.ClassName == "Terrain", `ClassName deveria ser inferido como 'Terrain', recebeu '{terrain.ClassName}'`)
+		assert(terrain.IsServiceRoot == false, "Terrain não é um Service -- IsServiceRoot deveria ficar false")
+	end
+end)
+
+test("Plan: $className explícito vence a inferência de filho fixo (mesma precedência do Service)", function()
+	local plan, bag = planFixture("fixed-child-explicit-override")
+	assert(not bag:HasErrors(), "explicit $className não deveria produzir erro")
+	assert(plan ~= nil, "fixture 'fixed-child-explicit-override' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+
+	local starterPlayer = findRootByName(plan, "StarterPlayer")
+	assert(starterPlayer ~= nil, "deveria haver uma root 'StarterPlayer'")
+	if starterPlayer == nil then
+		return
+	end
+
+	local child = findChildByName(starterPlayer, "StarterPlayerScripts")
+	assert(child ~= nil, "deveria haver um filho 'StarterPlayerScripts'")
+	if child ~= nil then
+		assert(child.ClassName == "Folder", `$className explícito ('Folder') deveria vencer a inferência de filho fixo ('StarterPlayerScripts') -- recebeu '{child.ClassName}'`)
+	end
+end)
+
+test("Plan: $path que resolve a Folder sob um pai com filho fixo reconhecido -- a inferência VENCE o Folder genérico (mesma precedência do Service)", function()
+	local plan, bag = planFixture("fixed-child-path-folder")
+	assert(not bag:HasErrors(), "$path resolvendo a Folder não deveria produzir erro")
+	assert(plan ~= nil, "fixture 'fixed-child-path-folder' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+
+	local workspaceNode = findRootByName(plan, "Workspace")
+	assert(workspaceNode ~= nil, "deveria haver uma root 'Workspace'")
+	if workspaceNode == nil then
+		return
+	end
+
+	local terrain = findChildByName(workspaceNode, "Terrain")
+	assert(terrain ~= nil, "deveria haver um filho 'Terrain'")
+	if terrain ~= nil then
+		assert(terrain.ClassName == "Terrain", `'$path' resolvendo pra Folder puro NÃO deveria vencer a inferência de filho fixo -- recebeu '{terrain.ClassName}'`)
+	end
+end)
+
+test("Plan: par pai->filho fixo é MUTUAMENTE EXCLUSIVO por parentClassName -- 'Terrain' sob 'StarterPlayer' (pai errado) NÃO é inferido, produz erro 'faltou informação'", function()
+	local plan, bag = planFixture("fixed-child-wrong-parent")
+	assert(plan == nil, "'Terrain' sob 'StarterPlayer' (pai errado -- só é filho fixo de 'Workspace') deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostic = findByCode(bag, "plan/missing-class-name")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/missing-class-name' -- a inferência de filho fixo NUNCA deveria disparar pro pai errado")
+	if diagnostic ~= nil then
+		assert(diagnostic.NodePath == "tree.StarterPlayer.Terrain", "Diagnostic deveria nomear o nó certo")
+	end
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

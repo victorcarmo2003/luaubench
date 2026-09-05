@@ -255,5 +255,40 @@ test("ClassifyDir: init.server.luau vence init.client.luau quando os dois coexis
 	assert(kind == "Script", `init.server.luau deveria vencer init.client.luau -- recebeu {kind}`)
 end)
 
+--------------------------------------------------------------------------------------------------
+-- InferFixedChildClassName -- CORREÇÃO task-cli-014 (pesquisa-formato-projeto-rojo-2026-09-05.md,
+-- seção "Correção 2026-09-05"): ramos 2 e 3 (hardcoded) de `infer_class_name` do Rojo real --
+-- StarterPlayer->{StarterPlayerScripts, StarterCharacterScripts} e Workspace->Terrain. Ramo 1
+-- (DataModel->Service, dinâmico) NÃO é coberto aqui -- fica em TreePlanner.spec.luau, porque
+-- depende de `options.IsServiceClass` injetada.
+--------------------------------------------------------------------------------------------------
+
+test("InferFixedChildClassName: StarterPlayer -> StarterPlayerScripts (par fixo confirmado)", function()
+	local className = SyncRules.InferFixedChildClassName("StarterPlayer", "StarterPlayerScripts")
+	assert(className == "StarterPlayerScripts", `esperava 'StarterPlayerScripts', recebeu '{className}'`)
+end)
+
+test("InferFixedChildClassName: StarterPlayer -> StarterCharacterScripts (par fixo confirmado)", function()
+	local className = SyncRules.InferFixedChildClassName("StarterPlayer", "StarterCharacterScripts")
+	assert(className == "StarterCharacterScripts", `esperava 'StarterCharacterScripts', recebeu '{className}'`)
+end)
+
+test("InferFixedChildClassName: Workspace -> Terrain (par fixo confirmado)", function()
+	local className = SyncRules.InferFixedChildClassName("Workspace", "Terrain")
+	assert(className == "Terrain", `esperava 'Terrain', recebeu '{className}'`)
+end)
+
+test("InferFixedChildClassName: nome que NÃO é filho fixo do pai reconhecido -> nil", function()
+	assert(SyncRules.InferFixedChildClassName("StarterPlayer", "Terrain") == nil, "'Terrain' não é filho fixo de StarterPlayer")
+	assert(SyncRules.InferFixedChildClassName("Workspace", "StarterPlayerScripts") == nil, "'StarterPlayerScripts' não é filho fixo de Workspace")
+	assert(SyncRules.InferFixedChildClassName("StarterPlayer", "Foo") == nil, "'Foo' não é filho fixo de nada")
+end)
+
+test("InferFixedChildClassName: parentClassName não reconhecido (nem StarterPlayer nem Workspace) -> nil, mesmo com nome coincidente", function()
+	assert(SyncRules.InferFixedChildClassName("DataModel", "Terrain") == nil, "ramo DataModel->Service NÃO é resolvido por esta função (fica em TreePlanner, dinâmico)")
+	assert(SyncRules.InferFixedChildClassName("Folder", "Terrain") == nil, "'Folder' não é um dos dois pais hardcoded reconhecidos")
+	assert(SyncRules.InferFixedChildClassName("Teams", "AnyTeam") == nil, "'Teams' não tem filho fixo no Rojo real (confirmado exaustivo na pesquisa)")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

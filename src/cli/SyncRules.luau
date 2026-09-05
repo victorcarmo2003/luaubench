@@ -35,6 +35,26 @@ export type DirKind = "NestedProject" | "ModuleScript" | "Script" | "LocalScript
 
 local SyncRules = {}
 
+--[[
+	CORREÇÃO task-cli-014 (achado do testador, pesquisa-formato-projeto-rojo-2026-09-05.md, seção
+	"Correção 2026-09-05"): `infer_class_name` do Rojo real (`src/snapshot_middleware/project.rs`)
+	tem 3 ramos `if`/`else if` MUTUAMENTE EXCLUSIVOS por `parentClassName` -- não é "tenta os 3",
+	é "só um se aplica, escolhido pelo pai":
+		1. `parentClassName == "DataModel"` -> qualquer classe com a tag `Service` no dump
+		   (DINÂMICO -- `TreePlanner` resolve isso à parte, via `options.IsServiceClass` injetado
+		   de `services`, porque `SyncRules` não tem acesso a nenhuma classe real).
+		2. `parentClassName == "StarterPlayer"` -> `"StarterPlayerScripts"`/`"StarterCharacterScripts"`
+		   (HARDCODED -- comparação de string literal, nunca consulta reflection database).
+		3. `parentClassName == "Workspace"` -> `"Terrain"` (HARDCODED, mesma forma).
+	Esta tabela cobre SÓ os ramos 2 e 3 (hardcoded, dados puros) -- o ramo 1 (Service, dinâmico)
+	fica em `TreePlanner.luau`, que já o resolvia corretamente antes desta correção. Os dois
+	mecanismos nunca competem pelo mesmo nó (um nó só tem UM `parentClassName` concreto).
+]]
+local FIXED_CHILD_CLASS_NAMES: { [string]: { [string]: boolean } } = {
+	StarterPlayer = { StarterPlayerScripts = true, StarterCharacterScripts = true },
+	Workspace = { Terrain = true },
+}
+
 -- `endsWith` + índice de corte -- puramente textual (nenhum acesso a filesystem neste módulo).
 local function endsWith(text: string, suffix: string): boolean
 	local suffixLength = #suffix
@@ -154,6 +174,25 @@ function SyncRules.ClassifyDir(_dirName: string, entries: { string }): (DirKind,
 	end
 
 	return "Folder", nil
+end
+
+-- Ramos hardcoded (2 e 3) de `infer_class_name` do Rojo real -- ver comentário da tabela
+-- `FIXED_CHILD_CLASS_NAMES` acima. NÃO cobre o ramo 1 (`parentClassName == "DataModel"` ->
+-- Service): esse é dinâmico (consulta o dump via `IsServiceClass`, injetada de fora) e continua
+-- resolvido por `TreePlanner.luau`, nunca por este módulo (Decisão 6: `SyncRules` é dados puros,
+-- sem I/O nem acoplamento a `runtime`/`services`). Devolve `nil` quando `parentClassName` não é
+-- um dos pais reconhecidos (`"StarterPlayer"`/`"Workspace"`) OU `name` não é um filho fixo
+-- daquele pai -- caller (`TreePlanner`) trata `nil` como "nenhuma inferência disponível", igual
+-- ao `infer_class_name` real que cai no `None` final.
+function SyncRules.InferFixedChildClassName(parentClassName: string, name: string): string?
+	local knownChildren = FIXED_CHILD_CLASS_NAMES[parentClassName]
+	if knownChildren == nil then
+		return nil
+	end
+	if knownChildren[name] then
+		return name
+	end
+	return nil
 end
 
 return SyncRules

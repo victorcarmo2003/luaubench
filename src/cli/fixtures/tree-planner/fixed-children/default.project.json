@@ -1,0 +1,13 @@
+{
+  "name": "FixedChildren",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "StarterPlayerScripts": {},
+      "StarterCharacterScripts": {}
+    },
+    "Workspace": {
+      "Terrain": {}
+    }
+  }
+}

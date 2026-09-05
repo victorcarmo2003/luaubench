@@ -1,0 +1,11 @@
+{
+  "name": "FixedChildPathFolder",
+  "tree": {
+    "$className": "DataModel",
+    "Workspace": {
+      "Terrain": {
+        "$path": "terrain-folder"
+      }
+    }
+  }
+}

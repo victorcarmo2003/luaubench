@@ -1,0 +1,9 @@
+{
+  "name": "FixedChildWrongParent",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "Terrain": {}
+    }
+  }
+}

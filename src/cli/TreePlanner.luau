@@ -15,12 +15,22 @@
 	Resolve `ClassName` na MESMA precedência do Rojo real (pesquisa, seção 4):
 		1. `$className` explícito;
 		2. classe inferida do `$path` (via `SyncRules`);
-		3. inferência de Service -- só quando o pai é o `DataModel` (raiz é chamada com
-		   `parentClassName = nil`, então a raiz em si NUNCA tem inferência de Service; seus
-		   FILHOS diretos têm, se e só se a raiz resolveu para "DataModel");
+		3. inferência de filho fixo/Service, dependendo de QUEM é o pai (raiz é chamada com
+		   `parentClassName = nil`, então a raiz em si NUNCA tem essa inferência; seus FILHOS
+		   diretos têm, dependendo do `ClassName` da raiz/pai já resolvido) -- CORREÇÃO
+		   task-cli-014 (pesquisa-formato-projeto-rojo-2026-09-05.md, seção "Correção
+		   2026-09-05"): `infer_class_name` do Rojo real tem 3 ramos `if`/`else if` MUTUAMENTE
+		   EXCLUSIVOS por `parentClassName` -- nunca "tenta os 3", sempre "só um se aplica":
+		     a. pai == "DataModel" -> qualquer classe com tag `Service` no dump (dinâmico, via
+		        `options.IsServiceClass` injetada -- só este ramo resolvido aqui em
+		        `TreePlanner`, porque depende de uma classe real);
+		     b. pai == "StarterPlayer" -> "StarterPlayerScripts"/"StarterCharacterScripts"
+		        (hardcoded, `SyncRules.InferFixedChildClassName`);
+		     c. pai == "Workspace" -> "Terrain" (hardcoded, mesma função de `SyncRules`).
 		4. nada resolve -> erro nomeando o nó (família de mensagem real do Rojo).
 	Conflito `$className` + `$path`: só é legal se `$path` resolver para `Folder`. `$path` que
-	resolve a `Folder` sob a raiz com nome de Service -> a inferência de Service VENCE.
+	resolve a `Folder` sob um pai com um nome de filho fixo/Service reconhecido -> a inferência
+	(ramo a, b ou c acima) VENCE sobre o `Folder` genérico.
 
 	`$path` é sempre relativo à pasta do `.project.json` QUE DEFINE aquele nó (Decisão 8) --
 	`containerFolderPath` é recarregado a cada projeto aninhado, nunca uma variável global de
@@ -592,9 +602,19 @@ resolveCore = function(
 		explicitClassName = jsonNode.ClassName
 	end
 
-	local serviceClassName: string? = nil
-	if parentClassName == "DataModel" and options.IsServiceClass(name) then
-		serviceClassName = name
+	-- CORREÇÃO task-cli-014: `infer_class_name` real tem 3 ramos MUTUAMENTE EXCLUSIVOS por
+	-- `parentClassName` (comentário do cabeçalho do arquivo) -- por isso é um `if`/`elseif`, não
+	-- três checagens independentes que poderiam competir pelo mesmo nó. Ramo "DataModel -> Service"
+	-- fica AQUI (depende de `options.IsServiceClass`, que só `TreePlanner` recebe injetado); ramos
+	-- "StarterPlayer"/"Workspace" -> filho fixo ficam em `SyncRules` (dados puros, sem depender de
+	-- nenhuma classe real).
+	local inferredClassName: string? = nil
+	if parentClassName == "DataModel" then
+		if options.IsServiceClass(name) then
+			inferredClassName = name
+		end
+	elseif parentClassName ~= nil then
+		inferredClassName = SyncRules.InferFixedChildClassName(parentClassName, name)
 	end
 
 	-- 1) `$path` (explícito) OU descoberta do pai -> caminho absoluto alvo (ou omissão/erro).
@@ -639,7 +659,7 @@ resolveCore = function(
 					})
 					return nil
 				end
-			elseif explicitClassName == nil and serviceClassName == nil then
+			elseif explicitClassName == nil and inferredClassName == nil then
 				bag:Add({
 					Severity = "info",
 					Code = "plan/optional-path-omitted",
@@ -869,21 +889,24 @@ resolveCore = function(
 		}
 	end
 
-	-- 4) ClassName final -- precedência real do Rojo (Decisão 4).
-	local pathOrServiceClassName: string? = nil
-	if pathClassName == "Folder" and serviceClassName ~= nil then
-		pathOrServiceClassName = serviceClassName
+	-- 4) ClassName final -- precedência real do Rojo (Decisão 4). `inferredClassName` cobre os 3
+	-- ramos mutuamente exclusivos (Service, StarterPlayer->filho fixo, Workspace->Terrain) --
+	-- CORREÇÃO task-cli-014, ver comentário no ponto onde é calculado, acima.
+	local pathOrInferredClassName: string? = nil
+	if pathClassName == "Folder" and inferredClassName ~= nil then
+		pathOrInferredClassName = inferredClassName
 	elseif pathClassName ~= nil then
-		pathOrServiceClassName = pathClassName
+		pathOrInferredClassName = pathClassName
 	else
-		pathOrServiceClassName = serviceClassName
+		pathOrInferredClassName = inferredClassName
 	end
 
 	if metaClassNameOverride ~= nil then
 		-- Só chega aqui quando `pathClassName == "Folder"` (checado na leitura do
 		-- `init.meta.json` acima) -- sobrescreve o que a Decisão 4 teria resolvido pra esse
-		-- Folder, incluindo uma eventual inferência de Service (que só valeria pra um Folder).
-		pathOrServiceClassName = metaClassNameOverride
+		-- Folder, incluindo uma eventual inferência de Service/filho fixo (que só valeria pra um
+		-- Folder).
+		pathOrInferredClassName = metaClassNameOverride
 	end
 
 	local finalClassName: string? = nil
@@ -901,7 +924,7 @@ resolveCore = function(
 		end
 		finalClassName = explicitClassName
 	else
-		finalClassName = pathOrServiceClassName
+		finalClassName = pathOrInferredClassName
 	end
 
 	if finalClassName == nil then
@@ -917,6 +940,20 @@ resolveCore = function(
 
 	-- 5) `IsServiceRoot` -- só quando o pai é o DataModel E a classe final É mesmo uma Service,
 	--    independente de como ela foi resolvida (explícita, de `$path`, ou inferida).
+	--
+	-- DECISÃO task-cli-014: este bloco NÃO ganha um ramo equivalente para
+	-- StarterPlayer->{StarterPlayerScripts, StarterCharacterScripts}/Workspace->Terrain.
+	-- `IsServiceRoot` não significa "teve o ClassName inferido sem $className" -- significa
+	-- "materializar via `game:GetService(ClassName)` em vez de `Services.new` + `.Parent`"
+	-- (`TreeMaterializer.luau`, comentário de cabeçalho: "Nó com IsServiceRoot ->
+	-- game:GetService(ClassName) ... Todo o resto -> Services.new"). StarterPlayerScripts/
+	-- StarterCharacterScripts/Terrain NÃO são Services do Roblox real (não têm a tag `Service`
+	-- no dump -- `Manifest.luau` confirma `IsService = false` pras três) -- não existe
+	-- `game:GetService("StarterPlayerScripts")` no Roblox de verdade, então continuam
+	-- materializadas como Instance comum (`Services.new` + `.Parent`), IGUAL a qualquer outro
+	-- filho. A checagem abaixo continua restrita a `options.IsServiceClass(finalClassName)` de
+	-- propósito -- generalizá-la pra "teve inferência" marcaria esses três como Service por
+	-- engano.
 	local isServiceRoot = false
 	if parentClassName == "DataModel" and options.IsServiceClass(finalClassName) then
 		if name == finalClassName then

@@ -1,0 +1,11 @@
+{
+  "name": "FixedChildExplicitOverride",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "$className": "Folder"
+      }
+    }
+  }
+}
