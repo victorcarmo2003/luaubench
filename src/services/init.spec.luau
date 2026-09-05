@@ -450,6 +450,132 @@ test("GetDumpVersion() devolve exatamente Manifest.DumpCommit/Manifest.DumpVersi
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-services-011 (arquiteto-runtime-2026-09-04.md, "Revisão pós-integração 2026-09-05 (5)",
+-- subseção "Lado services"): `Services.Register()` (chamado por `Services.Bootstrap`, já rodado
+-- acima) instala `resolveUnknownClass` em `Runtime.UnknownClassResolver`. `resolveUnknownClass`
+-- em si é um `local function` deste arquivo -- não há (nem deve haver, ver o cabeçalho do arquivo:
+-- "nenhuma função NOVA exportada") um jeito de chamá-lo direto de fora. A única superfície
+-- observável dos três veredictos que ele produz é `game:GetService(...)`, depois de
+-- `Services.Bootstrap` -- é por isso que os testes abaixo passam por `game:GetService` para provar
+-- CADA veredito individualmente (com a precondição do manifesto real documentada em cada um), e o
+-- teste final replica os três juntos como o cenário de ponta-a-ponta que é o objetivo real desta
+-- leva (acceptance do board).
+--------------------------------------------------------------------------------------------------
+
+-- Toda mensagem alcançável por `game:GetService(...)` é da família Roblox (inglês, sem prefixo) ou
+-- da família `[LuauBench]` (inglês, com prefixo) -- nunca de engenharia interna em português
+-- (regra de idioma dos erros). Um byte fora do intervalo ASCII (0-127) é sinal confiável de
+-- caractere acentuado do português vazando para uma dessas duas famílias, já que nenhuma das duas
+-- usa acento em inglês -- mais barato e mais robusto do que listar cada acento (á, ã, ç, ...) na
+-- mão.
+local function hasNonAsciiByte(text: string): boolean
+	return string.find(text, "[\128-\255]") ~= nil
+end
+
+test(
+	"veredito NotAClass: game:GetService('Frmae') (ausente do manifesto real) erra a família Roblox 'is not a valid Service name', sem prefixo [LuauBench] e sem português",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		assert(not Services.IsKnownClass("Frmae"), "'Frmae' precisa estar ausente do manifesto real para exercitar o veredito NotAClass")
+
+		local ok, err = pcall(function()
+			return game:GetService("Frmae")
+		end)
+		assert(not ok, "game:GetService('Frmae') deveria erro -- nome que não existe no Roblox")
+		local message = tostring(err)
+		assert(
+			string.find(message, "'Frmae' is not a valid Service name", 1, true) ~= nil,
+			`mensagem deveria bater com a família Roblox real (NotAClass), recebeu: {message}`
+		)
+		assert(string.find(message, "[LuauBench]", 1, true) == nil, "NotAClass nunca leva o prefixo [LuauBench] -- tem contraparte real no Roblox")
+		assert(not hasNonAsciiByte(message), `mensagem de GetService NÃO deveria conter caractere de português, recebeu: {message}`)
+	end
+)
+
+test(
+	"veredito NotAService: game:GetService('Frame') (classe real do manifesto SEM tag Service) devolve nil, sem erro",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		assert(Services.IsKnownClass("Frame"), "'Frame' precisa existir no manifesto real para exercitar o veredito NotAService")
+		assert(not Services.IsServiceClass("Frame"), "'Frame' precisa NÃO carregar a tag Service para exercitar o veredito NotAService")
+
+		local service = game:GetService("Frame")
+		assert(service == nil, "game:GetService('Frame') deveria devolver nil -- classe real do dump sem a tag Service, igual ao Roblox real")
+	end
+)
+
+test(
+	"veredito ServiceNotSimulated: game:GetService('Teams') (Service real do manifesto, Covered=false) erra com [LuauBench] citando a DumpVersion, sem português",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		assert(Services.IsKnownClass("Teams"), "'Teams' precisa existir no manifesto real para exercitar o veredito ServiceNotSimulated")
+		assert(Services.IsServiceClass("Teams"), "'Teams' precisa carregar a tag Service para exercitar o veredito ServiceNotSimulated")
+		assert(
+			not Services.IsSimulatedClass("Teams"),
+			"'Teams' precisa estar fora da leva atual (Covered=false, não registrada) para exercitar o veredito ServiceNotSimulated"
+		)
+
+		local ok, err = pcall(function()
+			return game:GetService("Teams")
+		end)
+		assert(not ok, "game:GetService('Teams') deveria erro -- Service real do dump ainda não simulado por LuauBench")
+		local message = tostring(err)
+		local version = Services.GetDumpVersion()
+		assert(
+			string.find(message, "[LuauBench]", 1, true) ~= nil,
+			`mensagem de Service não simulado DEVE trazer o prefixo [LuauBench], recebeu: {message}`
+		)
+		assert(
+			string.find(message, `Teams exists in the Roblox API Dump ({version.Version}) but is not simulated by LuauBench yet`, 1, true) ~= nil,
+			`mensagem deveria citar a versão do dump ({version.Version}) -- MESMA frase de Services.new caso 3 (unsimulatedClassMessage fatorada), recebeu: {message}`
+		)
+		assert(not hasNonAsciiByte(message), `mensagem de GetService NÃO deveria conter caractere de português, recebeu: {message}`)
+	end
+)
+
+test(
+	"TESTE PONTA-A-PONTA (acceptance explícito do board): depois de Services.Bootstrap, game:GetService('Teams')/'Frmae'/'Frame' cobrem os três vereditos, e NENHUMA das três mensagens contém caractere de português",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		local _, teamsErr = pcall(function()
+			return game:GetService("Teams")
+		end)
+		local _, frmaeErr = pcall(function()
+			return game:GetService("Frmae")
+		end)
+		local frameResult = game:GetService("Frame")
+
+		local teamsMessage = tostring(teamsErr)
+		local frmaeMessage = tostring(frmaeErr)
+
+		assert(
+			string.find(teamsMessage, "[LuauBench]", 1, true) ~= nil,
+			`game:GetService('Teams') deveria erro com [LuauBench], recebeu: {teamsMessage}`
+		)
+		assert(
+			string.find(frmaeMessage, "is not a valid Service name", 1, true) ~= nil,
+			`game:GetService('Frmae') deveria erro com "is not a valid Service name", recebeu: {frmaeMessage}`
+		)
+		assert(frameResult == nil, "game:GetService('Frame') deveria devolver nil")
+
+		assert(not hasNonAsciiByte(teamsMessage), `mensagem de 'Teams' NÃO deveria conter caractere de português, recebeu: {teamsMessage}`)
+		assert(not hasNonAsciiByte(frmaeMessage), `mensagem de 'Frmae' NÃO deveria conter caractere de português, recebeu: {frmaeMessage}`)
+	end
+)
+
+--------------------------------------------------------------------------------------------------
 -- Teste de fumaça do bootstrap COMPLETO -- os 8 passos documentados no cabeçalho de init.luau,
 -- com um `Runtime.Sandbox.Run` REAL (nunca mock, nunca coroutine.resume cru por fora do
 -- Scheduler): `Runtime.DataModel.new` -> `Services.Bootstrap` -> `game:GetService` (chamado DE

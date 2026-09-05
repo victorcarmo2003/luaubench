@@ -115,7 +115,8 @@
 	  2. `local Services = require("../services")`
 	  3. `local scheduler = Runtime.Scheduler.new()`
 	  4. `local game      = Runtime.DataModel.new()`
-	  5. `Services.Bootstrap({ scheduler = scheduler, dataModel = game })` -- registra as classes
+	  5. `Services.Bootstrap({ scheduler = scheduler, dataModel = game })` -- registra as classes E
+	     instala o resolvedor de classe desconhecida (task-services-011, ver abaixo)
 	  6. `game:GetService("ReplicatedStorage")` ... (populado a partir do `.project.json`)
 	  7. `Runtime.Sandbox.Run{ extraGlobals = { game = game, workspace = game:GetService("Workspace"),
 	     Instance = { new = Services.new }, script = <a Instance do script> }, ... }`
@@ -128,8 +129,21 @@
 	  `services` (`Context.GetScheduler`/`GetDataModel` só ERRAM claro se ninguém chamou
 	  `Bootstrap` ainda -- não adivinham, não usam um scheduler/dataModel default). Chamar
 	  `GetService` antes de `Bootstrap` erra porque NENHUMA classe foi registrada em
-	  `Runtime.ClassRegistry` ainda (`DataModel.GetService`, em `runtime`, erra "classe não
-	  registrada").
+	  `Runtime.ClassRegistry` ainda E porque nenhum `Runtime.UnknownClassResolver` foi instalado
+	  ainda (`DataModel.GetService`, em `runtime`, erra de engenharia interna, em português, nos
+	  dois casos).
+	- **`Services.Register()` (chamado por `Bootstrap`, passo 5) também instala
+	  `Runtime.UnknownClassResolver`** (task-services-011): é o que permite `game:GetService(...)`
+	  de uma classe NÃO registrada distinguir as três realidades do Roblox real -- nome inexistente
+	  (erra família Roblox, sem prefixo), classe real sem tag `Service` (devolve `nil`, sem erro), e
+	  Service real ainda não coberto por esta leva (erra com prefixo `[LuauBench]`, mesma frase de
+	  `Services.new`, caso 3) -- em vez da mensagem única de engenharia interna que `GetService`
+	  usava antes deste mecanismo existir. `runtime` nunca lê o Roblox API Dump (regra 02): quem
+	  responde pelo resolvedor é o fechamento `resolveUnknownClass`, definido logo acima de
+	  `Services.Register` neste arquivo, que só consulta `generated/Manifest.luau` (as 916 classes).
+	  Consequência de tipo, já refletida na assinatura que `runtime` expõe: `GetService`/
+	  `FindService` devolvem `Instance?`, não mais `Instance` -- o caso "classe real sem tag
+	  Service" é `nil` de verdade, fiel ao Roblox, não um erro.
 	- **`cli` injeta `extraGlobals.Instance = { new = Services.new }` no `Sandbox`** (passo 7) --
 	  é a ÚNICA forma de `Instance.new(...)` alcançar o script do usuário: `Runtime.Sandbox.Run`
 	  nunca expõe `Instance` por conta própria (whitelist fixa de globals, `src/runtime/Sandbox.luau`
@@ -148,7 +162,10 @@
 	seguras de chamar ANTES de `Bootstrap`; `IsEngineFixedChild` -- task-services-010, mesma
 	garantia, leitura pura de `EngineFixedChildren.luau` -- ver comentário de cada uma abaixo).
 	`EngineFixedChildren.Of` fica INTERNO: não é reexportado por este arquivo -- `cli` não tem uso
-	legítimo para a lista completa de filhos fixos, só para o predicado.
+	legítimo para a lista completa de filhos fixos, só para o predicado. Nenhuma função NOVA
+	exportada por task-services-011 -- `Register()`/`Bootstrap()` continuam sendo os únicos pontos
+	de entrada que `cli` chama, só o EFEITO de `Register()` cresceu (agora também chama
+	`Runtime.UnknownClassResolver.Set` por dentro, invisível para `cli`).
 ]]
 
 local Types = require("./services/Types")
@@ -169,6 +186,51 @@ local Services = {}
 -- chamada a `Services.Register`/`Services.Bootstrap` (ex.: `cli` reiniciando o script de entrada
 -- em watch mode sem reiniciar o processo Lune) erraria tentando registrar a mesma classe de novo.
 local registered = false
+
+-- task-services-011: mesma frase de `Services.new` (caso 3, "existe no dump mas não simulada
+-- ainda") -- fatorada num único lugar para que as duas famílias `[LuauBench]` do território
+-- (`Instance.new`, via `Services.new` abaixo, e `GetService`, via `resolveUnknownClass` logo
+-- adiante) NUNCA divirjam por alguém editar uma cópia e esquecer a outra. Prefixo `[LuauBench]`
+-- obrigatório (regra de idioma dos erros): este erro NÃO tem contraparte no Roblox real -- lá a
+-- classe funciona normalmente, é o LuauBench que está incompleto.
+local function unsimulatedClassMessage(className: string): string
+	return `[LuauBench] {className} exists in the Roblox API Dump ({Manifest.DumpVersion}) but is not simulated by LuauBench yet`
+end
+
+--[[
+	task-services-011 (arquiteto-runtime-2026-09-04.md, "Revisão pós-integração 2026-09-05 (5)",
+	subseção "Lado services"): implementação de `Runtime.UnknownClassResolver` (contrato definido
+	em src/runtime/UnknownClassResolver.luau) que `Services.Register()` instala via
+	`Runtime.UnknownClassResolver.Set`. `runtime` chama isto SÓ quando `ClassRegistry.Get(className)`
+	já devolveu `nil` (a classe não está registrada) -- ou seja, este fechamento só precisa
+	classificar o que `runtime` sozinho não sabe: se o nome é (1) inexistente no Roblox, (2) uma
+	classe real sem a tag `Service`, ou (3) uma Service real ainda não coberta por esta leva.
+
+	PURO E TOTAL (contrato obrigatório de `Runtime.UnknownClassResolver`, ver cabeçalho daquele
+	módulo): só consulta a tabela estática `Manifest.Classes` (já carregada no `require` do topo
+	deste arquivo), sem efeito colateral, e NUNCA chama `error()` -- responde para QUALQUER
+	`className: string`, inclusive `""` (`Manifest.Classes[""]` é `nil`, cai no primeiro ramo,
+	`{ Kind = "NotAClass" }`, sem lançar nada). Quem decide errar ou devolver `nil` com o veredito é
+	`DataModel:GetService` (`src/runtime/DataModel.luau`), nunca este fechamento.
+
+	`Manifest.Covered` NÃO é consultado aqui, DE PROPÓSITO: `runtime` só chama este resolvedor
+	quando a classe já não está em `Runtime.ClassRegistry` -- e "não registrada" JÁ É a resposta
+	operacional para "não simulada" (a invariante documentada no cabeçalho deste arquivo: toda
+	classe com `Covered == true` está registrada depois de `Services.Register()`, porque as duas
+	listas nascem da mesma `tools/coverage.luau`). Consultar `Covered` de novo aqui criaria um
+	QUINTO caso silencioso só para cobrir uma divergência entre as duas listas que, em produção, é
+	impossível de acontecer -- superfície extra sem benefício real, rejeitada.
+]]
+local function resolveUnknownClass(className: string): Runtime.UnknownClassVerdict
+	local entry = Manifest.Classes[className]
+	if entry == nil then
+		return { Kind = "NotAClass" }
+	end
+	if not entry.IsService then
+		return { Kind = "NotAService" }
+	end
+	return { Kind = "ServiceNotSimulated", Message = unsimulatedClassMessage(className) }
+end
 
 --[[
 	Registra todas as classes cobertas no Runtime.ClassRegistry. Idempotente: a segunda chamada
@@ -200,6 +262,13 @@ function Services.Register(): ()
 		return
 	end
 	registered = true
+
+	-- task-services-011: instala o resolvedor de classe desconhecida ANTES do laço de registro
+	-- (não depois) -- se o laço estourar no meio (ex.: um Behavior futuro inventando um método
+	-- fora do dump), o resolvedor já está de pé e a mensagem seguinte de GetService é útil em vez
+	-- de "resolvedor não instalado" (src/runtime/DataModel.luau, ramo `verdict == nil`). Ver
+	-- `resolveUnknownClass` abaixo para o mecanismo completo.
+	Runtime.UnknownClassResolver.Set(resolveUnknownClass)
 
 	for className, generated in GeneratedIndex do
 		local behavior = BehaviorIndex[className]
@@ -371,10 +440,9 @@ function Services.new(className: string, name: string?): Runtime.Instance
 	-- usuário; tratado como caso 4 por segurança, nunca como um quinto caso silencioso).
 	local manifestEntry = Manifest.Classes[className]
 	if manifestEntry ~= nil and not manifestEntry.Covered then
-		error(
-			`[LuauBench] {className} exists in the Roblox API Dump ({Manifest.DumpVersion}) but is not simulated by LuauBench yet`,
-			2
-		)
+		-- task-services-011: mesma frase de `resolveUnknownClass` (o lado GetService) -- fatorada
+		-- em `unsimulatedClassMessage` para que as duas famílias `[LuauBench]` nunca divirjam.
+		error(unsimulatedClassMessage(className), 2)
 	end
 
 	error(`Unable to create an Instance of type "{className}"`, 2)
