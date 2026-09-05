@@ -810,6 +810,27 @@ local CLOSED_NEVER_LEGITIMATE: { [string]: boolean } = {
 	WorldRoot = true,
 	BasePlayerGui = true,
 	DataModel = true,
+
+	-- task-services-017 (L2.1.7): as 16 classes de DataStoreService entraram em `tools/
+	-- coverage.luau` -- 11 delas são NotCreatable e NÃO são Service nem filho fixo de nenhum pai
+	-- (`DataStoreService` em si É Service, já coberto por `Services.IsServiceClass`; as 4 classes
+	-- de opções -- `DataStoreSetOptions`/`DataStoreOptions`/`DataStoreGetOptions`/
+	-- `DataStoreIncrementOptions` -- NÃO têm a tag `NotCreatable` no dump, script comum cria via
+	-- `Instance.new`, então nem aparecem aqui). Nenhuma delas é um nó legítimo de `.project.json`:
+	-- são sempre devolvidas por uma chamada de método (`GetDataStore`/`GetAsync`/`ListKeysAsync`/
+	-- etc.), nunca declaradas estaticamente numa árvore Rojo -- mesma categoria de
+	-- `Instance`/`PVInstance`/... acima.
+	GlobalDataStore = true,
+	DataStore = true,
+	OrderedDataStore = true,
+	DataStoreKeyInfo = true,
+	Pages = true,
+	DataStorePages = true,
+	DataStoreKeyPages = true,
+	DataStoreListingPages = true,
+	DataStoreVersionPages = true,
+	DataStoreObjectVersionInfo = true,
+	DataStoreInfo = true,
 }
 
 test(
