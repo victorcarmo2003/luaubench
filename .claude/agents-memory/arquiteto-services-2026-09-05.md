@@ -922,3 +922,475 @@ Nada de comportamento muda. `src/services/behavior/RunService.luau` e `RunServic
 | B.4, item `RunService.PreRender` ("Vai para as pendências novas") | **fechado** por B.5 — deixa de ser pendência; a justificativa passa de "não há evidência" para o ledger de B.5.3/B.5.4 |
 | "Pendências novas para o `pesquisador`", item 1 | **respondida e decidida**: pesquisa não confirmou; decisão é manter |
 | Recomendação 1 do relatório `pesquisa-prerender-capabilities-2026-09-05.md` | **não acatada**, com motivo registrado em B.5.3 — o relatório continua válido como levantamento; só a recomendação é recusada |
+
+---
+
+# Leva 2 de `services` — data management, rede e cobertura mínima (fecho de `task-services-013`)
+
+Data: 2026-09-05. Continuação da prioridade de cobertura da regra 03: o **Grupo 1** (árvore básica) está 100% coberto e fechado; esta seção decide os **Grupos 2, 3 e 4**. Citável do código como **"L2"** (ex.: `-- ver arquiteto-services-2026-09-05.md, L2.3`).
+
+Nada aqui substitui as decisões 1–6 nem as seções A/B/B.5 acima — o pipeline do gerador, o filtro de emissão de quatro eixos, o formato do `MemberDescriptor`, a regra de idioma dos erros e a política de `RejectingSignal` continuam valendo sem alteração. Esta seção só adiciona.
+
+## Insumos factuais desta seção
+
+Quatro pesquisas rodaram em paralelo antes de qualquer decisão (nenhum fato abaixo é de memória):
+
+| Relatório | Cobre |
+|---|---|
+| `.claude/agents-memory/pesquisa-datastore-2026-09-05.md` | as 16 classes da família DataStore no dump + semântica oficial (`Roblox/creator-docs`, YAML bruto) + leitura do código-fonte real do ProfileStore |
+| `.claude/agents-memory/pesquisa-http-messaging-2026-09-05.md` | `HttpService`/`MessagingService` no dump + doc oficial + eco local do `MessagingService` + `net.request` do Lune 0.10.5 rodado de verdade |
+| `.claude/agents-memory/pesquisa-tweenservice-2026-09-05.md` | `TweenService`/`TweenBase`/`Tween`/`TweenInfo` + os 3 enums + semântica de `Create`/`Play`/`Cancel`/`Completed` |
+| `.claude/agents-memory/pesquisa-lighting-sound-physics-2026-09-05.md` | `Lighting`/`SoundService`/`PhysicsService` + acoplamento `ClockTime`/`TimeOfDay` + registro de grupos de colisão |
+
+Além deles, extraí eu mesmo do `Full-API-Dump.json` do commit fixado (`.cache/api-dump/28360dea….json`, 8 006 149 bytes, bate com o lock) a superfície já **passada pelo filtro de A.4** de todas as classes desta leva — marcado abaixo como **[dump 09-05d]**.
+
+---
+
+## L2.0 — Três mecanismos transversais que esta leva cria
+
+As três decisões abaixo valem para **todos** os serviços desta leva e precisam existir antes do primeiro deles. Sem elas, cada classe reinventaria a mesma coisa de um jeito ligeiramente diferente.
+
+### L2.0.1 — `src/services/AsyncCall.luau`: o único ponto de yield de `services`
+
+Toda a leva 3 do plano de cobertura é feita de métodos com a tag `Yields` no dump (`GetAsync`, `SetAsync`, `UpdateAsync`, `RemoveAsync`, `PublishAsync`, `SubscribeAsync`, `RequestAsync`, `AdvanceToNextPageAsync`, …). No Roblox eles suspendem a thread chamadora; no LuauBench a única primitiva de suspensão é `Scheduler:Wait(seconds)`, que **erra em português se chamada de fora de uma thread gerida** (`Scheduler.luau`, `Scheduler.Wait`) — uma mensagem de engenharia interna que jamais pode vazar para o Output do usuário.
+
+Módulo novo, extensão do LuauBench e portanto **fora do namespace simulado de qualquer classe real** (regra 00), ao lado de `RejectingSignal.luau`:
+
+```luau
+--!strict
+-- Ponto ÚNICO de suspensão de `services`. Todo método com a tag `Yields` no dump passa por aqui.
+-- `label` é o nome qualificado do método real (ex.: "GlobalDataStore:GetAsync") e só aparece na
+-- mensagem de erro do caso patológico abaixo.
+function AsyncCall.Yield(label: string): ()
+```
+
+Comportamento:
+1. `Context.GetScheduler():Wait(0)` — **um passo de scheduler, latência simulada zero**.
+2. Se a thread corrente não é gerida pelo Scheduler, `AsyncCall.Yield` captura o erro e o retraduz para uma mensagem `[LuauBench]` em inglês, em nível 3 (culpa o call site do script), nunca a string em português do `runtime`.
+
+**Por que latência zero, e não uma latência "realista".** `Scheduler.Run` avança o relógio por `os.clock()` real (`Scheduler.luau`) — `task.wait(n)` custa `n` segundos de parede de verdade. Injetar 50–200 ms por chamada de DataStore transformaria um cenário de ProfileStore com dezenas de operações em dezenas de segundos de espera por execução de `luaubench run`, e introduziria variação de tempo em testes que devem ser determinísticos. O valor de simular latência é pegar bug de corrida; o custo é tornar a ferramenta lenta e os testes instáveis. **Um passo de scheduler é o mínimo honesto**: o ponto de suspensão existe de verdade (outra thread roda no meio, `task.wait` concorrente intercala, código que assume atomicidade entre a leitura e a escrita quebra aqui como quebraria no Roblox), só não custa tempo de parede.
+
+**Divergência declarada:** nenhuma chamada async do LuauBench tem latência de rede. Uma corrida que só se manifesta com centenas de milissegundos de janela não é reproduzida. Um modo `--async-latency <ms>` é extensão futura registrada, nunca uma propriedade dentro da classe simulada.
+
+**Consequência para a liveness do scheduler:** `Wait(0)` enfileira a thread em `self.waiting`, logo `Scheduler.IsAlive` continua verdadeiro e o laço principal a acorda no tique seguinte. Nenhuma chamada async pode "perder" a thread do usuário.
+
+### L2.0.2 — Estado privado de `services`: propriedade raw fora do schema
+
+`InstanceMeta.__index`, passo 5 (`Instance.luau`): no modo estrito, uma chave que **não está no schema** nunca chega a `data.properties` — cai na resolução de filho e depois no erro `is not a valid member of`. Combinado com a Decisão 6, item 2 (`GetPropertyRaw`/`SetPropertyRaw` **nunca** consultam o schema), isso significa que:
+
+> **Uma propriedade raw cuja chave não existe no schema da classe é estado privado de `services`, invisível e inalcançável para o script do usuário.**
+
+É o mesmo canal que `cli` já usa para `Script.Source` (que está fora do schema por `Capabilities.Read == ["PluginOrOpenCloud"]`, A.4). Esta leva o generaliza e o **nomeia**, porque quatro classes precisam dele: `DataStore`/`OrderedDataStore` (qual store lógico esta instância endereça), `Pages` (o cursor e o buffer), `DataStoreKeyInfo` (o metadata e os userIds), `Tween` (o alvo, o alpha corrente e o estado de playback).
+
+Regra dura, cobrável em revisão: **toda chave usada como estado privado começa com `_LuauBench`** (ex.: `_LuauBenchStoreId`). Motivo: garante colisão zero com qualquer nome de membro que uma versão futura do dump venha a introduzir naquela classe — que é o único jeito de este canal virar um bug silencioso.
+
+Serviço que é **singleton** (`DataStoreService`, `HttpService`, `MessagingService`, `PhysicsService`, `SoundService`) **não usa este canal**: guarda estado em `local` de módulo do próprio `behavior/<X>.luau`. Isso é legítimo e não é uma variável global disfarçada — a invariante "um processo por execução do LuauBench, sem reset" já está documentada em `ClassRegistry.luau` e em `Context.luau`, e um Service tem exatamente uma instância por processo. Fica **registrado como gatilho**: se um dia existir watch mode que reinicie o `DataModel` sem reiniciar o processo, este é um dos pontos que voltam ao arquiteto (o mesmo gatilho que `ClassRegistry` já declara).
+
+### L2.0.3 — `ClassRegistry.NewEngineInstance` ganha um terceiro chamador legítimo
+
+A lista fechada de chamadores hoje (cabeçalho de `ClassRegistry.luau` e de `runtime/init.luau`) tem dois itens: `DataModel.GetService` e `Behavior.Initialize` criando **filho fixo** da própria classe. Esta leva precisa de um terceiro, e ele não cabe em nenhum dos dois:
+
+> **3. `services`, dentro de um `Behavior.Methods`, para construir um objeto do motor que o método real devolve e que não é filho de ninguém.**
+
+Casos desta leva: `DataStoreService:GetDataStore` → `DataStore` (`NotCreatable`, `IsService == false`, `Parent == nil`); `GlobalDataStore:GetAsync` → `DataStoreKeyInfo`; `DataStore:ListVersionsAsync` → `DataStoreVersionPages`; `TweenService:Create` → `Tween`.
+
+Não há via alternativa: `ClassRegistry.new` recusa `IsAbstract` (é a política voltada ao script, que deve continuar recusando `Instance.new("DataStore")` — fiel ao Roblox), e `GetService` só alcança classe com a tag `Service`. É exatamente a mesma situação que `task-runtime-023` já resolveu para `StarterPlayerScripts`, num contexto novo.
+
+**Trabalho para `coder-runtime`:** emendar a lista fechada nos dois cabeçalhos. É mudança de comentário, zero código — mas a lista se declara fechada, então ampliá-la sem registro tornaria a invariante letra morta.
+
+---
+
+## L2.1 — `DataStoreService`: store local em memória, fidelidade de contrato total, fidelidade operacional zero
+
+O caso de uso central do projeto (`CLAUDE.md`) e o único cenário do `testador` que ainda imprime `[SKIP]`.
+
+### L2.1.1 — Local-first não é o eixo da decisão aqui
+
+A tarefa enquadra `DataStoreService` como tensão com a invariante 6. Não é: **não existe API pública que permita a um processo fora do Roblox ler ou escrever o DataStore de um jogo**. A superfície equivalente (Open Cloud) é outro produto, com outra autenticação, outro modelo de chave e outro formato — implementá-la seria construir um cliente de Open Cloud e chamá-lo de `DataStoreService`, o que **inventaria comportamento fora do dump** (invariante 1) além de mandar dado do usuário para fora (invariante 6). Não há decisão a tomar: **o store é local**. O que sobra para decidir é *onde ele mora* e *quanto do contrato real ele honra*.
+
+### L2.1.2 — Onde o dado mora: memória nesta leva; persistência é contrato injetado, nunca `fs` dentro de `services`
+
+**Nesta leva: só memória, vivo enquanto o processo vive.** É o que o cenário `datastore-profilestore-pattern.scenario.luau` já antecipa como suficiente ("mesmo que só durante o processo") e é o que desbloqueia o ProfileStore inteiro, cuja sessão nasce e morre dentro de uma execução.
+
+Persistência entre execuções é desejável (iterar em watch mode sem perder progresso; inspecionar o JSON salvo) e **fica registrada com o contrato já fechado**, para ninguém improvisar depois:
+
+```luau
+-- em src/services/Types.luau, quando a leva de persistência chegar
+export type DataStorePersistence = {
+    Load: () -> string?,      -- devolve o snapshot serializado, ou nil se não existir
+    Save: (snapshot: string) -> (),
+}
+export type BootstrapOptions = { scheduler: …, dataModel: …, dataStorePersistence: DataStorePersistence? }
+```
+
+**`services` nunca chama `@lune/fs`.** Quem decide caminho, formato em disco, `.gitignore` e política de erro de I/O é `cli` — é ele que já conhece a raiz do projeto do usuário e é ele que tem a superfície de configuração (`luaubench.toml`, reservado pela Decisão 10 do desenho de `cli`). Esta separação não é cerimônia: sem ela, `services` passaria a ler caminho do disco e a leva seguinte descobriria que a decisão de path foi tomada no lugar errado.
+
+**O snapshot é uma string JSON, e isso é fidelidade, não atalho.** O Roblox só aceita valor serializável no DataStore — tabela com chave mista, função, `Instance`, `thread`, `NaN` e `inf` são recusados (doc oficial `error-codes-and-limits.md`). O validador que a simulação precisa ter de qualquer jeito (L2.1.4) é exatamente o que torna o snapshot serializável de graça.
+
+**Path traversal, tratado por construção:** o snapshot é **um arquivo só**, com nome de store e chave como *chaves de objeto JSON*, nunca como componentes de caminho. Uma chave `"../../.ssh/id_rsa"` vinda de um script do usuário não pode alcançar o filesystem porque nunca vira caminho.
+
+### L2.1.3 — O que é simulado com fidelidade exata
+
+| Contrato | Decisão |
+|---|---|
+| `GetDataStore(name, scope, options)` **memoizado** por `(name, scope)` | **Sim.** Doc oficial: "subsequent calls return the same object". Duas chamadas devolvem a **mesma** `Instance`. Sem isso, um script que compara `store1 == store2` diverge |
+| `GetAsync` → `(value, keyInfo)` | **Sim**, dois valores. Chave inexistente → `(nil, nil)` |
+| `SetAsync` → string de versão | **Sim** |
+| `UpdateAsync(key, transform)` — transform recebe `(oldValue, keyInfo)`, devolve `(newValue, userIds?, metadata?)`, `nil` **aborta** a escrita, retorno `(newValue, newKeyInfo)` | **Sim, integralmente.** É o único método que o ProfileStore usa para toda escrita e leitura transacional — se algo tem de estar impecável nesta leva, é este |
+| A transform **não pode yieldar** | **Validado e erra.** Ver L2.1.5 |
+| `RemoveAsync` → `(valorAnterior, keyInfo)` + tombstone (versões antigas continuam legíveis) | **Sim** |
+| `IncrementAsync` → valor já incrementado; erra se o valor corrente não é número | **Sim** |
+| Deep copy na leitura **e** na escrita | **Sim.** No Roblox o valor é serializado; mutar a tabela devolvida por `GetAsync` não afeta o store. Sem cópia profunda o LuauBench criaria um alias silencioso e **esconderia** uma classe inteira de bug real |
+| Limites: nome/chave/scope ≤ 50 chars; valor ≤ 4 194 304 bytes | **Sim.** Validados e erram |
+| Valor não serializável (chave mista, função, `Instance`, `thread`, `NaN`, `inf`) | **Recusado com erro.** Mensagem exata do Roblox NÃO CONFIRMADA → aproximação de boa-fé na família Roblox, comentada como tal |
+| Versionamento (`GetVersionAsync`, `ListVersionsAsync`, `DataStoreVersionPages`) | **Sim**, na sub-leva B — o ProfileStore usa em `ProfileVersionQuery` |
+| `DataStoreOptions:SetExperimentalFeatures({v2 = true})` | **Aceita sem erro** (no-op). O ProfileStore chama isso **sempre**; errar aqui derruba a lib no primeiro `GetDataStore` |
+| Cache local de leitura de 4 s (`DataStoreGetOptions.UseCache`) | **Não implementado, e isso é fiel.** O cache é por servidor e só é observável quando **outro** servidor muda a chave; num processo único, escrita e leitura compartilham a mesma fonte, então um cache write-through é indistinguível de não ter cache. `UseCache` entra no schema (é propriedade criável) e é aceito e ignorado |
+
+### L2.1.4 — Onde a simulação para de propósito
+
+| Área | Decisão e por quê |
+|---|---|
+| **Throttling / budget** | **`GetRequestBudgetForRequestType` devolve uma constante grande e fixa; nada throttla; `SetRateLimitForRequestType` é aceito e ignorado.** Três razões, nesta ordem: (1) a fórmula real é `baseLimit + perPlayerLimit × numPlayers` e o LuauBench tem **zero jogadores** por decisão já tomada (`Players.GetPlayers() == {}`) — simular a fórmula daria o orçamento **mínimo** e faria estourar código que roda folgado em produção: falha por comissão, o modo de falha que a Decisão 3 combate; (2) os números exatos da fórmula vieram **NÃO CONFIRMADOS** da pesquisa (dois fetches da mesma página oficial divergiram) e a regra 00 proíbe adivinhar; (3) o ProfileStore — a lib que define este caso de uso — **não chama `GetRequestBudgetForRequestType` uma única vez**. Devolver constante **grande** e não `math.huge` nem `0` é deliberado: código que faz `while budget < N do task.wait() end` prossegue de imediato (determinístico), e código que faz aritmética com o valor não recebe infinito |
+| **Erro transitório** (throttle, 502, timeout de serviço) | **Nunca injetado.** Seria não-determinismo dentro de um banco de teste. Um modo de injeção de falha (`--datastore-chaos`) é extensão futura registrada — **fora** do namespace da classe (regra 00) |
+| **"Studio sem API access" / "jogo não publicado"** | **Nunca simulado.** O LuauBench sempre tem acesso ao próprio store. Detalhe que fecha a questão: a sondagem do ProfileStore (`SetAsync` num `pcall`, checando as substrings `"403"`/`"must publish"`/`"ConnectFail"`) só roda **se `IsStudio()` for verdadeiro**, e o LuauBench declara `IsStudio() == false` desde a leva 1 — a sondagem nem é alcançada |
+| **Replicação entre servidores** | Não existe. Um processo, um servidor |
+| **`AutomaticRetry` / `LegacyNamingScheme`** | **Fora do schema pelo filtro de A.4** (`LocalUserSecurity`) **[dump 09-05d]** — um script comum não os vê no Roblox real. Nada a decidir |
+| **`ListDataStoresAsync`, `BatchGetAsync`, `GetVersionAtTimeAsync`, `RemoveVersionAsync`, `OnUpdate`** | Ficam com o stub `[LuauBench] … is not simulated by LuauBench yet` do `ClassBuilder`. Nenhum é usado pelo ProfileStore; `OnUpdate` é `Deprecated` no dump |
+
+### L2.1.5 — Detectar a transform que yielda
+
+A doc oficial é literal: *"The callback function cannot yield."* No LuauBench, uma transform que chama `task.wait` **funcionaria** — a thread estaciona no scheduler e volta depois. Isso é a pior categoria de divergência possível: código que **passa no banco e falha em produção**. A simulação roda a transform em `coroutine.create` + `coroutine.resume`; se a coroutine não estiver `dead` depois do resume, `coroutine.close` e erro na família Roblox citando a proibição. Custo: uma coroutine por `UpdateAsync`; o traceback do erro *dentro* da transform é recuperado com `debug.traceback(co)` antes do `close`, para não piorar o diagnóstico que o usuário recebe.
+
+### L2.1.6 — Módulos
+
+```
+src/services/datastore/Value.luau        -- validação (serializável? tamanho? chave ≤ 50?) + deep copy. Sem Instance, sem I/O.
+src/services/datastore/Store.luau        -- o store em memória: (storeId, key) -> { value, version, createdTime, updatedTime, userIds, metadata, tombstone }. Sem Instance.
+src/services/InstanceState.luau          -- estado privado por instância, chaves _LuauBench* (L2.0.2)
+src/services/AsyncCall.luau              -- L2.0.1
+src/services/behavior/DataStoreService.luau
+src/services/behavior/GlobalDataStore.luau   -- GetAsync/SetAsync/UpdateAsync/RemoveAsync/IncrementAsync (herdados por DataStore e OrderedDataStore)
+src/services/behavior/DataStore.luau         -- GetVersionAsync/ListVersionsAsync/ListKeysAsync
+src/services/behavior/OrderedDataStore.luau  -- GetSortedAsync
+src/services/behavior/DataStoreKeyInfo.luau  -- GetMetadata/GetUserIds
+src/services/behavior/DataStoreSetOptions.luau / DataStoreIncrementOptions.luau -- Get/SetMetadata
+src/services/behavior/DataStoreOptions.luau  -- SetExperimentalFeatures (no-op)
+src/services/behavior/Pages.luau             -- GetCurrentPage/AdvanceToNextPageAsync/IsFinished
+```
+
+`Value.luau` e `Store.luau` **não conhecem `Instance`** de propósito: são dado puro, testáveis sem `Bootstrap`, e é onde mora toda a regra que a regra 03 chama de "o como".
+
+### L2.1.7 — Classes a acrescentar em `tools/coverage.luau`
+
+`DataStoreService`, `GlobalDataStore`, `DataStore`, `OrderedDataStore`, `DataStoreKeyInfo`, `DataStoreSetOptions`, `DataStoreOptions`, `DataStoreGetOptions`, `DataStoreIncrementOptions`, `Pages`, `DataStorePages`, `DataStoreKeyPages`, `DataStoreListingPages`, `DataStoreVersionPages`, `DataStoreObjectVersionInfo`, `DataStoreInfo`. O fecho de superclasses é automático (Decisão 1) — nenhuma dessas tem superclasse fora da lista, exceto `Pages`, que já está.
+
+**Ambiguidade registrada:** o dump declara `GetGlobalDataStore() -> DataStore` **[dump 09-05d]**, embora o nome sugira `GlobalDataStore`. **Decisão: seguir o dump** — as duas fábricas devolvem `ClassName == "DataStore"`. `DataStore` herda `GlobalDataStore`, então `:IsA("GlobalDataStore")` continua verdadeiro; só um `ClassName == "GlobalDataStore"` literal divergiria, e a fonte de verdade do projeto é o dump, não a intuição do nome. Comentado no código como tal.
+
+### L2.1.8 — Dependência dura: `game:BindToClose` é de `runtime`
+
+O ProfileStore usa `game:BindToClose` para descarregar sessões no encerramento, com um `while … do task.wait() end` esperando os jobs terminarem. Sem ele, o passo 4 do cenário do `testador` (persistir e reabrir) nunca fecha.
+
+`BindToClose` é membro do `DataModel` (`Function BindToClose(function)`, `Security None` **[dump 09-05d]**) e depende do ciclo de vida do `Scheduler` — **fica em `runtime`**, como o desenho já decidia na seção "Riscos e decisões". Semântica exigida: `Scheduler.Run` não pode considerar o trabalho terminado antes de rodar os callbacks registrados **e de esperar que eles retornem**, inclusive quando eles próprios yieldam. Tarefa de `coder-runtime`, pré-requisito do cenário (não da implementação do store).
+
+---
+
+## L2.2 — `HttpService`: a rede é opt-in de quem roda o LuauBench, exatamente como é opt-in do dono do lugar no Roblox
+
+Esta é a decisão de mais peso da leva, e ela se resolve por um fato do dump, não por juízo de valor.
+
+### L2.2.1 — O dump já responde quem pode ligar a rede
+
+```
+HttpEnabled: bool
+  Security     = { Read = "None", Write = "LocalUserSecurity" }
+  Capabilities = { Read = ["Network"] }
+  Default      = "false"
+```
+**[dump 09-05d]**, com `GetHttpEnabled`/`SetHttpEnabled` fora do alcance de script comum pelo mesmo eixo.
+
+Pela regra de emissão de A.4 (passo 5: `Security.Write ~= "None"` ⇒ incluído com `ReadOnly = true`), a consequência é direta e não é escolha minha: **no Roblox real, um script pode LER `HttpEnabled` e não pode ESCREVÊ-LO.** A rede é ligada pelo **dono do lugar**, nas configurações do jogo, fora do código. E o default é `false`.
+
+O LuauBench tem uma correspondência óbvia para "dono do lugar": **a pessoa que digita `luaubench run`**. Logo:
+
+- `HttpEnabled` entra no schema como `ReadOnly`, semeado `false`;
+- `luaubench run --allow-http` o coloca em `true` (via `SetPropertyRaw`, a via de engenharia que ignora o schema);
+- sem a flag, `GetAsync`/`PostAsync`/`RequestAsync` erram com a família real de "HTTP desabilitado", **que é o que o Roblox faz num lugar recém-criado**.
+
+### L2.2.2 — Por que isto não fere a invariante 6, e o que de fato a feriria
+
+A invariante 6 diz: *"O LuauBench não envia script, asset nem dado do projeto do usuário para nenhum serviço externo."* O sujeito é **o LuauBench**. Ela proíbe a ferramenta de fazer telemetria, de mandar código para análise remota, de subir o projeto para lugar nenhum — decisões tomadas *pela ferramenta*, sem o usuário pedir.
+
+`HttpService:PostAsync(url, corpo)` é o **script do usuário**, escrito por ele, executando o que ele escreveu para executar. A regra 00 é explícita sobre qual é o critério: *"a superfície exposta ao script é a que o Roblox real exporia"*. O Roblox real expõe rede pelo `HttpService`. Recusar rede seria **divergir do Roblox** (regra 00, invariante 2) e transformar num "não simulado" a metade da API que existe justamente para falar com serviços externos — webhook de Discord, API de analytics, backend próprio, tudo que os 37 usos medidos de `HttpService` do recon podem conter.
+
+O que **feriria** a invariante 6, e continua proibido: o LuauBench mandar qualquer coisa por conta própria; qualquer telemetria; qualquer "modo online" que não seja a chamada literal que o script fez.
+
+O que resta é a invariante 7 ("script do usuário é código arbitrário"), e é ela que justifica o **portão** — não o bloqueio. Um `.project.json` clonado de um repositório desconhecido não deve ganhar acesso à rede da máquina do desenvolvedor só por ser executado uma vez. O portão default-off resolve isso **sendo simultaneamente o comportamento mais fiel possível**: no Roblox, um lugar novo também tem HTTP desligado.
+
+### L2.2.3 — Duas sub-levas com riscos muito diferentes
+
+| Sub-leva | Conteúdo | Rede | Fidelidade |
+|---|---|---|---|
+| **A** | `JSONEncode`, `JSONDecode`, `UrlEncode`, `GenerateGUID`, `HttpEnabled` (ReadOnly, `false`) e os três métodos de rede errando "HTTP não habilitado" | **Nenhuma** | **Exata** — é literalmente um lugar Roblox com HTTP desligado |
+| **B** | `GetAsync`/`PostAsync`/`RequestAsync` de verdade, atrás de `--allow-http`, sobre `net.request` do Lune | Real | Alta, com as ressalvas de L2.2.5 |
+
+A sub-leva A entrega a maior parte do valor com risco zero e sem nenhuma decisão pendente. Ela vai junto com o Grupo 3; a B é tarefa separada, e é a única do desenho inteiro que abre uma superfície de rede.
+
+### L2.2.4 — Endurecimento que o Roblox não tem, e por que ele é correto aqui
+
+Com `--allow-http` ligado, o LuauBench é **mais restritivo** que o Roblox em um ponto, deliberadamente: **destinos de loopback, link-local e faixas privadas (`127.0.0.0/8`, `::1`, `169.254.0.0/16`, `10/8`, `172.16/12`, `192.168/16`) são recusados**, a menos que uma segunda opção explícita (`--allow-http-local`) seja passada.
+
+O modelo de ameaça é genuinamente diferente: um servidor Roblox roda num datacenter e não alcança a rede doméstica de ninguém; o LuauBench roda **na máquina do desenvolvedor**, onde `http://127.0.0.1:*` e `http://169.254.169.254/` (metadata de nuvem) são alvos reais que não existem no Roblox. Manter a fidelidade nesse ponto específico seria copiar uma permissão cujo contexto não se aplica.
+
+Divergência declarada nos dois sentidos: um script que fala com um backend local de desenvolvimento — caso legítimo e comum — precisa da segunda flag; e `--allow-http-local` é registrado no relatório e no `--help`, nunca implícito.
+
+`--verbose` passa a imprimir uma linha por requisição de saída (método + host, nunca corpo). É a versão auditável do local-first: o usuário consegue ver o que o script dele mandou para fora.
+
+### L2.2.5 — Fidelidade vs. pragmatismo em HTTP
+
+| Item | Decisão |
+|---|---|
+| Forma de `RequestAsync` — entrada `{Url, Method, Headers, Body, Compress, Timeout}`, saída `{Success, StatusCode, StatusMessage, Headers, Body}` | **Exata** (doc oficial, `HttpService.yaml`) |
+| `Timeout` da entrada | **Aceito e ignorado.** `net.request` do Lune 0.10.5 **não tem timeout configurável** (verificado rodando). Divergência declarada; implementar por cima exigiria cancelamento, fora desta leva |
+| Host inexistente / falha de DNS | O Lune **lança**; a simulação captura e traduz para a família Roblox. Nunca vaza `os error 11001` cru |
+| `JSONDecode` de JSON inválido | **Erra** (doc oficial), como o Lune já faz. Mensagem retraduzida |
+| `JSONEncode` com `inf`/`NaN` | O Roblox aceita e **produz JSON inválido de propósito**. Se `serde.encode` do Lune recusar, a divergência é declarada em vez de silenciada |
+| `JSONEncode` com referência cíclica | **Erra**, como o Roblox |
+| Domínios `roblox.com` bloqueados; erro "só do servidor" no cliente | **Não** implementados: confirmados só por DevForum, não por doc oficial, e o LuauBench é sempre servidor. Registrados |
+| Limite de 500 req/min | **Não** simulado — mesma conta da L2.1.4: não-determinismo em troca de quase nada |
+| `GetSecret` / `CreateWebStreamClient` | Sobrevivem ao filtro **[dump 09-05d]** mas ficam com o stub `[LuauBench] … not simulated yet` |
+
+---
+
+## L2.3 — `MessagingService`: o eco local é fiel, não é uma concessão
+
+Superfície mínima **[dump 09-05d]**: só `PublishAsync(topic, message)` e `SubscribeAsync(topic, callback)`, ambos `Yields`. Nenhuma propriedade, nenhum evento — o recebimento é um **callback Luau puro**, não um `RBXScriptSignal`.
+
+### L2.3.1 — A pergunta decisiva, respondida
+
+*"Num jogo com um único servidor, o servidor que publica recebe a própria mensagem?"* A doc oficial não trata do assunto; **dois threads independentes do DevForum confirmam que sim**, um deles com sintoma observado (efeito disparando no próprio servidor que publicou) e a correção aplicada sendo filtrar por `game.JobId` — evidência empírica, não inferência.
+
+**Consequência: um LuauBench de processo único é uma simulação fiel de um jogo Roblox com exatamente um servidor.** `PublishAsync` num tópico que este processo assina **deve** entregar. Não é um atalho para tornar a API testável; é o comportamento correto.
+
+Isso resolve um dilema que não precisou ser resolvido: se o Roblox excluísse o remetente, uma assinatura no LuauBench nunca dispararia, e uma API que nunca entrega nada é exatamente o "stub silencioso que finge funcionar" que a regra 03 proíbe. A evidência dispensou a escolha.
+
+### L2.3.2 — Semântica
+
+| Item | Decisão |
+|---|---|
+| Entrega ao próprio processo | **Sim**, a todos os callbacks inscritos naquele tópico |
+| Formato entregue | `{ Data = <mensagem>, Sent = <unix em segundos> }` — nomes de chave confirmados na doc oficial |
+| Momento da entrega | **Assíncrono**: `PublishAsync` yielda um passo (`AsyncCall.Yield`) e os callbacks são despachados via `Scheduler:Spawn`, um por callback. Nunca síncrono dentro do `PublishAsync` — no Roblox a entrega passa pela rede, e entregar de forma síncrona faria código com reentrância passar aqui e falhar lá |
+| Erro dentro de um callback | Não derruba o publisher nem o processo: cada callback é sua própria thread do Scheduler, e o erro sai por `ThreadError` como qualquer outro (regra 02) |
+| `SubscribeAsync` → `RBXScriptConnection` | Devolve uma `Runtime.Connection`; `:Disconnect()` cancela a assinatura |
+| Limites (1 kB por mensagem, tópico de 1–80 chars) | **Validados e erram** — são limites de contrato, determinísticos e baratos |
+| Limites de taxa (`600 + 240×jogadores` publish/min, `20 + 8×jogadores` assinaturas) | **Não** simulados — mesma conta de L2.1.4, agravada pelo fato de o LuauBench ter zero jogadores |
+| Ordem de entrega entre múltiplos assinantes | Ordem de inscrição, documentada como **aproximação** — o Roblox não garante ordem |
+| Cross-server | **Não existe.** Um processo, um servidor. Divergência já aceita pelo projeto |
+
+### L2.3.3 — Dependência descoberta: `game.JobId`
+
+O padrão real para evitar reprocessar o próprio eco é comparar `message.Data.JobId` com `game.JobId`. Hoje `game` é uma instância **leniente** (sem schema) e `game.JobId` devolve `nil` — o que faz `nil ~= nil` ser falso e, por acidente, o filtro funcionar. Depender de um acidente é pior do que não ter a propriedade.
+
+**Tarefa pequena de `coder-runtime`:** `DataModel` passa a expor `JobId` (string), `PlaceId`/`GameId` (int64) e `PlaceVersion` (int) — todos `Security None` e `ReadOnly` no dump **[dump 09-05d]** — com valores fixos por processo (`JobId` = um GUID gerado uma vez; `PlaceId`/`GameId` = `0`, que é o que o Roblox usa num lugar não publicado). São propriedades do `DataModel`, cuja implementação já é responsabilidade estrutural de `runtime` (mesma justificativa de `GetService`/`BindToClose`).
+
+---
+
+## L2.4 — `TweenService`: bloqueada, e o bloqueio é menor do que parecia
+
+### L2.4.1 — A dependência exata
+
+A tarefa pergunta se `TweenService` depende de `task-runtime-031` (tipos de valor) ou se cabe uma leva mínima. A resposta é mais precisa do que "depende":
+
+**`TweenService` depende de exatamente dois itens da leva de tipos de valor — `Enum`/`EnumItem` e `TweenInfo` — e de mais nada.** Não depende de `Vector3`, nem de `CFrame`, nem de `Color3`.
+
+Por quê: a lista oficial fechada de tipos tweenáveis é `number`, `boolean`, `CFrame`, `Rect`, `Color3`, `UDim`, `UDim2`, `Vector2`, `Vector2int16`, `Vector3`, `EnumItem`. **`number` e `boolean` já existem** — um `TweenService` que só interpola número é útil de verdade (`Transparency`, `Volume`, `Value`, `Gravity`). O que impede não é o alvo da interpolação, é a **entrada**: `Create(instance, tweenInfo, propertyTable)` exige um `TweenInfo`, e `TweenInfo.new` exige `Enum.EasingStyle`/`Enum.EasingDirection`; `TweenBase.PlaybackState` e o argumento de `Completed` são `EnumItem`. Hoje `TweenInfo` e `Enum` estão os dois em `src/cli/UnsimulatedGlobals.luau` e erram com mensagem `[LuauBench]` nomeada.
+
+### L2.4.2 — Não existe leva 1 mínima que valha a pena
+
+A sugestão da tarefa (um `Tween` que só dispara `Completed` depois do tempo, sem interpolar) **não é alcançável**: o script não consegue construir o `TweenInfo` que `Create` exige, então nunca chega a `TweenService`. Adiantar um `TweenService` parcial só pioraria o diagnóstico — hoje `game:GetService("TweenService")` erra `[LuauBench] TweenService exists in the Roblox API Dump but is not simulated by LuauBench yet`, que é **exatamente a mensagem certa**, e `TweenInfo.new` erra nomeando a lacuna real. Um serviço meio-implementado trocaria dois erros precisos por um comportamento que parece funcionar.
+
+**Decisão: `TweenService` não entra nesta leva. Fica bloqueada por `task-runtime-031`, com a dependência declarada como `Enum`/`EnumItem` + `TweenInfo`, não como "os 22 tipos".**
+
+### L2.4.3 — Dois requisitos que esta seção manda para `task-runtime-031`
+
+O desenho de tipos de valor está sendo feito em paralelo. Dois pedidos concretos, para não ter retrabalho:
+
+1. **Priorizar `Enum`/`EnumItem` + `TweenInfo` na leva 1 daquele desenho.** São o que desbloqueia `TweenService` inteiro, e `Enum` também desbloqueia `GetRequestBudgetForRequestType`, `ListVersionsAsync(sortDirection)` e `PostAsync(contentType)` desta leva.
+**Estado no board, verificado ao fechar esta seção:** o desenho de tipos de valor já virou território próprio (`src/valuetypes/`, agente `coder-valuetypes`) e tarefas — `task-valuetypes-003` cobre `Enum` + o gerador de enums na **leva 1** daquele plano. **`TweenInfo` está na leva 2 de lá e ainda não tem tarefa.** Ou seja: das duas dependências de `TweenService`, uma já está no board e a outra não. É `TweenInfo` que fica no caminho crítico, e é por isso que o pedido 1 acima é concreto e não retórico.
+
+2. **Cada tipo interpolável precisa expor um contrato de interpolação documentado** (uma operação `lerp(a, b, alpha)` ou equivalente, definida no próprio módulo do tipo). `TweenService` **não** deve reimplementar interpolação por tipo — se ele conhecer a fórmula de `Vector3`, a fórmula passa a existir em dois lugares.
+
+### L2.4.4 — Semântica já fixada, para quando destravar (não construir agora)
+
+| Item | Fato |
+|---|---|
+| Validação (propriedade inexistente, tipo incompatível, tipo não tweenável) acontece em **`Create`**, não em `Play` | 3 famílias de erro confirmadas por citação |
+| `TweenInfo.new(time=1, easingStyle=Quad, easingDirection=Out, repeatCount=0, reverses=false, delayTime=0)` | Doc oficial, batendo com o `Default` bruto de `Tween.TweenInfo` no dump |
+| `Cancel()` congela no valor corrente e zera o progresso; `Play()` depois reinicia do zero; `Pause()`+`Play()` retoma | Confirmado |
+| `Completed(playbackState)` dispara em conclusão (`Completed`) **e** em `Cancel()` (`Cancelled`); **não** em `Pause()` | Confirmado |
+| `RepeatCount = -1` → laço infinito, `Completed` nunca dispara | Confirmado |
+| `RepeatCount` são repetições **extras** (`0` toca uma vez) | Confirmado |
+| Passo de atualização | Ligar em `RunService.Heartbeat` (o único relógio real do LuauBench). O passo exato do Roblox **NÃO CONFIRMADO** → aproximação declarada |
+| Fórmulas de easing | **Não reproduzíveis com fidelidade garantida** (a melhor reprodução aberta admite ~2 casas). `Linear` é exato; as outras 10 entram como **aproximação declarada**, com a divergência no comentário |
+| Alvo destruído no meio do tween | Não erra nem derruba (convergência de relatos, sem fonte oficial) — comportamento a documentar como aproximação |
+| Tipos com valor ainda não simulado (`Vector3`, `CFrame`, …) | Enquanto o tipo não existir, `Create` erra com `[LuauBench]` nomeando a lacuna — nunca com a mensagem de "tipo não tweenável" do Roblox, que mentiria |
+
+---
+
+## L2.5 — Grupo 4: `PhysicsService`, `Lighting`, `SoundService` — e um achado que muda onde o Grupo 4 mora
+
+A regra 03 pede "cobertura mínima de API, comportamento simplificado e documentado" para o Grupo 4. A pesquisa mostrou que os três não são iguais: **um deles é 100% simulável com fidelidade exata, outro tem exatamente um núcleo de estado que vale simular, e o terceiro é dado morto.** Tratá-los com a mesma régua seria errar dos dois lados.
+
+### L2.5.1 — Achado: os grupos de colisão pertencem ao `WorldRoot`, não ao `PhysicsService`
+
+`WorldRoot` — superclasse de `Workspace`, **já gerada na leva 1** pelo fecho automático — declara sua **própria cópia scriptável** dos oito métodos de grupo de colisão **[dump 09-05d]**:
+
+```
+RegisterCollisionGroup(name)            UnregisterCollisionGroup(name)
+IsCollisionGroupRegistered(name)        RenameCollisionGroup(from, to)
+GetRegisteredCollisionGroups()          GetMaxCollisionGroups()
+CollisionGroupSetCollidable(a, b, c)    CollisionGroupsAreCollidable(a, b)
+```
+Todos `Security None`, `Capabilities ["Physics"]` (concedível, logo **dentro** do schema por A.4), escopados **por instância de mundo** — `WorldModel.UseWorkspaceCollisionGroups` **[dump 09-05d]** só existe porque o escopo é por mundo. A doc oficial já marca os métodos homônimos de `PhysicsService` como *superseded by `WorldRoot`* (sem tag `Deprecated` formal no dump ainda).
+
+**Consequência de arquitetura:** o registro de grupos de colisão é **estado do `WorldRoot`**, e `PhysicsService` é a vista legada sobre o registro do `Workspace`. Escrever o estado dentro de `behavior/PhysicsService.luau` e depois fazer `Workspace` consultá-lo inverteria a relação real.
+
+**Decisão:**
+- `src/services/CollisionGroups.luau` — o registro, dado puro, sem `Instance`: nomes registrados, matriz de colidibilidade par a par, limite de 32.
+- `src/services/behavior/WorldRoot.luau` — **novo**, os oito métodos, com um registro **por instância** (canal de estado privado de L2.0.2). É a **primeira vez que `Workspace` ganha comportamento de verdade**.
+- `src/services/behavior/PhysicsService.luau` — os mesmos métodos, **delegando ao registro da instância de `Workspace`** obtida via `Context.GetDataModel():GetService("Workspace")`. É o modelo fiel (uma verdade só), e o que faz `PhysicsService:RegisterCollisionGroup("X")` seguido de `workspace:IsCollisionGroupRegistered("X")` devolver `true`, como no Roblox.
+
+Fatos confirmados que a simulação honra exatamente: **`GetMaxCollisionGroups() == 32`**; o grupo **`"Default"` já vem registrado**; **dois grupos recém-registrados colidem entre si por padrão**. Não confirmados e portanto tratados pelo princípio da Decisão 3 ("em dúvida, incluir/permitir", falhar por omissão e não por comissão): registrar nome duplicado **não erra** (idempotente) e não há restrição cliente/servidor. Os dois viram comentário no código e pendência de pesquisa, não invenção.
+
+Os 7 métodos `Deprecated` de `PhysicsService` (`CreateCollisionGroup`, `GetCollisionGroupId`, `GetCollisionGroupName`, `GetCollisionGroups`, `RemoveCollisionGroup`, `SetPartCollisionGroup`, `CollisionGroupContainsPart`) **ficam com o stub `[LuauBench] … not simulated yet`**: estão no schema (regra da Decisão 3 — `Deprecated` entra), mas os que dependem de `BasePart` (`SetPartCollisionGroup`, `CollisionGroupContainsPart`) exigiriam a classe `BasePart`, que não é coberta, e os de id numérico expõem um modelo de id que o Roblox moderno abandonou. Sinalizado no relatório da tarefa, conforme a regra 03 pede.
+
+**`PhysicsService` é o Grupo 4 com maior retorno e nenhuma aproximação:** zero propriedades, quinze funções, tudo dado puro. Não há física simulada em lugar nenhum disto — grupo de colisão é bookkeeping, e o LuauBench o reproduz **exatamente**.
+
+### L2.5.2 — `Lighting`: um núcleo de estado acoplado, o resto é dado inerte
+
+`Lighting` já está coberta desde a leva 1 (20 propriedades no schema, sem `Behavior`). O que falta é **o único acoplamento real da classe**, hoje divergente em silêncio: escrever `Lighting.ClockTime = 6` deixa `TimeOfDay` valendo `"14:00:00"`.
+
+Confirmado por doc oficial: **`ClockTime`, `TimeOfDay` e `Get`/`SetMinutesAfterMidnight` são três vistas do mesmo estado.** Os defaults do dump já são coerentes entre si (`ClockTime = 14`, `TimeOfDay = "14:00:00"` **[dump 09-05d]**), então a semeadura de `ClassRegistry.new` já nasce certa — só as escritas divergem.
+
+**Decisão: `behavior/Lighting.luau` (novo) mantém as três vistas sincronizadas**, com uma única fonte interna em minutos. `TimeOfDay` aceita escrita curta (`"11:00"`) e `SetMinutesAfterMidnight` faz **wrap** acima de 24 h — os dois confirmados. Zero-padding na leitura e wrap na escrita direta em `ClockTime` **não confirmados** → adotar a forma canônica `HH:MM:SS` com zero-padding e wrap, comentado como aproximação de boa-fé.
+
+`LightingChanged(skyChanged: bool)` passa a disparar nas mudanças de propriedade **exceto** `GlobalShadows`, `FogColor`, `FogStart` e `FogEnd` — exclusão **documentada oficialmente**, e uma pegadinha que só um LuauBench fiel reproduz.
+
+`GetMoonPhase()` devolve **`0.75` sempre** — é o valor real do motor hoje, confirmado; fidelidade de graça. `GetSunDirection`/`GetMoonDirection` devolvem `Vector3` e **não têm fórmula pública**: permanecem com o stub `[LuauBench] … not simulated yet` mesmo depois de `Vector3` existir. Divergência declarada, não uma dívida que a leva de tipos de valor quita.
+
+Todo o resto de `Lighting` (`Ambient`, `Brightness`, `FogColor`, …) continua o que já é: **dado que guarda e devolve, sem render nenhum.** Já declarado na tabela de fidelidade da leva 1; nada muda.
+
+### L2.5.3 — `SoundService`: superfície e nada mais, deliberadamente
+
+17 membros sobrevivem ao filtro (13 propriedades, 4 funções, zero eventos). Para o público-alvo declarado do LuauBench — lógica pura, data manager, state machine — `SoundService` é **irrelevante**, e a pesquisa confirmou isso ao procurar uso real.
+
+**Decisão: cobertura de superfície, sem `Behavior` próprio.** As propriedades guardam e devolvem (dado morto, como `Lighting`); os quatro métodos ficam com o stub `[LuauBench] … not simulated yet` do `ClassBuilder`.
+
+Duas notas que **não** viram exceção:
+- `PlayLocalSound` é client-only e erra no servidor real. **Não recebe `RejectingSignal`-equivalente**: a regra B.5.5 exige *citação ao vivo de erro naquele membro* para recortar uma exceção do balde de superfície client-only, e a pesquisa só achou relato de comunidade, sem string verbatim. O stub `[LuauBench]` já erra alto; trocar o texto sem evidência seria alargar a exceção por analogia — exatamente o que B.5 proibiu.
+- **Discrepância dump × doc:** `RespectFilteringEnabled` tem `Default = "false"` no dump e `true` na doc oficial. **Decisão: o dump vence** — é a fonte única do projeto (regra 03), o valor gerado é `false`, e a discrepância fica registrada aqui e no relatório do gerador. Nenhum agente "corrige" um `Default` gerado à mão.
+
+`SoundService` entra em `tools/coverage.luau` só para que `game:GetService("SoundService")` pare de errar e a árvore de um projeto real materialize; é a definição literal de "cobertura mínima".
+
+---
+
+## Divisão por território
+
+| Território | O que constrói nesta leva | Contrato com o vizinho |
+|---|---|---|
+| `runtime` (`src/runtime/`) | (a) `DataModel:BindToClose(fn)` + a espera dos callbacks no encerramento do `Scheduler`; (b) `DataModel.JobId`/`PlaceId`/`GameId`/`PlaceVersion` com valores fixos por processo; (c) emenda da lista fechada de chamadores de `NewEngineInstance` (só comentário) | Continua sem conhecer nome de Service e sem ler o dump. Nada em (a)/(b) depende de `services` |
+| `services` (`src/services/` + `tools/coverage.luau`) | `AsyncCall`, `InstanceState`, `CollisionGroups`, `datastore/{Value,Store}`, os `behavior/*` novos, as classes novas em `coverage.luau` e a regeração de `generated/**` | Consome só `require("../runtime")`. Expõe a `cli` só `require("../services")` — nenhuma superfície pública nova, exceto o que a flag de HTTP exige |
+| `cli` (`src/cli/`) | `--allow-http` e `--allow-http-local` em `Args.Command`; repasse a `Services.Bootstrap`; linha de auditoria por requisição em `--verbose`; `Messages.luau` para os textos novos | Nunca requer `generated/`/`behavior/`; nunca toca `tools/` |
+
+`cli` só entra na sub-leva B de HTTP. Todo o resto é `runtime` + `services`, e dentro de `services` as tarefas são **sequenciais** (mesmo território) — o paralelismo desta fase é entre territórios, como na leva 1.
+
+## Ordem de leva sugerida
+
+| Leva | Conteúdo | Por quê nesta posição |
+|---|---|---|
+| **1** | `runtime`: `BindToClose` + `JobId`/`PlaceId`/`GameId` + emenda do comentário de `NewEngineInstance`. Em paralelo, `services`: `AsyncCall` + `InstanceState` | Pré-requisitos duros. Nenhum serviço desta leva pode ser escrito antes de `AsyncCall`, e o cenário do ProfileStore não fecha sem `BindToClose` |
+| **2** | `services`: **DataStore núcleo** — `coverage.luau` + regeração + `datastore/{Value,Store}` + `DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo` + as três classes de options | É o caso de uso central do `CLAUDE.md` e o único `[SKIP]` do `testador` |
+| **3** | `services`: **DataStore v2** — `DataStore` (`GetVersionAsync`/`ListVersionsAsync`/`ListKeysAsync`) + família `Pages`; e `OrderedDataStore`/`GetSortedAsync` como tarefa irmã | Fecha o que o `ProfileVersionQuery` do ProfileStore usa. `OrderedDataStore` é leaderboard, valor real mas fora do caminho crítico |
+| **4** | `services`: `MessagingService` inteiro; `HttpService` **sub-leva A** (JSON/GUID/UrlEncode + `HttpEnabled` falso + os três métodos de rede errando) | Ambos pequenos, sem dependência nova, risco zero. `HttpService` sub-leva A é fidelidade exata |
+| **5** | `services`: `WorldRoot` + `PhysicsService` + `Lighting`; `SoundService` só como superfície | Grupo 4. Independentes de tudo acima — podem trocar de posição com a leva 4 sem custo |
+| **6** | `HttpService` **sub-leva B** (rede real) — `services` + `cli` juntos | Única superfície de rede do projeto; merece uma leva só dela e revisão dedicada |
+| **7** | `testador`: cenário do ProfileStore de `[SKIP]` para verde, com o `ProfileStore.luau` real | Depois de 2+3+1; é o teste de aceitação de todo o desenho |
+| **bloqueada** | `TweenService` + `Tween`/`TweenBase` | Depende de `Enum`/`EnumItem` + `TweenInfo` de `task-runtime-031`. Não entra em nenhuma leva desta seção |
+
+**Tarefas criadas no board (17), na ordem das levas acima:**
+
+| Leva | Onda | Tarefas |
+|---|---|---|
+| 1 | 44 | `task-runtime-033` (BindToClose) · `task-runtime-034` (JobId/PlaceId/GameId) · `task-runtime-035` (comentário de `NewEngineInstance`) · `task-services-016` (`AsyncCall` + `InstanceState`) |
+| 2 | 45 | `task-services-017` (coverage + geração + `Value`/`Store`) · `task-services-018` (`DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo`/options) · `task-services-028` (pesquisa das 6 pendências, em paralelo) |
+| 3 | 46 | `task-services-019` (DataStore v2 + `Pages`) · `task-services-020` (`OrderedDataStore`) |
+| 4 | 47 | `task-services-021` (`MessagingService`) · `task-services-022` (`HttpService` sub-leva A) |
+| 5 | 48 | `task-services-023` (`CollisionGroups`/`WorldRoot`/`PhysicsService`) · `task-services-024` (`Lighting`) · `task-services-025` (`SoundService`) |
+| 6 | 49 | `task-services-026` (`HttpService` sub-leva B) · `task-cli-026` (as duas flags + auditoria) |
+| 7 | 50 | `task-services-027` (cenário ProfileStore real, agente `testador`) |
+
+## Fidelidade vs. pragmatismo — resumo desta leva
+
+| Área | Fidelidade |
+|---|---|
+| Superfície de membro das classes novas | **Exata** — gerada do dump fixado, mesmo filtro de quatro eixos de A.4 |
+| Contrato de `GetAsync`/`SetAsync`/`UpdateAsync`/`RemoveAsync`/`IncrementAsync` (aridade, ordem, `nil` abortando, `keyInfo`) | **Exato** |
+| Memoização de `GetDataStore` por `(name, scope)` | **Exata** (doc oficial) |
+| Deep copy na leitura e na escrita do DataStore | **Exata** — sem ela o LuauBench esconderia bug real |
+| Validação de limite (50 chars, 4 MiB, valor serializável) | **Exata** em comportamento; **mensagem** de erro é aproximação de boa-fé |
+| Persistência entre execuções | **Não existe nesta leva.** Store vive e morre com o processo. Contrato de injeção já fechado (L2.1.2) |
+| Budget / throttling de DataStore | **Não simulados.** `GetRequestBudgetForRequestType` devolve constante grande e fixa. Motivo em L2.1.4 |
+| Erro transitório de DataStore | **Nunca injetado** (determinismo) |
+| Transform de `UpdateAsync` que yielda | **Detectada e erra** — divergência que passaria no banco e falharia em produção |
+| `HttpService` sem `--allow-http` | **Exata** — é um lugar Roblox com HTTP desligado, que é o default do Roblox |
+| `HttpService` com `--allow-http` | Rede real. Sem `Timeout` (Lune 0.10.5 não oferece); sem bloqueio de `roblox.com`; sem limite de 500/min |
+| `HttpService` e destinos locais/privados | **Mais restritivo que o Roblox**, de propósito (L2.2.4). Segunda flag para liberar |
+| `MessagingService` num processo | **Fiel** a um jogo com um servidor: o publisher recebe o próprio eco (evidência empírica) |
+| `MessagingService` entre servidores | **Não existe.** Um processo, um servidor |
+| Ordem de entrega entre assinantes | **Aproximação** (ordem de inscrição); o Roblox não garante ordem |
+| Grupos de colisão (`WorldRoot`/`PhysicsService`) | **Exatos** — 32 grupos, `"Default"` pré-registrado, colidem por padrão. Nenhuma física simulada, e nenhuma é necessária |
+| `Lighting.ClockTime`/`TimeOfDay`/minutos | **Acoplados**, como no Roblox. Formato de leitura com zero-padding: aproximação |
+| `Lighting.LightingChanged` | **Fiel**, incluindo as quatro propriedades que **não** o disparam |
+| `Lighting.GetSunDirection`/`GetMoonDirection` | **Nunca simulados** — sem fórmula pública. Stub `[LuauBench]` permanente |
+| `Lighting.GetMoonPhase` | **Exato** (`0.75`) |
+| `SoundService` | **Superfície e nada mais.** Propriedades guardam e devolvem; métodos erram alto |
+| Latência de toda API `Yields` | **Zero** (um passo de scheduler). Divergência declarada em L2.0.1 |
+| `TweenService` | **Ausente**, com erro nomeado — bloqueada por `Enum` + `TweenInfo` |
+
+## Riscos e decisões
+
+- **A superfície de rede é o único risco novo de segurança do projeto inteiro.** Mitigações, todas obrigatórias: default off (que é também o default do Roblox), flag explícita, segunda flag para destinos locais/privados, linha de auditoria em `--verbose`, e revisão dedicada da sub-leva B por `revisor-services` **e** `revisor-cli`. Nada disso é opcional.
+- **`GetRequestBudgetForRequestType` devolvendo constante pode mascarar um bug de throttle real do usuário.** Aceito, e o motivo está em L2.1.4: a alternativa (simular a fórmula com zero jogadores) quebraria código que funciona em produção — falha por comissão, que este projeto já decidiu ser pior que falha por omissão.
+- **Store só em memória some entre execuções.** Aceito nesta leva, com o contrato de persistência já fechado para não ser improvisado depois. Declarado no relatório e no comentário do módulo, nunca silencioso.
+- **`AsyncCall.Yield` sem latência não reproduz corrida de janela larga.** Declarado; `--async-latency` fica registrado como extensão futura, fora do namespace da classe.
+- **Estado de singleton em `local` de módulo** (`DataStoreService`, `HttpService`, `MessagingService`) depende da invariante "um processo, sem reset". Mesmo gatilho já registrado por `ClassRegistry`: watch mode que reinicie o `DataModel` sem reiniciar o processo volta ao arquiteto.
+- **Assinatura viva de `MessagingService` não mantém o `Scheduler` vivo.** `luaubench run` termina quando não há mais trabalho pendente, mesmo com assinaturas abertas — divergência declarada (no Roblox o servidor continua de pé). Sem isso, um `SubscribeAsync` solto travaria a CLI para sempre.
+- **`_LuauBench*` como prefixo de estado privado** é o que impede colisão com um membro futuro do dump. Critério de revisão explícito: chave de estado privado sem o prefixo é reprovada.
+- **Regenerar `generated/**` toca ~30 arquivos de uma vez.** Mesma disciplina da leva 1: ninguém edita à mão dentro de `generated/`, e `revisor-services` reprova qualquer diff manual lá.
+- **`.project.json` inválido** — território de `cli`, inalterado. O que esta leva acrescenta é que `GetService("DataStoreService")`/`("HttpService")`/`("MessagingService")`/`("PhysicsService")`/`("SoundService")` param de errar `[LuauBench] … not simulated yet` e passam a devolver instância — nenhuma outra classe muda de estado.
+
+## O que deliberadamente NÃO fazer agora
+
+- **Não** implementar `TweenService`/`Tween`/`TweenBase` — bloqueadas por `Enum`/`EnumItem` + `TweenInfo`.
+- **Não** persistir o DataStore em disco nesta leva, e **nunca** chamar `@lune/fs` de dentro de `services`.
+- **Não** simular budget, throttling, fila de requisições, nem erro transitório de DataStore.
+- **Não** simular "Studio sem API access" nem "jogo não publicado" — o LuauBench sempre tem acesso ao próprio store.
+- **Não** implementar `ListDataStoresAsync`, `BatchGetAsync`, `GetVersionAtTimeAsync`, `RemoveVersionAsync`, `OnUpdate`.
+- **Não** dar rede por padrão, e **não** implementar rede sem as duas flags e a linha de auditoria.
+- **Não** implementar bloqueio de `roblox.com` nem o erro client-only de `HttpService` — confirmados só por fonte secundária, e o LuauBench é sempre servidor.
+- **Não** dar a `PlayLocalSound` tratamento de `RejectingSignal` — regra B.5.5 exige citação ao vivo, que não existe.
+- **Não** simular `GetSunDirection`/`GetMoonDirection` nem depois de `Vector3` existir.
+- **Não** "corrigir" o `Default` de `RespectFilteringEnabled` para bater com a doc — o dump é a fonte única.
+- **Não** implementar `WorldModel`/`UseWorkspaceCollisionGroups`, nem os 7 métodos `Deprecated` de `PhysicsService`.
+- **Não** criar `luaubench.toml` — as duas flags de HTTP cabem em `Args.Command`, e a Decisão 10 de `cli` continua valendo.
+
+## Pendências para o `pesquisador` (nenhuma bloqueia; todas antes de `revisor-services` aprovar)
+
+1. Fórmula numérica do budget de DataStore, lida linha a linha do Markdown bruto oficial (dois fetches divergiram). Só importa se um dia houver modo de throttle opt-in.
+2. Mensagem exata para valor não serializável em `SetAsync`/`UpdateAsync` (`NaN`, função, `Instance`, chave mista).
+3. `RegisterCollisionGroup` com nome já registrado: erra ou é idempotente? E há restrição cliente/servidor?
+4. `Lighting.ClockTime` escrito fora de `[0, 24)`: wrap, clamp ou erro? E `TimeOfDay` lido tem zero-padding?
+5. Texto verbatim do erro de `HttpService` com HTTP desabilitado, e do erro de `PlayLocalSound` no servidor (este último decide se B.5.5 se aplica).
+6. `GetGlobalDataStore()` devolve `ClassName == "GlobalDataStore"` ou `"DataStore"` no motor real? (O dump diz `DataStore`; seguimos o dump.)
+

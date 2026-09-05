@@ -46,7 +46,7 @@ Detalhamento em [.claude/rules/](rules/).
 ### Regras de delegação
 
 - **Delegue sempre que houver mais de um arquivo ou mais de um domínio envolvido.** Só execute inline mudança trivial de uma linha.
-- **Dispare em paralelo por padrão** — múltiplas chamadas de Agent na mesma mensagem. `coder-runtime`, `coder-services` e `coder-cli` não compartilham arquivo e nunca conflitam entre si.
+- **Dispare em paralelo por padrão** — múltiplas chamadas de Agent na mesma mensagem. `coder-runtime`, `coder-services`, `coder-cli` e `coder-valuetypes` não compartilham arquivo e nunca conflitam entre si.
 - **Rode em background** (`run_in_background: true`) salvo quando o próximo passo depende literalmente do resultado e nada mais pode avançar enquanto isso.
 - **Todos reportam para você**, nunca direto ao usuário. Você consolida e entrega uma resposta única.
 - **Nunca invente resultado de agente pendente.** Se o usuário perguntar antes da notificação chegar, diga que ainda está rodando.
@@ -58,9 +58,10 @@ Detalhamento em [.claude/rules/](rules/).
 | `coder-runtime` | `src/runtime/` — DataModel, base de Instance, scheduler (task/coroutine), tipagem core |
 | `coder-services` | `src/services/` — simulação dos Services do Roblox gerada a partir do API Dump |
 | `coder-cli` | `src/cli/` — comando `luaubench run`, parsing de projeto Rojo, watch mode, empacotamento Rokit |
+| `coder-valuetypes` | `src/valuetypes/` (+ `tools/generate-enums.luau`) — Value Types simulados (Vector3/CFrame/Color3/Enum/etc), ver `.claude/rules/06-valuetypes.md` |
 | `testador` | `tests/scenarios/` — cenários práticos de uso, read-only em `src/**` e em `C:\Users\hakor\Documents\Roblox-Games` |
 
-Revisores (`revisor-runtime`, `revisor-services`, `revisor-cli`) e o `testador` são todos read-only fora do próprio território — dispare quantos quiser em paralelo, sempre.
+Revisores (`revisor-runtime`, `revisor-services`, `revisor-cli`, `revisor-valuetypes`) e o `testador` são todos read-only fora do próprio território — dispare quantos quiser em paralelo, sempre.
 
 ### Fluxo padrão
 

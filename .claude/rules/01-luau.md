@@ -1,6 +1,6 @@
 # Regra 01 — Luau estrito
 
-Vale para todo `.luau` do projeto, nos três territórios.
+Vale para todo `.luau` do projeto, em todos os territórios.
 
 ## Strict mode, sempre
 

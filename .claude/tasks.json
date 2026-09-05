@@ -1392,10 +1392,16 @@
       "agent": "arquiteto",
       "reviewer": "revisor-cli",
       "wave": 33,
-      "tags": ["cli", "correcao-de-revisao", "rojo"],
+      "tags": [
+        "cli",
+        "correcao-de-revisao",
+        "rojo"
+      ],
       "priority": "medium",
       "acceptance": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md (nova secao) escolhendo (a) ou (b) com justificativa; se (b), desenho exato de isOutermostRoot (onde threading comeca, onde some) pra virar task pequena de implementacao pro coder-cli; se (a), o comentario no codigo (ja escrito pelo coder) e considerado suficiente ou precisa de ajuste de texto.",
-      "depends": ["task-cli-018"],
+      "depends": [
+        "task-cli-018"
+      ],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
       "result": "DECISAO (b) -- restringir a excecao a raiz do projeto MAIS EXTERNO -- registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md, secao 'Decisao 16'. Motivos: (1) o sintoma real nao e 'diagnostico menos especifico', e ZERO diagnostico no Plan + mensagem enganosa depois ('DataModel is not simulated by LuauBench yet' culpa o LuauBench quando a causa e o .project.json do usuario); (2) isRoot ja tem significado legitimo e correto em TreePlanner.luau:681 ('raiz de um projeto qualquer'), sobrecarrega-lo com 'raiz do plano inteiro' cria duas semanticas no mesmo nome dentro de uma recursao mutua de 4 funcoes; (3) o custo da variante escolhida (~6 linhas, 1 arquivo, zero churn de assinatura) e menor que o de documentar a divergencia direito. MECANISMO ESCOLHIDO DIFERE da sugestao do revisor: nao um parametro isOutermostRoot propagado (seria o 13o parametro posicional de resolveCore, boolean ADJACENTE a outro boolean passado como literal em 2 call sites -- transposicao silenciosa que o Luau nao pega), e sim um campo aditivo PlanContext.OutermostProjectFilePath (caminho normalizado, escrito uma vez em TreePlanner.Plan, lido num ponto so) -- 'qual e o projeto mais externo' e invariante do plano inteiro, exatamente a definicao de PlanContext no comentario do proprio tipo (:115-116). Desenho exato + prova de que a comparacao de caminho e exata (normalizePath idempotente + cycleGuard impede a raiz de topo de reaparecer como aninhada) + tabela de comportamento antes/depois + lacuna conhecida que a decisao NAO fecha (DataModel + $path de pasta sem init em raiz aninhada, pre-existente, depende de pesquisa sobre o Rojo real) estao na Decisao 16. Implementacao virou task-cli-020 (coder-cli)."
@@ -1408,10 +1414,16 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 34,
-      "tags": ["cli", "correcao-de-revisao", "rojo"],
+      "tags": [
+        "cli",
+        "correcao-de-revisao",
+        "rojo"
+      ],
       "priority": "medium",
       "acceptance": "Fixture novo em src/cli/fixtures/tree-planner/ (sugestao: nested-project-root-datamodel-conflict/) reproduzindo o cenario do revisor -- projeto externo com um no cujo $path aponta pra pasta com default.project.json proprio, e esse projeto aninhado com {\"$className\":\"DataModel\",\"$path\":\"algo.lua\"} na raiz -- com teste esperando error plan/class-name-conflict no NodePath da raiz do projeto aninhado e TreePlanner.Plan devolvendo nil (contrato 'nil sse bag:HasErrors()'). Teste garantindo que o fixture root-source-ignored (raiz de TOPO) continua emitindo warning plan/root-source-ignored e NENHUM plan/class-name-conflict. Teste de caminho nao-canonico: Plan chamado com project.FilePath contendo './' ou '\\\\' ainda reconhece a raiz de topo como mais externa. Suites de src/cli, src/runtime e src/services 100% verdes (referencia: 447/447 em 33 arquivos .spec.luau, contagem do revisor). luau-lsp analyze limpo, --!strict, sem any, nada fora de src/cli/ tocado.",
-      "depends": ["task-cli-019"],
+      "depends": [
+        "task-cli-019"
+      ],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
       "result": "PlanContext ganhou OutermostProjectFilePath: string. normalizePath(project.FilePath) sobe pra antes da construcao do ctx em TreePlanner.Plan, preenchendo o campo. Excecao em resolveCore trocada de isRoot pra isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath. isRoot mantido intocado em todos os outros usos (:686). Fixture nested-project-project-root-datamodel-conflict reproduz o cenario original do revisor. 29/29 TreePlanner.spec (27+2 novos), 449/449 total (447+2, zero regressao). Nada fora de src/cli/ tocado, Messages.luau intocado.",
@@ -1425,7 +1437,12 @@
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 35,
-      "tags": ["cli", "rojo", "erro", "bug"],
+      "tags": [
+        "cli",
+        "rojo",
+        "erro",
+        "bug"
+      ],
       "priority": "medium",
       "acceptance": "$path absoluto (Windows 'C:/...'/'C:\\\\...' e Unix '/...') detectado antes de tocar filesystem, produz Diagnostic dedicado (novo Code, ex. plan/absolute-path-not-allowed) citando NodePath e o $path literal -- nunca erro cru do SO ('os error NNN') vazando; teste cobrindo os dois formatos (Windows e Unix); regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
@@ -1441,7 +1458,12 @@
       "agent": "pesquisador",
       "reviewer": "revisor-cli",
       "wave": 35,
-      "tags": ["cli", "rojo", "pesquisa", "bug"],
+      "tags": [
+        "cli",
+        "rojo",
+        "pesquisa",
+        "bug"
+      ],
       "priority": "low",
       "acceptance": "Comportamento real do Rojo confirmado com fonte (codigo-fonte, mesma tecnica das pesquisas anteriores) para $className=DataModel em projeto aninhado nao-raiz-de-topo; resposta suficiente pra coder-cli implementar sem re-pesquisar (nova task gerada se a resposta pedir codigo).",
       "createdAt": "2026-09-05",
@@ -1453,26 +1475,40 @@
       "id": "task-cli-023",
       "title": "ARQUITETURA: decidir escopo do diagnostico pra classe NotCreatable/abstrata alcancada via $className+$path-Folder (so DataModel ou generico)",
       "description": "Consequencia da pesquisa de task-cli-022 (.claude/agents-memory/pesquisa-datamodel-nested-root-2026-09-05.md). Achado: o Rojo real nao valida posicao de DataModel (nem de nenhuma classe) em lugar nenhum do parsing -- entao qualquer diagnostico aqui seria original do LuauBench (justificado pelo dump, ClassDescriptor.IsAbstract), nao fidelidade ao Rojo. Achado colateral mais importante: o bug original (DataModel em posicao nao-raiz sem diagnostico, so falha depois no Materialize com erro generico) NAO E EXCLUSIVO de DataModel -- qualquer classe NotCreatable/abstrata do dump alcancada via $className explicito + $path que resolve a uma pasta comum (sem init.*, viraria Folder) escapa do Plan da mesma forma, so falhando depois no Materialize. Decida: (a) escopo ESTREITO -- diagnostico dedicado so pra DataModel (caso observado na pratica, mais simples); ou (b) escopo GENERICO -- diagnostico pra qualquer $className cujo ClassDescriptor.IsAbstract==true nessa posicao (mais correto, cobre mais casos, exige TreePlanner saber consultar IsAbstract via Services.IsServiceClass-like API, ja existe precedente com Services.IsEngineFixedChild/IsServiceClass). Pondere contra o caso de uso real: qual e mais provavel de acontecer de verdade num .project.json de usuario (typo de $className apontando pra classe abstrata por engano)?",
-      "column": "todo",
+      "column": "done",
       "agent": "arquiteto",
       "reviewer": "revisor-cli",
       "wave": 37,
-      "tags": ["arquitetura", "cli", "rojo", "bug"],
+      "tags": [
+        "arquitetura",
+        "cli",
+        "rojo",
+        "bug"
+      ],
       "priority": "low",
       "acceptance": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md (nova secao) escolhendo (a) ou (b) com justificativa; mensagem do diagnostico definida (sem fidelidade ao Rojo pra imitar, e original do LuauBench, citar o motivo -- classe abstrata/NotCreatable no dump); vira task pequena de implementacao pro coder-cli.",
-      "depends": ["task-cli-022"],
+      "depends": [
+        "task-cli-022"
+      ],
+      "result": "Decisao registrada em .claude/agents-memory/arquiteto-cli-2026-09-05.md, secao 'Decisao 17'. ESCOLHIDO (b) GENERICO, mas NAO na forma proposta pela task: ManifestEntry.IsAbstract e a tag NotCreatable do dump, e TODO Service (Workspace, ReplicatedStorage, Players, Lighting, StarterGui, StarterPlayer) e TODO filho fixo do motor (StarterPlayerScripts, StarterCharacterScripts) tem IsAbstract==true -- 'IsAbstract==true -> erro' teria falso positivo em praticamente todo .project.json real do ecossistema. A guarda decidida antecipa a MESMA escolha de ramo de TreeMaterializer.createInstance uma fase antes: dispara so quando not isOutermostRoot AND not isServiceRoot AND not IsEngineFixedChild(parent,name,class) AND IsEngineOnlyClass(class), sendo IsEngineOnlyClass = IsAbstract AND (Covered OR RUNTIME_OWNED) -- o recorte de cobertura mantem Terrain e as demais classes nao cobertas com a mensagem verdadeira do Materialize ('[LuauBench] ... not simulated yet'), e RUNTIME_OWNED existe porque DataModel tem Covered==false no manifesto (implementada por runtime, fora do pipeline gerado de services) e sem isso a guarda NAO dispararia justamente no caso original. Novo Diagnostic plan/engine-only-class (error), mensagem original do LuauBench citando a tag NotCreatable do dump, com frase extra quando className=='DataModel'. Ganho real sobre o materialize/invalid-class de hoje: o Diagnostic do Plan carrega FilePath e Field, entao em projeto aninhado o usuario descobre QUAL .project.json declarou o no. Exige API nova em services (Services.IsEngineOnlyClass) -> task-services-014, dependencia dura de task-cli-024.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     },
     {
       "id": "task-runtime-031",
       "title": "ARQUITETURA: desenhar sistema de Value Types simulados (Vector3/CFrame/Color3/Enum/etc, 22 tipos)",
-      "description": "Prioridade alta pos-sessao: e a maior lacuna real que impede scripts de producao rodarem de verdade no LuauBench hoje -- todo projeto real testado usa Vector3/CFrame/Color3 em $properties ou em codigo de script, e hoje isso so erra nomeando a lacuna (src/cli/UnsimulatedGlobals.luau). Escopo: os 22 tipos hoje listados como nao simulados (Vector3, Vector2, CFrame, Color3, UDim, UDim2, Rect, Region3, Ray, NumberRange, NumberSequence, ColorSequence, BrickColor, TweenInfo, PhysicalProperties, Faces, Axes, Random, DateTime, Font, RaycastParams, OverlapParams, Enum). Decisoes que o arquiteto precisa tomar: (1) ONDE vive a implementacao -- runtime (tipos genericos, sem saber nomes especificos, na linha da regra 02) ou um territorio novo (ex: src/valuetypes/, paralelo a runtime/services/cli, dado que sao ~22 tipos com semantica propria de operador +/-/==/tostring, nao Instance nem Service); (2) qual API Dump-like fonte de verdade usar pra cada tipo (Vector3/CFrame tem campos e metodos bem documentados no Roblox real -- confirmar com pesquisador antes de inventar assinatura); (3) como o sandbox de scripts expõe esses tipos como globals (Vector3.new, CFrame.new, etc) sem abrir brecha de seguranca (mesma disciplina do Sandbox.luau atual); (4) qual subconjunto e prioridade -- Vector3/CFrame/Color3/Enum/UDim/UDim2 sao usados por praticamente todo script real (confirmado pelo testador contra jogos reais), o resto (Font/RaycastParams/OverlapParams/etc) e cauda longa, pode ser leva 2; (5) precisao numerica -- Vector3 do Roblox real usa float32, Luau usa double -- decidir se simula a perda de precisao (fidelidade) ou usa double reto (pragmatismo), documentar a divergencia se escolher o segundo. Isso e ESCOPO NOVO GRANDE -- nao pular pro planejador sem esse desenho completo primeiro (regra 05).",
-      "column": "in-progress",
+      "description": "Prioridade alta pos-sessao: e a maior lacuna real que impede scripts de producao rodarem de verdade no LuauBench hoje -- todo projeto real testado usa Vector3/CFrame/Color3 em $properties ou em codigo de script, e hoje isso so erra nomeando a lacuna (src/cli/UnsimulatedGlobals.luau). Escopo: os 22 tipos hoje listados como nao simulados (Vector3, Vector2, CFrame, Color3, UDim, UDim2, Rect, Region3, Ray, NumberRange, NumberSequence, ColorSequence, BrickColor, TweenInfo, PhysicalProperties, Faces, Axes, Random, DateTime, Font, RaycastParams, OverlapParams, Enum). Decisoes que o arquiteto precisa tomar: (1) ONDE vive a implementacao -- runtime (tipos genericos, sem saber nomes especificos, na linha da regra 02) ou um territorio novo (ex: src/valuetypes/, paralelo a runtime/services/cli, dado que sao ~22 tipos com semantica propria de operador +/-/==/tostring, nao Instance nem Service); (2) qual API Dump-like fonte de verdade usar pra cada tipo (Vector3/CFrame tem campos e metodos bem documentados no Roblox real -- confirmar com pesquisador antes de inventar assinatura); (3) como o sandbox de scripts expõe esses tipos como globals (Vector3.new, CFrame.new, etc) sem abrir brecha de seguranca (mesma disciplina do Sandbox.luau atual); (4) qual subconjunto e prioridade -- Vector3/CFrame/Color3/Enum/UDim/UDim2 sao usados por praticamente todo script real (confirmado pelo testador contra jogos reais), o resto (Font/RaycastParams/OverlapParams/etc) e cauda longa, pode ser leva 2; (5) precisao numerica -- Vector3 do Roblox real usa float32, Luau usa double -- decidir se simula a perda de precisao (fidelidade) ou usa double reto (pragmatismo), documentar a divergencia se escolher o segundo. Isso e ESCOPO NOVO GRANDE -- nao pular pro planejador sem esse desenho completo primeiro (regra 05).\n\nCONCLUIDA 2026-09-05: desenho completo em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md. Territorio decidido (src/valuetypes/ NOVO, quarto ao lado de runtime/services/cli). Duas pesquisas concluidas (.claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md, .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md). Leva 1 quebrada em task-valuetypes-000..007 + as tres pontes (task-runtime-032, task-services-015, task-cli-025) + cenario (task-test-valuetypes-001). PRE-REQUISITO task-valuetypes-000 exige DECISAO DO USUARIO (criar territorio/agentes) antes de qualquer despacho.",
+      "column": "done",
       "agent": "arquiteto",
       "reviewer": null,
       "wave": 36,
-      "tags": ["arquitetura", "value-types", "runtime", "escopo-novo", "prioridade-alta"],
+      "tags": [
+        "arquitetura",
+        "value-types",
+        "runtime",
+        "escopo-novo",
+        "prioridade-alta"
+      ],
       "priority": "high",
       "acceptance": "Desenho completo registrado em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (arquivo novo): territorio decidido (onde vivem os modulos), fonte de dados por tipo confirmada (pesquisador acionado se necessario), contrato de exposicao no sandbox, leva 1 vs leva 2 definida com justificativa de prioridade real (uso observado nos jogos testados), decisao de precisao numerica documentada; pronto para planejador quebrar em tasks paralelas por tipo/grupo de tipos.",
       "createdAt": "2026-09-05",
@@ -1482,15 +1518,646 @@
       "id": "task-services-013",
       "title": "ARQUITETURA: desenhar services wave 2 (TweenService, DataStoreService, HttpService, MessagingService, Lighting/SoundService/PhysicsService)",
       "description": "Continuacao da prioridade de cobertura ja definida em .claude/rules/03-services-api-dump.md (grupos 2-4). Grupo 1 (arvore basica) 100% coberto. Faltam: Grupo 2 -- TweenService (RunService ja feito); Grupo 3 -- DataStoreService, HttpService, MessagingService (caso de uso central citado no CLAUDE.md, data management/ProfileStore); Grupo 4 -- Lighting/SoundService/PhysicsService (cobertura minima de API, comportamento simplificado e documentado, ja com precedente nas divergencias de RunService/RejectingSignal). Decisoes que o arquiteto precisa tomar por classe (nao adivinhar, pesquisador aciona se houver duvida sobre comportamento real): (1) DataStoreService -- e local-first (regra 00 CLAUDE.md, 'nada do projeto do usuario sai da maquina'), entao NAO pode fazer chamada de rede real pro DataStore do Roblox -- decidir se simula um datastore em memoria/arquivo local, com que fidelidade de API (GetAsync/SetAsync/UpdateAsync/budget/throttling); (2) HttpService -- mesma tensao local-first vs. HttpService real faz rede de verdade no Roblox -- decidir se permite rede real (contradiz 'local-first'? ou e aceitavel pois e o script do usuario pedindo, nao o LuauBench) ou simula/mocka; (3) MessagingService -- singleplayer/sem replicacao real (ja documentado como limitacao aceita do projeto) -- decidir semantica de PublishAsync/SubscribeAsync num processo unico; (4) TweenService -- depende de value-types (task-runtime-031) para simular a interpolacao de verdade -- avaliar se depende disso ou pode ter uma leva 1 minima sem interpolacao real; (5) Lighting/SoundService/PhysicsService -- cobertura minima de propriedades, sem simulacao fisica/render real, documentado como fidelidade menor (regra 02 permite). Gerar o desenho e as tasks paralelas por servico pro planejador.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "arquiteto",
       "reviewer": null,
       "wave": 36,
-      "tags": ["arquitetura", "services", "escopo-novo"],
+      "tags": [
+        "arquitetura",
+        "services",
+        "escopo-novo"
+      ],
       "priority": "high",
       "acceptance": "Desenho completo registrado em .claude/agents-memory/arquiteto-services-2026-09-05.md (nova secao): decisao por servico (Grupo 2/3/4) sobre fidelidade vs. local-first vs. pragmatismo, dependencias entre servicos e task-runtime-031 explicitadas, ordem de leva sugerida; pronto para planejador quebrar em tasks paralelas por servico.",
       "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": "Desenho completo registrado em .claude/agents-memory/arquiteto-services-2026-09-05.md, secao 'Leva 2 de services' (citavel como L2), apoiado em 4 pesquisas novas (datastore, http-messaging, tweenservice, lighting-sound-physics) mais extracao propria do dump fixado. Decisoes: DataStore local em memoria com contrato exato e budget/throttling nao simulados; HttpService com rede real atras de portao default-off espelhando HttpEnabled (que o dump prova ser inescrevivel por script); MessagingService com eco local FIEL (evidencia empirica de que o Roblox real ecoa para o proprio servidor); TweenService BLOQUEADA por Enum/EnumItem + TweenInfo apenas; Grupo 4 com collision groups no WorldRoot (achado do dump), Lighting com ClockTime/TimeOfDay acoplados e SoundService so superficie. 17 tarefas criadas em 7 levas: task-runtime-033, task-runtime-034, task-runtime-035, task-services-016, task-services-017, task-services-018, task-services-019, task-services-020, task-services-021, task-services-022, task-services-023, task-services-024, task-services-025, task-services-026, task-services-027, task-services-028, task-cli-026."
+    },
+    {
+      "id": "task-services-014",
+      "title": "Expor Services.IsEngineOnlyClass (NotCreatable + Covered) para o TreePlanner",
+      "description": "Decisao 17 de .claude/agents-memory/arquiteto-cli-2026-09-05.md (consequencia de task-cli-023) -- ler a secao 'Contrato entre territorios (delta)' antes de codar. Adicionar em src/services/init.luau a funcao publica `function Services.IsEngineOnlyClass(className: string): boolean` -- 'so o MOTOR cria instancia desta classe, e este build sabe simula-la': `entry ~= nil and entry.IsAbstract and (entry.Covered or RUNTIME_OWNED_CLASSES[className] == true)`, lendo APENAS generated/Manifest.luau e uma tabela local nova `RUNTIME_OWNED_CLASSES: { [string]: boolean } = { DataModel = true }` (classes que o LuauBench simula FORA do pipeline gerado de services, implementadas por runtime -- VERIFICADO: DataModel tem Covered==false no manifesto, so 24 das 915 classes sao Covered, e sem essa tabela a funcao devolveria false para DataModel e a guarda do cli nao dispararia no caso que originou tudo isso; Covered==false ali diz QUAL TERRITORIO implementa, nao 'nao simulada'). PURA, SEGURA de chamar ANTES de Services.Bootstrap (mesma garantia ja documentada em IsServiceClass/IsEngineFixedChild/GetSimulatedServiceClasses -- TreePlanner roda no passo 4 do pipeline de RunCommand, Bootstrap no passo 7; por isso IsSimulatedClass, que le o ClassRegistry vivo, NAO serve aqui). Classe ausente do manifesto (typo do usuario) -> false, NUNCA erro: classificar e responsabilidade desta funcao, decidir se e erro de projeto e de quem chama. NOME DELIBERADO: nao `IsAbstractClass` -- 'abstract' e o nome errado do campo (a renomeacao pendente para IsNotCreatable ja esta registrada em src/runtime/ClassRegistry.luau) e `IsAbstractClass(\"Workspace\") == true` levaria o leitor a conclusao errada; `Engine*` ja e o vocabulario do repo (EngineFixedChildren, NewEngineInstance) para 'criado pelo motor, nao por script'. Docstring no padrao das vizinhas explicando por que o recorte Covered existe (o Plan so pre-julga o que este build simula; o resto continua caindo na mensagem verdadeira do Materialize). NAO renomear ManifestEntry.IsAbstract nesta task.",
+      "column": "in-progress",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 38,
+      "tags": [
+        "services",
+        "api-dump",
+        "cli",
+        "contrato"
+      ],
+      "priority": "low",
+      "acceptance": "Services.IsEngineOnlyClass existe, tipada, --!strict sem any, PURA (nenhum acesso a Runtime.ClassRegistry nem a Context). Specs em init.spec.luau cobrindo: (1) true para DataModel (via RUNTIME_OWNED_CLASSES, Covered==false no manifesto -- o teste que prova a armadilha) e para Instance/PVInstance/WorldRoot; (2) TRUE tambem para Workspace/ReplicatedStorage (Service coberto -- a funcao classifica, nao decide legitimidade de posicao); (3) false para Terrain (NotCreatable mas Covered==false); (4) false para Folder/ModuleScript (criaveis); (5) false para classe inexistente ('Frmae'), sem erro; (6) segura ANTES de Bootstrap (teste que nao chama Bootstrap). MAIS um TESTE DE COERENCIA -- o alarme contra falso positivo futuro no cli (Decisao 17, secao Riscos): toda classe para a qual IsEngineOnlyClass devolve true ou tem IsService==true, ou aparece em EngineFixedChildren.luau, ou esta numa lista fechada e explicita de 'nunca legitima num .project.json' (hoje exatamente: Instance, PVInstance, BaseScript, LuaSourceContainer, WorldRoot, BasePlayerGui, DataModel); se services passar a cobrir Terrain sem registra-la em EngineFixedChildren, o teste falha e avisa ANTES de o TreePlanner comecar a rejeitar projeto legitimo. Suites de src/services e src/runtime 100% verdes; nada fora de src/services/ tocado.",
+      "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-024",
+      "title": "Diagnostic plan/engine-only-class no TreePlanner (classe criada so pelo motor em posicao de no)",
+      "description": "Implementa a Decisao 17 de .claude/agents-memory/arquiteto-cli-2026-09-05.md -- LER A SECAO INTEIRA antes de codar (tem o codigo da guarda, a tabela de comportamento resultante e a armadilha do IsAbstract). Fecha a lacuna registrada na Decisao 16 e o bug pesquisado em task-cli-022. (1) src/cli/TreePlanner.luau: PlanOptions ganha dois campos (IsEngineFixedChild: (parentClassName: string, name: string, className: string) -> boolean; IsEngineOnlyClass: (className: string) -> boolean), por INJECAO como o IsServiceClass existente, nunca require de services. Em resolveCore, icar isOutermostRoot para fora do ramo `explicitClassName ~= nil` (:1074 -- expressao pura, sem mudanca de comportamento) e adicionar a guarda LOGO APOS o bloco isServiceRoot (:1119-1133) e antes do bloco de $properties: dispara quando `not isOutermostRoot and not isServiceRoot and not isEngineFixedChild and options.IsEngineOnlyClass(finalClassName)` -> bag:Add error 'plan/engine-only-class' com NodePath, FilePath=currentProjectFilePath e Field='$className' (so quando veio de $className explicito) + return nil. isEngineFixedChild so e avaliada quando parentClassName ~= nil (raiz de projeto passa nil). As quatro condicoes espelham a escolha de ramo de TreeMaterializer.createInstance -- comentar isso no codigo. (2) src/cli/Messages.luau: Messages.PlanEngineOnlyClass(nodePath, className), texto exato na Decisao 17, ingles, familia do arquivo, citando a tag NotCreatable do Roblox API Dump como justificativa, com uma frase extra no fim SO quando className=='DataModel' (um Code so; o literal mora aqui, nunca vira ramo na guarda do TreePlanner). (3) src/cli/RunCommand.luau:141 passa as tres funcoes de services. NAO pre-checar classe desconhecida do dump nem classe conhecida e nao coberta (Decisao 17, 'O que deliberadamente NAO fazer agora').",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 39,
+      "tags": [
+        "cli",
+        "rojo",
+        "erro",
+        "bug"
+      ],
+      "priority": "low",
+      "acceptance": "Fixtures novos em src/cli/fixtures/tree-planner/ e specs cobrindo no minimo: (a) raiz de projeto ANINHADO com {\"$className\":\"DataModel\",\"$path\":\"pasta-sem-init\"} -> error plan/engine-only-class com NodePath e FilePath do .project.json ANINHADO (o ganho real sobre o materialize/invalid-class de hoje, que so tem NodePath), Plan devolvendo nil; (b) $className 'Instance' num no comum -> mesmo Diagnostic; (c) REGRESSAO: raiz de TOPO DataModel + pasta sem init.* continua passando sem esse Diagnostic (fixture root-source-ignored intacto, so o warning plan/root-source-ignored); (d) REGRESSAO: Service como filho direto da raiz (ReplicatedStorage) e StarterPlayerScripts sob StarterPlayer continuam sem Diagnostic nenhum -- sao as duas exclusoes que evitam falso positivo em todo projeto real; (e) raiz aninhada DataModel + $path de ARQUIVO continua plan/class-name-conflict (guarda anterior dispara antes). VERIFICAR (nunca assumir) se os testes de TreeMaterializer.spec.luau que hoje esperam materialize/invalid-class para classe NotCreatable+Covered (ex.: :812, ramo normal Services.new) montam o InstancePlan a mao (seguem verdes -- a defesa em profundidade do Materialize continua intacta e alcancavel) ou passam por TreePlanner.Plan (mudam de Code -- mudanca esperada, documentar no relatorio). TreeMaterializer.spec.luau:864 (Workspace.Terrain -> materialize/invalid-class) DEVE continuar verde sem alteracao: e a prova do recorte de cobertura. Suites de src/cli, src/runtime e src/services 100% verdes; luau-lsp analyze limpo; --!strict sem any; nada fora de src/cli/ tocado.",
+      "depends": [
+        "task-services-014"
+      ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-valuetypes-000",
+      "title": "PRE-REQUISITO (decisao do usuario): criar o territorio src/valuetypes/ e os agentes coder-valuetypes/revisor-valuetypes",
+      "description": "O desenho (.claude/agents-memory/arquiteto-valuetypes-2026-09-05.md, Decisao 1) conclui que os value types devem viver num QUARTO territorio, src/valuetypes/, paralelo a runtime/services/cli. Isso exige mudanca de CONFIGURACAO do projeto, que o arquiteto NAO faz sozinho: (a) criar .claude/agents/coder-valuetypes.md e .claude/agents/revisor-valuetypes.md; (b) acrescentar a linha do territorio nas tabelas de fronteira de .claude/CLAUDE.md e .claude/rules/05-agentes.md; (c) opcionalmente criar .claude/rules/06-valuetypes.md com as invariantes do territorio (fabrica de userdata unica em Userdata.luau, __metatable travado, float32 no construtor, nenhuma assinatura fora dos relatorios de pesquisa). ALTERNATIVA se o usuario recusar o territorio novo: tudo isso cabe em src/services/ com o mesmo desenho de modulos, ao custo de serializar ~20 modulos independentes atras de um agente so (Decisao 1 do desenho tem o trade-off completo). Nenhuma tarefa task-valuetypes-0xx pode ser despachada antes desta decisao.",
+      "column": "done",
+      "agent": "arquiteto",
+      "reviewer": null,
+      "wave": 38,
+      "tags": [
+        "value-types",
+        "configuracao",
+        "bloqueia-tudo"
+      ],
+      "priority": "high",
+      "acceptance": "Usuario decidiu entre territorio novo e src/services/. Se territorio novo: agentes e regras criados, tabelas de fronteira atualizadas, e o campo agent das tarefas task-valuetypes-* confere com o nome do agente criado.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": "Usuario decidiu por territorio novo (recomendacao do arquiteto). Criados .claude/agents/coder-valuetypes.md e .claude/agents/revisor-valuetypes.md (modelados em coder-services/revisor-services, adaptados as invariantes do territorio: fabrica unica de userdata, imutabilidade, float32, Catalog como fonte unica, grafo aciclico com runtime). Criado .claude/rules/06-valuetypes.md com as invariantes. Tabelas de fronteira atualizadas em .claude/CLAUDE.md e .claude/rules/05-agentes.md (incluindo revisor-valuetypes na lista de read-only e corrigindo 'tres agentes de escrita' pra refletir os 4 agora). .claude/rules/01-luau.md corrigido de 'nos tres territorios' pra 'em todos os territorios'. Campo agent das tarefas task-valuetypes-0xx ja confere (coder-valuetypes/revisor-valuetypes)."
+    },
+    {
+      "id": "task-valuetypes-001",
+      "title": "Base: Float32.luau (quantizacao f32/int32/int16 + formatacao shortest-round-trip)",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Implementa Float32.Quantize/QuantizeInt32/QuantizeInt16/Format/FormatSpecial conforme a secao 3.1 do desenho. Quantizacao via buffer.writef32/readf32 com UM buffer de 4 bytes module-local reusado -- nunca alocado por chamada. Format usa o algoritmo shortest-round-trip da secao 0.5 (tentar %.1g..%.9g, devolver o primeiro cujo tonumber() re-quantizado bate). ORACULO DE TESTE ja verificado nesta sessao: Float32.Quantize(x) tem que bater BIT A BIT com vector.create(x,0,0).x da biblioteca nativa vector do Luau -- use isso no spec; um bom caso e 0.1 -> 0.10000000149011612 -> Format -> 0.1 . Pendencias P2/P3 (secao 9) ficam como aproximacao de boa-fe COMENTADA no codigo, nunca implementada em silencio.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 39,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "Float32.luau + Float32.spec.luau. Spec cobre: paridade bit-a-bit com vector nativo em pelo menos 8 valores; Format reproduz 0.1 / -0.7 / 0.33333334 / 123456.79; QuantizeInt32 arredonda half-away-from-zero e satura; P2/P3 marcadas como aproximacao no cabecalho.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-000"
+      ]
+    },
+    {
+      "id": "task-valuetypes-002",
+      "title": "Base: Userdata.luau (fabrica unica de userdata imutavel) + Catalog.luau (lista fechada)",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Userdata.luau e o UNICO lugar do projeto que chama newproxy(true) -- e a superficie de seguranca inteira dos value types, e ter duas copias e a divergencia silenciosa que a regra 00 proibe (mesmo argumento que Sandbox.buildEnvironment ja registra para a whitelist). Implementa Define/TypeNameOf/Unwrap e o tipo Descriptor da secao 3.1. AS QUATRO INVARIANTES DA FABRICA sao obrigatorias e cada uma tem spec propria: (1) __metatable sempre travado; (2) __newindex sempre erra; (3) estado em side-table module-local com __mode=k; (4) __eq so delega quando os dois lados sao userdata NOSSO e do MESMO TypeName -- comparacao com userdata alheio devolve false SEM erro (verificado empiricamente nesta sessao). Catalog.luau fecha a lista de TODO global de valor do Roblox com as flags Simulated/HasGlobalConstructor -- inclui os nomes que a lista atual de 22 em src/cli/UnsimulatedGlobals.luau ESQUECEU (secao 0.8: NumberSequenceKeypoint, ColorSequenceKeypoint, Vector3int16, Vector2int16, Region3int16, PathWaypoint, CatalogSearchParams, FloatCurveKey, RotationCurveKey, Path2DControlPoint, SharedTable, Secret, Content, RaycastResult). E extensao deliberada do LuauBench (nao vem do dump -- datatypes nao estao la); o cabecalho declara isso e cita a fonte de cada nome.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 39,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "Userdata.luau + Catalog.luau + specs. Spec de Userdata cobre as 4 invariantes explicitamente, incluindo type()==userdata, pairs() erra, setmetatable() erra, e vazamento (collectgarbage antes/depois de 100k valores soltos). Catalog.UnsimulatedGlobalNames() nao intersecta Catalog.SimulatedNames().",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-001"
+      ]
+    },
+    {
+      "id": "task-valuetypes-003",
+      "title": "Enum: tools/generate-enums.luau + generated/EnumData.luau + types/Enum.luau (Enums/Enum/EnumItem)",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Maior alavanca da leva 1 (secao 10): milhares de propriedades do dump sao Category=Enum, o $properties do Rojo resolve enum por nome de item, e TweenInfo/Font/Faces/Axes dependem disso. tools/generate-enums.luau (ARQUIVO NOVO, exclusivo desta tarefa) le .cache/api-dump/28360dea....json e emite src/valuetypes/generated/EnumData.luau -- 629 enums, 3611 itens, ~64KB, carrega em ~8.5ms (medido nesta sessao). Espelha tools/generate-services.luau: mesmo api-dump.lock.json, mesmo cabecalho GERADO-nao-editar, mesmo relatorio de contagem. SAO TRES TIPOS, nao um (secao 3.2, confirmado por pesquisa): o global Enum e typeof Enums (:GetEnums()); Enum.KeyCode e typeof Enum (:GetEnumItems/:FromName/:FromValue); Enum.KeyCode.Space e typeof EnumItem (.Name/.Value/.EnumType, tostring Enum.KeyCode.Space). Construcao PREGUICOSA e memoizada por enum -- tocar Enum.KeyCode materializa so os itens do KeyCode. Itens INTERNADOS (mesma referencia sempre): P7 nao confirmou se o Roblox garante rawequal, e internar satisfaz as duas hipoteses.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 40,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "tools/generate-enums.luau + generated/EnumData.luau + types/Enum.luau + spec. Spec cobre: os tres typeof; tostring de EnumItem; GetEnumItems/FromName/FromValue; identidade preservada (rawequal do mesmo item); enum e item inexistentes erram citando o nome; tempo de load de EnumData medido e registrado.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-002"
+      ]
+    },
+    {
+      "id": "task-valuetypes-004",
+      "title": "types/Vector3.luau + types/Vector2.luau",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. 354 e 145 referencias no dump -- os dois tipos mais usados. Toda assinatura vem de .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md, confirmada contra o YAML oficial de creator-docs. RESPEITAR AS ASSIMETRIAS REAIS (secao 3.2), nao copiar-e-colar entre os dois: Vector2 NAO tem operador //; Vector2:Cross() devolve number (o de Vector3 devolve Vector3); Vector2:Max/Min aceitam tupla variadica e os de Vector3 so um argumento; os FuzzyEq usam algoritmos de epsilon diferentes (default 1e-5). Quantizacao float32 no construtor privado unico -- como todo resultado de operador passa por la, a aritmetica inteira fica encadeada em f32 automaticamente (Decisao 3). DIVERGENCIA D8 OBRIGATORIA no cabecalho de Vector3.luau: type() aqui devolve userdata, no Roblox moderno devolve vector (tipo primitivo nativo da Luau) -- o Lune nao expoe debug.setmetatable, entao o tipo nativo nao pode ganhar .Magnitude. P8 (== exato vs epsilon) nao foi confirmado: implemente exato e MARQUE como aproximacao de boa-fe nao confirmada.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 40,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "types/Vector3.luau + types/Vector2.luau + specs. Specs cobrem construtores, constantes, propriedades, cada metodo, cada operador suportado, tostring, e precisao f32 (paridade com vector nativo). D8 e P8 documentadas no cabecalho.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-002"
+      ]
+    },
+    {
+      "id": "task-valuetypes-005",
+      "title": "types/Color3.luau + types/UDim.luau + types/UDim2.luau",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Color3: 157 referencias no dump; e o tipo dos warnings reais que o testador observou no projeto Tiktok (Lighting.Ambient). Assinaturas de .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md. ATENCAO: a doc oficial traz math_operations vazio para Color3 -- Color3 NAO tem +, - nem *. O Descriptor passa Add/Sub/Mul/Div/Unm como nil e o erro que o Luau levanta sozinho ja e o certo; NAO inventar operador porque parece razoavel. UDim2 tem o overload .new(x: UDim, y: UDim) confirmado real, alem do de 4 numeros, mais fromScale/fromOffset; Width/Height sao sinonimos EXATOS de X/Y. Offset e int32 (Float32.QuantizeInt32), Scale e float32 -- ver a tabela da Decisao 3. P9 (unario - e == em UDim/UDim2) nao foi confirmado: a doc omite, mas omissao nao e prova (o mesmo YAML omite para Vector3, que comprovadamente os tem) -- implemente e MARQUE como nao confirmado.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 40,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "types/Color3.luau + types/UDim.luau + types/UDim2.luau + specs. Specs cobrem construtores (incluindo fromRGB/fromHSV/fromHex e o overload UDim2(UDim,UDim)), propriedades, Lerp/ToHSV/ToHex, tostring, e um caso assertando que Color3 + Color3 ERRA. P9 documentada.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-002"
+      ]
+    },
+    {
+      "id": "task-valuetypes-006",
+      "title": "types/CFrame.luau",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. 180 referencias no dump (2o lugar). Depende de types/Vector3.luau (task-valuetypes-004). Assinaturas de .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md, que confirmou os SEIS overloads de CFrame.new (0/1/2/3/7/12 argumentos) com a ordem exata dos 12 componentes, mais lookAt/lookAlong/fromMatrix/fromAxisAngle/fromEulerAnglesXYZ/fromEulerAnglesYXZ/Angles/fromOrientation. Os 12 componentes sao float32. Operadores: CFrame*CFrame->CFrame, CFrame*Vector3->Vector3, CFrame+Vector3->CFrame, CFrame-Vector3->CFrame; CFrame+CFrame NAO existe (deixe o Luau errar sozinho). DIVERGENCIA D7 OBRIGATORIA no cabecalho: :Orthonormalize() e exposto como metodo explicito (existe no Roblox real), mas a re-ortonormalizacao IMPLICITA que o Roblox faz em alguns caminhos nao e reproduzida -- P1 nao foi confirmada. D1 tambem: componentes de entrada/saida sao f32 exatos, o caminho interno usa double, entao pode haver diferenca no ultimo ulp.",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 41,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "types/CFrame.luau + spec. Spec cobre os 6 overloads, as constantes, cada propriedade vetorial (Position/Rotation/LookVector/RightVector/UpVector/XVector/YVector/ZVector), GetComponents/ToEulerAngles*/ToOrientation/ToAxisAngle/ToWorldSpace/ToObjectSpace/PointTo*/VectorTo*/Inverse/Lerp/Orthonormalize, os 4 operadores validos, e tostring com os 12 componentes na ordem de GetComponents. D1/D7/P1 documentadas.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-004"
+      ]
+    },
+    {
+      "id": "task-valuetypes-007",
+      "title": "Decode.luau (gramatica de $properties do Rojo) + init.luau (superficie publica do territorio)",
+      "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Decode.FromRojoJson(valueTypeName, valueCategory, raw) resolve a forma AMBIGUA do $properties: a pesquisa do Rojo (.claude/agents-memory/pesquisa-formato-projeto-rojo-2026-09-05.md, secao Formato de $properties) confirma que o Rojo resolve [1,2,3] contra o banco de reflection POR CLASSE+PROPRIEDADE -- o mesmo array e Vector3 em Part.Position e Color3 em Lighting.Ambient. Sem o ValueType alvo, decidir e adivinhar. NUNCA lanca: devolve DecodeFailure com a frase e quem chama (cli) decide se vira warning ou erro. init.luau expoe a superficie unica do territorio (construtores por tipo, BuildGlobals(), TypeNameOf(), Decode, Catalog) -- services/cli fazem require(../valuetypes) e NUNCA require de um modulo interno, mesmo contrato que runtime/services ja tem. Ler a nota de tipagem da secao 3.1 antes de escrever os export type: o valor em runtime e userdata, o Luau nao deixa declarar campo em userdata, entao os tipos sao NOMINAIS OPACOS e a checagem e so em runtime (divergencia D4, declarar no cabecalho).",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": null,
+      "wave": 41,
+      "tags": [
+        "value-types"
+      ],
+      "priority": "high",
+      "acceptance": "Decode.luau + init.luau + specs. Spec de Decode cobre: [1,2,3] com alvo Vector3 vs alvo Color3 produzindo tipos diferentes; array de 12 -> CFrame; string com alvo Enum -> EnumItem; forma invalida -> DecodeFailure com motivo legivel, nunca erro lancado. Spec de init assevera que BuildGlobals() devolve tabela NOVA a cada chamada e que suas chaves batem com Catalog.SimulatedNames().",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-003",
+        "task-valuetypes-005",
+        "task-valuetypes-006"
+      ]
+    },
+    {
+      "id": "task-runtime-032",
+      "title": "Ponte runtime: TypeNameResolver + typeof fiel no Sandbox + MemberDescriptor.ValueType/ValueCategory",
+      "description": "Desenho completo em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md, secao 3.4 (subsecao runtime) e Decisao 4. TERRITORIO: so src/runtime/. NAO tocar src/valuetypes/, src/services/ nem src/cli/. INVARIANTE INEGOCIAVEL, verificavel por grep: src/runtime/** NUNCA contem a string valuetypes. A ponte e sempre um resolvedor INJETADO, mesmo padrao literal de UnknownClassResolver.luau (task-runtime-030) -- copie a estrutura dele. (a) src/runtime/TypeNameResolver.luau novo: Set/Resolve, com init.luau reexportando SO Set e o tipo (mesmo precedente de UnknownClassResolver, cujo cabecalho ja explica o porque). (b) Sandbox.buildEnvironment: env.typeof deixa de ser o typeof cru do Luau e vira o wrapper de 5 passos da Decisao 4 -- Instance->Instance, Signal->RBXScriptSignal, Connection->RBXScriptConnection, resolvedor, fallback nativo. Isso corrige DE QUEBRA tres bugs de fidelidade que ja existem hoje e ninguem tinha registrado (typeof(workspace) devolve table hoje; o Roblox devolve Instance). NAO e escopo inventado: e o mesmo env.typeof sendo tocado uma vez so. (c) MemberDescriptor ganha ValueType: string? e ValueCategory: MemberValueCategory? -- campos OPCIONAIS de proposito, aditivo puro, para que todo ClassSchema ja escrito continue valido sem edicao. ESCOPO EXPLICITAMENTE FORA: runtime NAO passa a validar escrita de propriedade por ValueType (secao 13, item 1) -- o campo entra como dado disponivel e so; validar exige responder o que o Roblox faz com coercao implicita, que nao foi pesquisado, e meia-validacao e pior que nenhuma.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": null,
+      "wave": 40,
+      "tags": [
+        "value-types",
+        "runtime",
+        "ponte"
+      ],
+      "priority": "high",
+      "acceptance": "TypeNameResolver.luau + specs; env.typeof wrapper com spec cobrindo os 5 ramos (incluindo Instance/Signal/Connection, que hoje devolvem table); MemberDescriptor estendido sem quebrar nenhum spec existente; init.luau reexporta so Set. grep -r valuetypes src/runtime/ vazio.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-valuetypes-000"
+      ]
+    },
+    {
+      "id": "task-test-valuetypes-001",
+      "title": "Cenario real: projeto Tiktok deixa de emitir warning de $properties e recebe os valores certos",
+      "description": "Cria tests/scenarios/value-types-real-project.scenario.luau. TERRITORIO: so tests/scenarios/ (read-only em src/** e em C:\\Users\\hakor\\Documents\\Roblox-Games). Contexto em .claude/agents-memory/testador-roblox-games-2026-09-05.md: o projeto Tiktok (template do rojo init) hoje emite 4 warnings plan/non-primitive-property em Ambient/Position/Color/Size -- os UNICOS contatos reais com value types que a bancada ja observou. Depois desta leva, esses 4 warnings tem que sumir e os valores tem que estar corretos na arvore materializada. Roda o binario real (lune run src/cli/main.luau run <caminho> --no-color --timeout 5), nunca chamada in-process. Manter o padrao de harness com pcall por teste que a Parte 1 daquele relatorio ja corrigiu (um assert falho nao pode derrubar os outros testes). Acrescentar um teste de script de usuario de verdade exercitando Vector3/CFrame/Color3/Enum dentro do sandbox -- e a primeira oportunidade de confirmar a pendencia declarada do item 5 daquele relatorio (falso positivo de sandbox nunca foi testavel porque nenhum script de usuario chegava a rodar).",
+      "column": "todo",
+      "agent": "testador",
+      "reviewer": null,
+      "wave": 43,
+      "tags": [
+        "value-types",
+        "teste",
+        "cenario-real"
+      ],
+      "priority": "medium",
+      "acceptance": "Cenario roda e passa; os 4 warnings do Tiktok sumiram; Lighting.Ambient e Baseplate.Size/Position tem valor tipado correto; um script exercitando os tipos no sandbox roda sem vazamento. Achados novos reportados, nunca escondidos.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "depends": [
+        "task-cli-025"
+      ]
+    },
+    {
+      "id": "task-services-015",
+      "title": "Ponte services: gerador emite ValueType/ValueCategory e defaults reais de DataType/Enum",
+      "description": "Desenho completo em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md, secao 3.4 (subsecao services) e secao 0.6. TERRITORIO: so src/services/ e tools/generate-services.luau. NAO tocar tools/generate-enums.luau (do coder-valuetypes), nem src/valuetypes/, src/runtime/, src/cli/. (a) Emitir ValueType/ValueCategory por propriedade: e leitura direta do member.ValueType que generate-services.luau JA parseia hoje (luauTypeForValueType usa vt.Category/vt.Name e joga fora) -- passa a tambem emitir no MemberDescriptor (campo novo entregue por task-runtime-032). (b) Emitir DEFAULTS REAIS. computeDefault hoje devolve nil para tudo que nao e Primitive, mas o dump TEM o default serializado em forma legivel (tabela da secao 0.6 do desenho, verificada contra o dump local): Vector3 '0, 0, 0'; Color3 '0, 0, 0'; CFrame '0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1' (12 componentes); UDim '0, 8'; NumberRange '4 10000 ' (separado por espaco); NumberSequence '0 0.5 0 1 0.5 0 ' (trincas); TweenInfo 'Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad'; Faces 'Right, Top, Back, Left, Bottom, Front'; Axes 'X, Y, Z'; Enum = nome do item. As sentinelas (__api_dump_no_string_value__, __api_dump_class_not_creatable__, __api_dump_failed_to_create_class__, __api_dump_skipped_class__) continuam virando nil -- isSentinelDefault ja existe. O parsing dessas gramaticas e OFFLINE, no gerador, emitindo uma chamada de construtor no modulo gerado (Default = ValueTypes.Vector3.new(0, 0, 0)). Default de DataType so e emitido para tipo JA simulado pela leva 1; para tipo da leva 2, continua nil (nunca inventar). (c) luauTypeForValueType deixa de emitir unknown para DataType/Enum e passa a emitir o tipo real do valuetypes. CONSEQUENCIA: generated/classes/*.luau passa a require(../../valuetypes) e services passa a depender de valuetypes -- direcao CORRETA do grafo (secao 2 do desenho), nunca o contrario. Ganho concreto e mensuravel: Lighting.Ambient deixa de nascer nil e nasce Color3.new(0,0,0), como no Roblox real, e idem para as demais propriedades DataType/Enum das 24 classes cobertas.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 41,
+      "tags": [
+        "value-types",
+        "services",
+        "ponte"
+      ],
+      "priority": "high",
+      "acceptance": "generate-services.luau atualizado + as 24 classes REGERADAS (nunca editadas a mao) + spec do gerador cobrindo cada gramatica de default da tabela 0.6 + relatorio dizendo quantos defaults deixaram de ser nil. Diff de generated/ conferido contra o dump. Nenhum default inventado para tipo da leva 2.",
+      "depends": [
+        "task-valuetypes-007",
+        "task-runtime-032"
+      ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-025",
+      "title": "Ponte cli: $properties decodificado, globals de valor no sandbox, UnsimulatedGlobals derivado do Catalog",
+      "description": "Desenho completo em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md, secao 3.4 (subsecao cli) e Decisao 5 (secao 7). TERRITORIO: so src/cli/. NAO tocar src/valuetypes/, src/runtime/ nem src/services/. (a) SEQUENCIAMENTO, a parte que decide o desenho: TreePlanner roda ANTES de qualquer Instance existir, logo nao ha schema e nao ha ValueType disponivel ali. Quem tem o schema e TreeMaterializer. Entao o valor bruto ATRAVESSA o plano intacto (PlanPropertyValue passa a aceitar a forma bruta do JSON) e TreePlanner PARA de emitir plan/non-primitive-property -- deixa de ser decisao do planejador. (b) TreeMaterializer.applyProperties: por propriedade, le o MemberDescriptor do schema e chama ValueTypes.Decode.FromRojoJson(descriptor.ValueType, descriptor.ValueCategory, raw); em Ok escreve; em falha emite materialize/undecodable-property citando no + propriedade + tipo alvo + motivo. Propriedade cujo ValueType aponta para tipo AINDA NAO SIMULADO (leva 2) emite materialize/property-type-not-simulated COM prefixo [LuauBench] -- sem contraparte real (no Roblox isso funcionaria), entao a regra de idioma dos erros exige o prefixo, exatamente como Messages.UnsimulatedGlobal ja faz. (c) ScriptEnvironment.Build: sobrepoe ValueTypes.BuildGlobals() por cima de UnsimulatedGlobals.Build(), antes de game/workspace/script. Uma linha. (d) UnsimulatedGlobals: lista DERIVADA de Catalog.UnsimulatedGlobalNames() em vez das 22 strings a mao -- assim, quando a leva 2 marcar Simulated=true em Font, a sentinela some sozinha, sem ninguem lembrar de editar dois territorios. (e) RunCommand: Runtime.TypeNameResolver.Set(ValueTypes.TypeNameOf) uma vez, ao lado do Services.Bootstrap que ja existe -- cli e o composition root e e o UNICO lugar do projeto que ata runtime<-valuetypes.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": null,
+      "wave": 42,
+      "tags": [
+        "value-types",
+        "cli",
+        "ponte"
+      ],
+      "priority": "high",
+      "acceptance": "TreePlanner/TreeMaterializer/ScriptEnvironment/UnsimulatedGlobals/RunCommand/Messages atualizados + specs. Spec assevera: [1,2,3] em Lighting.Ambient vira Color3 e o mesmo [1,2,3] em Baseplate.Position vira Vector3; tipo nao simulado vira warning com prefixo [LuauBench]; UnsimulatedGlobals nao lista nenhum nome que o Catalog diz simulado.",
+      "depends": [
+        "task-services-015"
+      ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-runtime-033",
+      "title": "game:BindToClose(fn) no DataModel + espera dos callbacks no encerramento do Scheduler",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.1.8. Implementa `DataModel:BindToClose(callback: () -> ())` (dump: Function BindToClose, Security None, parametro do tipo Function) instalado via Instance.SetClassMethods, do mesmo jeito que GetService/FindService ja sao. Semantica exigida: no encerramento (Scheduler:Run terminando, ou o caminho equivalente que o cli usa), TODOS os callbacks registrados rodam, e o encerramento so acontece depois que todos retornam -- inclusive quando eles proprios yieldam (task.wait dentro do callback e o padrao real: ProfileStore usa `while ... do task.wait() end` esperando jobs de save). Erro dentro de um callback nao derruba o processo nem impede os outros callbacks de rodar: e capturado e reportado por ThreadError como qualquer outro erro de thread (regra 02). Roblox real tem timeout de 30s no shutdown -- decidir se simula e DOCUMENTAR a escolha (recomendacao: nao simular timeout nesta leva, declarar a divergencia). Isto e pre-requisito DURO do cenario datastore-profilestore-pattern.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": null,
+      "wave": 44,
+      "reviewResult": null,
+      "tags": [
+        "runtime",
+        "datamodel",
+        "scheduler",
+        "datastore",
+        "pre-requisito"
+      ],
+      "priority": "high",
+      "acceptance": "DataModel:BindToClose existe, aceita multiplos callbacks, e o encerramento do Scheduler espera todos retornarem inclusive quando yieldam; erro em um callback nao impede os demais; spec cobrindo callback simples, callback que yielda, dois callbacks, e callback que erra; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-runtime-034",
+      "title": "DataModel.JobId/PlaceId/GameId/PlaceVersion com valores fixos por processo",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.3.3. Hoje `game.JobId` devolve nil (DataModel e instancia leniente, sem schema) e o padrao real de MessagingService -- comparar message.Data.JobId com game.JobId para ignorar o proprio eco -- so funciona por acidente (nil ~= nil). Implementa as quatro propriedades, TODAS com Security None e tag ReadOnly no dump fixado (verificado): JobId (string) = um GUID gerado UMA vez por processo; PlaceId (int64) = 0; GameId (int64) = 0; PlaceVersion (int) = 0. Zero e o que o Roblox usa em lugar nao publicado -- coerente com o LuauBench, que nao tem lugar. Read-only do ponto de vista do script (escrever erra com a familia Roblox de propriedade somente-leitura). DOCUMENTAR a divergencia: o JobId muda a cada execucao, e nao ha replicacao/servidor real por tras dele.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": null,
+      "wave": 44,
+      "reviewResult": null,
+      "tags": [
+        "runtime",
+        "datamodel",
+        "messagingservice"
+      ],
+      "priority": "medium",
+      "acceptance": "game.JobId devolve string estavel dentro do processo e diferente entre processos; PlaceId/GameId/PlaceVersion devolvem 0; escrever em qualquer uma erra; spec cobrindo leitura, estabilidade dentro do processo e recusa de escrita; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-runtime-035",
+      "title": "Emendar a lista fechada de chamadores legitimos de ClassRegistry.NewEngineInstance",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.0.3. MUDANCA DE COMENTARIO APENAS, zero codigo. A lista fechada nos cabecalhos de src/runtime/ClassRegistry.luau e src/runtime/init.luau tem hoje dois itens (DataModel.GetService; services criando filho fixo dentro de um Behavior.Initialize). A leva 2 de services precisa de um terceiro caso legitimo, que nao cabe em nenhum dos dois: `services`, dentro de um Behavior.Methods, construindo um objeto do motor que o metodo real DEVOLVE e que nao e filho de ninguem -- DataStoreService:GetDataStore -> DataStore, GlobalDataStore:GetAsync -> DataStoreKeyInfo, DataStore:ListVersionsAsync -> DataStoreVersionPages, TweenService:Create -> Tween. Todas NotCreatable e IsService false, logo inalcancaveis por ClassRegistry.new (que recusa IsAbstract, e deve continuar recusando) e por GetService. Acrescentar o item 3 nos DOIS cabecalhos, citando L2.0.3.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": null,
+      "wave": 44,
+      "reviewResult": null,
+      "tags": [
+        "runtime",
+        "documentacao",
+        "contrato"
+      ],
+      "priority": "medium",
+      "acceptance": "Os dois cabecalhos listam o terceiro caso com os exemplos concretos e a citacao de L2.0.3; nenhuma linha de codigo alterada.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-016",
+      "title": "AsyncCall.luau (unico ponto de yield de services) + InstanceState.luau (estado privado por instancia)",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secoes L2.0.1 e L2.0.2. Dois modulos folha novos, pre-requisito de TODA a leva 2. (1) src/services/AsyncCall.luau -- `AsyncCall.Yield(label: string): ()`: chama Context.GetScheduler():Wait(0) (um passo de scheduler, latencia simulada ZERO -- Scheduler.Run avanca por os.clock() real, injetar latencia custaria tempo de parede e tornaria teste instavel); se a thread corrente NAO e gerida pelo Scheduler, captura o erro em portugues do runtime (Scheduler.Wait, mensagem de engenharia interna) e o retraduz para uma mensagem [LuauBench] em ingles, em nivel 3 (culpa o call site do script), NUNCA deixando a string em portugues vazar para o Output. Todo metodo com a tag `Yields` no dump passa por aqui. DOCUMENTAR a divergencia de latencia zero e registrar --async-latency como extensao futura FORA do namespace de classe simulada (regra 00). (2) src/services/InstanceState.luau -- estado privado tipado por instancia, sobre Runtime.Instance.Get/SetPropertyRaw com chave FORA do schema (invisivel ao script: InstanceMeta.__index passo 5 exige classSchema[key] ~= nil). REGRA DURA: toda chave comeca com `_LuauBench` para colisao zero com membro futuro do dump. API sugerida: `InstanceState.new<T>(key: string)` devolvendo { Get: (inst) -> T?, Set: (inst, T) -> () }. Consumidores previstos: DataStore/OrderedDataStore, Pages, DataStoreKeyInfo, WorldRoot, Tween.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 44,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "async",
+        "scheduler",
+        "pre-requisito"
+      ],
+      "priority": "high",
+      "acceptance": "AsyncCall.Yield suspende um passo de scheduler e erra com mensagem [LuauBench] em ingles fora de thread gerida (spec cobrindo os dois); InstanceState guarda e le valor tipado invisivel ao script (spec confirma que ler a chave direto na instancia erra 'is not a valid member of'); prefixo _LuauBench validado; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-017",
+      "title": "coverage.luau + regeracao das 16 classes DataStore + datastore/Value.luau + datastore/Store.luau",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secoes L2.1.2 a L2.1.7. (1) Acrescentar a tools/coverage.luau: DataStoreService, GlobalDataStore, DataStore, OrderedDataStore, DataStoreKeyInfo, DataStoreSetOptions, DataStoreOptions, DataStoreGetOptions, DataStoreIncrementOptions, Pages, DataStorePages, DataStoreKeyPages, DataStoreListingPages, DataStoreVersionPages, DataStoreObjectVersionInfo, DataStoreInfo -- e rodar `lune run tools/generate-services`. NUNCA editar generated/ a mao. (2) src/services/datastore/Value.luau -- dado puro, SEM Instance, SEM I/O: validacao de chave (<= 50 chars), de nome de store/scope (<= 50), de tamanho do valor (<= 4194304 bytes) e de serializabilidade (recusa tabela com chave mista, funcao, Instance, thread, NaN, inf -- os mesmos limites da doc oficial), mais deep copy. A copia profunda e OBRIGATORIA na leitura E na escrita: no Roblox o valor e serializado, e sem copia o LuauBench criaria um alias silencioso que ESCONDE uma classe inteira de bug real. Mensagem de erro para valor nao serializavel: aproximacao de boa-fe na familia Roblox, comentada como tal (string exata NAO CONFIRMADA -- ver pendencia 2 de L2). (3) src/services/datastore/Store.luau -- o store em memoria, tambem sem Instance: (storeId, key) -> { value, version, createdTime, updatedTime, userIds, metadata, tombstone }, com versionamento e tombstone (RemoveAsync nao apaga: marca, e versoes antigas continuam legiveis). Persistencia em disco NAO entra nesta leva e services NUNCA chama @lune/fs -- o contrato de injecao (Types.DataStorePersistence) esta fechado em L2.1.2 para a leva futura.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 45,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "datastore",
+        "gerador"
+      ],
+      "priority": "high",
+      "acceptance": "As 16 classes aparecem em generated/Manifest.luau com Covered = true e tem arquivo em generated/classes/; Value.luau recusa os 6 tipos nao serializaveis e os 3 limites de tamanho com erro nomeado; deep copy verificada (mutar o retorno nao afeta o store); Store.luau cobre set/get/update/remove com versao e tombstone; specs de Value e Store rodam sem Bootstrap; --!strict sem any; relatorio lista o que o gerador emitiu.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-018",
+      "title": "DataStoreService + GlobalDataStore + DataStoreKeyInfo + as tres classes de options",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secoes L2.1.3 a L2.1.6. Depende de task-services-016 (AsyncCall/InstanceState), task-services-017 (Value/Store/geracao) e task-runtime-035 (lista de NewEngineInstance). behavior/DataStoreService.luau: GetDataStore(name, scope, options) e GetGlobalDataStore() MEMOIZADOS por (name, scope) -- doc oficial: 'subsequent calls return the same object', duas chamadas devolvem a MESMA Instance; GetOrderedDataStore memoizado no mesmo mapa; GetRequestBudgetForRequestType devolve uma CONSTANTE GRANDE E FIXA (nunca math.huge, nunca 0) e nada throttla; SetRateLimitForRequestType aceito e ignorado -- justificativa completa em L2.1.4 (zero jogadores faria a formula real dar o orcamento MINIMO e quebrar codigo que roda folgado em producao). AMBIGUIDADE REGISTRADA: o dump declara GetGlobalDataStore() -> DataStore; seguir o dump (as duas fabricas devolvem ClassName 'DataStore'), comentado no codigo. behavior/GlobalDataStore.luau: GetAsync -> (value, keyInfo); SetAsync -> string de versao; UpdateAsync(key, transform) com transform recebendo (oldValue, keyInfo) e devolvendo (newValue, userIds?, metadata?), newValue nil ABORTA a escrita, retorno (newValue, newKeyInfo); RemoveAsync -> (valorAnterior, keyInfo) + tombstone; IncrementAsync -> valor ja incrementado, errando se o valor corrente nao e numero. A transform NAO PODE YIELDAR (doc oficial literal): rodar em coroutine.create + resume e, se a coroutine nao ficar dead, recuperar debug.traceback(co), coroutine.close e errar na familia Roblox -- sem isso o LuauBench aceitaria codigo que passa no banco e falha em producao (L2.1.5). behavior/DataStoreKeyInfo.luau: GetMetadata/GetUserIds, com CreatedTime/UpdatedTime/Version escritos via SetPropertyRaw (sao ReadOnly no schema). behavior/DataStoreOptions.luau: SetExperimentalFeatures({v2=true}) aceita e ignora -- o ProfileStore chama isso SEMPRE, errar aqui derruba a lib no primeiro GetDataStore. behavior/DataStoreSetOptions.luau e DataStoreIncrementOptions.luau: Get/SetMetadata. DataStoreGetOptions.UseCache: aceito e ignorado (o cache de 4s do Roblox e por servidor e INOBSERVAVEL num processo unico -- nao implementar e o fiel). NAO implementar: ListDataStoresAsync, BatchGetAsync, OnUpdate (ficam com o stub [LuauBench] do ClassBuilder).",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 45,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "datastore",
+        "profilestore"
+      ],
+      "priority": "high",
+      "acceptance": "game:GetService('DataStoreService') devolve instancia; GetDataStore duas vezes com o mesmo (name, scope) devolve a MESMA instancia; GetAsync devolve dois valores e (nil, nil) para chave inexistente; UpdateAsync devolve (value, keyInfo), passa keyInfo como 2o argumento da transform, aborta quando a transform devolve nil e ERRA quando a transform yielda; SetAsync devolve string de versao; RemoveAsync devolve o valor anterior e deixa GetAsync devolvendo nil; DataStoreOptions:SetExperimentalFeatures nao erra; deep copy verificada de ponta a ponta; specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-019",
+      "title": "DataStore v2 (GetVersionAsync/ListVersionsAsync/ListKeysAsync) + familia Pages",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.1.3/L2.1.6. Depende de task-services-018. behavior/DataStore.luau: GetVersionAsync(key, version) -> (valorNaquelaVersao, keyInfo); ListVersionsAsync(key, sortDirection, minDate, maxDate, pageSize) -> DataStoreVersionPages cujos itens sao DataStoreObjectVersionInfo; ListKeysAsync(prefix, pageSize, cursor, excludeDeleted) -> DataStoreKeyPages. behavior/Pages.luau: GetCurrentPage() -> Array, AdvanceToNextPageAsync() (Yields, passa por AsyncCall.Yield), IsFinished (ReadOnly, escrito via SetPropertyRaw); Cursor em DataStoreKeyPages/DataStoreListingPages. O buffer e o cursor da pagina vivem em InstanceState (chave _LuauBench*). O ProfileStore usa exatamente GetCurrentPage/IsFinished/AdvanceToNextPageAsync em ProfileVersionQuery -- essa e a forma de uso a garantir. sortDirection e um EnumItem e Enum ainda nao existe: com argumento omitido usa o default do dump (Ascending); com argumento presente e nao simulado, errar com [LuauBench] nomeando a lacuna de Enum, nunca aceitar em silencio. NAO implementar GetVersionAtTimeAsync nem RemoveVersionAsync (Deprecated) -- ficam com o stub do ClassBuilder.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 46,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "datastore",
+        "pages"
+      ],
+      "priority": "medium",
+      "acceptance": "SetAsync/UpdateAsync repetidos geram versoes distintas recuperaveis por GetVersionAsync; ListVersionsAsync devolve Pages navegavel com GetCurrentPage/IsFinished/AdvanceToNextPageAsync; RemoveAsync deixa a versao antiga acessivel (tombstone); specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-020",
+      "title": "OrderedDataStore + GetSortedAsync + DataStorePages",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.1.3. Depende de task-services-018 e task-services-019 (Pages). behavior/OrderedDataStore.luau: GetSortedAsync(ascending, pagesize, minValue, maxValue) -> DataStorePages, cada item da pagina sendo { key = ..., value = ... }. Em OrderedDataStore o valor so pode ser INTEIRO (validar e errar na familia Roblox) e a remocao e permanente, SEM tombstone -- diferente de GlobalDataStore/DataStore (doc oficial). pagesize default 50; o maximo de 100 veio de fonte secundaria e esta NAO CONFIRMADO: aceitar sem impor o teto e comentar. Fora do caminho critico do ProfileStore (leaderboard), por isso separada de task-services-019.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 46,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "datastore",
+        "ordereddatastore"
+      ],
+      "priority": "medium",
+      "acceptance": "GetSortedAsync devolve paginas ordenadas crescente e decrescente, respeita minValue/maxValue e pagesize; valor nao inteiro e recusado; remocao e permanente; specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-021",
+      "title": "MessagingService completo (PublishAsync/SubscribeAsync com eco local fiel)",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.3 INTEIRA. Depende de task-services-016 (AsyncCall) e task-runtime-034 (game.JobId). Superficie minima no dump: SO PublishAsync(topic, message) e SubscribeAsync(topic, callback), ambos Yields, nenhuma propriedade e nenhum evento -- o recebimento e um callback Luau puro, nao um RBXScriptSignal. FATO DECISIVO PESQUISADO: no Roblox real o servidor que publica RECEBE O PROPRIO ECO (dois threads independentes de DevForum, um com sintoma observado e correcao por filtro de game.JobId). Logo um LuauBench de processo unico e uma simulacao FIEL de um jogo com exatamente um servidor -- entregar aos proprios assinantes NAO e concessao, e o comportamento correto. Semantica: callback recebe { Data = <mensagem>, Sent = <unix em segundos> } (nomes confirmados na doc oficial); entrega ASSINCRONA -- PublishAsync yielda um passo via AsyncCall.Yield e cada callback e despachado por Scheduler:Spawn (NUNCA sincrono dentro do PublishAsync: no Roblox a entrega passa pela rede, e entregar sincrono faria codigo com reentrancia passar aqui e falhar la); erro dentro de um callback nao derruba o publisher nem o processo (sai por ThreadError, regra 02); SubscribeAsync devolve uma Runtime.Connection cujo :Disconnect() cancela a assinatura. VALIDAR e errar: mensagem > 1 kB, topico fora de 1-80 chars. NAO simular limites de taxa (600+240*jogadores publish/min, 20+8*jogadores assinaturas) -- mesma conta de L2.1.4, agravada por zero jogadores. DOCUMENTAR: nao ha cross-server; a ordem de entrega entre assinantes e ordem de inscricao e isso e APROXIMACAO (o Roblox nao garante ordem); assinatura viva NAO mantem o Scheduler vivo (senao um SubscribeAsync solto travaria o luaubench run para sempre).",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 47,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "messagingservice"
+      ],
+      "priority": "high",
+      "acceptance": "PublishAsync num topico assinado pelo proprio processo entrega a todos os callbacks, assincronamente, com { Data, Sent }; erro em um callback nao impede os outros nem derruba o processo; Disconnect cancela; mensagem acima de 1 kB e topico invalido erram; assinatura aberta nao impede o luaubench run de terminar; specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-022",
+      "title": "HttpService sub-leva A: JSON/GUID/UrlEncode + HttpEnabled falso + os tres metodos de rede errando",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.2, sobretudo L2.2.1 e L2.2.3. SEM REDE NENHUMA nesta tarefa -- e fidelidade EXATA a um lugar Roblox com HTTP desligado, que e o default do Roblox. FATO DO DUMP que decide o desenho: HttpEnabled tem Security { Read = None, Write = LocalUserSecurity }, Capabilities.Read = ['Network'], Default 'false' -- pela regra de emissao A.4 passo 5 ele entra no schema como ReadOnly, ou seja, no Roblox real um script LE e NAO ESCREVE HttpEnabled: a rede e ligada pelo DONO DO LUGAR, fora do codigo. Implementar: JSONEncode/JSONDecode sobre @lune/serde (JSONDecode de JSON invalido ERRA, como o Roblox -- nao devolve nil; referencia ciclica erra; se o serde do Lune recusar inf/NaN onde o Roblox aceita e produz JSON invalido de proposito, DECLARAR a divergencia em vez de silenciar), UrlEncode, GenerateGUID(wrapInCurlyBraces) com e sem chaves (funciona mesmo com HTTP desabilitado). HttpEnabled semeado false e ReadOnly. GetAsync/PostAsync/RequestAsync existem e ERRAM com a familia Roblox de 'HTTP nao habilitado' -- string exata NAO CONFIRMADA, aproximacao de boa-fe comentada como tal, mesmo protocolo da mensagem de Instance.new. GetSecret e CreateWebStreamClient ficam com o stub [LuauBench] do ClassBuilder. Acrescentar HttpService a tools/coverage.luau e regerar.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 47,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "httpservice",
+        "seguranca"
+      ],
+      "priority": "high",
+      "acceptance": "game:GetService('HttpService') devolve instancia; JSONEncode/JSONDecode/UrlEncode/GenerateGUID funcionam e erram como o Roblox nos casos invalidos; HttpEnabled le false e escrever erra; GetAsync/PostAsync/RequestAsync erram com a mensagem de HTTP desabilitado; nenhuma chamada de rede acontece (verificavel no codigo: @lune/net nao e requerido neste arquivo); specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-023",
+      "title": "CollisionGroups + behavior/WorldRoot (Workspace ganha comportamento) + PhysicsService delegando",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.5.1. ACHADO QUE DEFINE O DESENHO: WorldRoot -- superclasse de Workspace, JA GERADA na leva 1 -- declara sua propria copia scriptavel dos oito metodos de grupo de colisao (RegisterCollisionGroup, UnregisterCollisionGroup, IsCollisionGroupRegistered, RenameCollisionGroup, GetRegisteredCollisionGroups, GetMaxCollisionGroups, CollisionGroupSetCollidable, CollisionGroupsAreCollidable), todos Security None e Capabilities ['Physics'] (concedivel, logo DENTRO do schema), escopados POR INSTANCIA DE MUNDO; a doc oficial ja marca os homonimos de PhysicsService como superseded by WorldRoot. Logo o registro e estado do WorldRoot, e PhysicsService e a vista legada sobre o registro do Workspace -- escrever o estado dentro de PhysicsService inverteria a relacao real. Implementar: (1) src/services/CollisionGroups.luau -- dado puro, sem Instance: nomes registrados, matriz de colidibilidade par a par, limite de 32; (2) src/services/behavior/WorldRoot.luau NOVO, os oito metodos com registro POR INSTANCIA via InstanceState (chave _LuauBench*) -- e a primeira vez que Workspace ganha comportamento de verdade; (3) src/services/behavior/PhysicsService.luau, os mesmos metodos DELEGANDO ao registro da instancia de Workspace obtida por Context.GetDataModel():GetService('Workspace'), de forma que PhysicsService:RegisterCollisionGroup('X') seguido de workspace:IsCollisionGroupRegistered('X') devolva true como no Roblox. Fatos confirmados a honrar exatamente: GetMaxCollisionGroups() == 32; o grupo 'Default' JA VEM registrado; dois grupos recem-registrados COLIDEM por padrao. Nao confirmados, tratados pelo principio 'em duvida nao erre' da Decisao 3 e virando comentario + pendencia: registrar nome duplicado NAO erra (idempotente) e nao ha restricao cliente/servidor. Os 7 metodos Deprecated de PhysicsService ficam com o stub [LuauBench] (os que dependem de BasePart exigiriam uma classe nao coberta; os de id numerico expoem um modelo que o Roblox abandonou) -- sinalizar no relatorio conforme a regra 03. Acrescentar PhysicsService a tools/coverage.luau e regerar. NENHUMA fisica e simulada: grupo de colisao e bookkeeping, e o LuauBench o reproduz exatamente.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 48,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "physicsservice",
+        "worldroot",
+        "grupo4"
+      ],
+      "priority": "high",
+      "acceptance": "workspace:RegisterCollisionGroup/'IsCollisionGroupRegistered'/CollisionGroupSetCollidable/CollisionGroupsAreCollidable funcionam; 'Default' ja registrado; GetMaxCollisionGroups devolve 32; dois grupos novos colidem por padrao; PhysicsService e workspace compartilham o MESMO registro (spec cruzada nos dois sentidos); registrar acima de 32 erra; specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-024",
+      "title": "behavior/Lighting: ClockTime/TimeOfDay/minutos acoplados + LightingChanged + GetMoonPhase",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.5.2. Lighting JA esta coberta desde a leva 1 (20 propriedades no schema, sem Behavior) -- falta o unico acoplamento real da classe, hoje divergente EM SILENCIO: escrever Lighting.ClockTime = 6 deixa TimeOfDay valendo '14:00:00'. Confirmado por doc oficial que ClockTime, TimeOfDay e Get/SetMinutesAfterMidnight sao TRES VISTAS DO MESMO ESTADO. Os defaults do dump ja sao coerentes entre si (ClockTime = 14, TimeOfDay = '14:00:00', verificado), entao a semeadura de ClassRegistry.new ja nasce certa -- so as escritas divergem. Implementar behavior/Lighting.luau mantendo as tres vistas sincronizadas a partir de uma unica fonte interna em minutos. TimeOfDay aceita escrita curta ('11:00') e SetMinutesAfterMidnight faz WRAP acima de 24h (os dois confirmados); zero-padding na leitura e wrap na escrita direta de ClockTime NAO confirmados -> adotar HH:MM:SS com zero-padding e wrap, comentado como aproximacao de boa-fe. LightingChanged(skyChanged: bool) passa a disparar nas mudancas de propriedade EXCETO GlobalShadows, FogColor, FogStart e FogEnd -- exclusao DOCUMENTADA OFICIALMENTE, pegadinha real que so um LuauBench fiel reproduz. GetMoonPhase() devolve 0.75 SEMPRE (valor real do motor hoje, confirmado -- fidelidade de graca). GetSunDirection/GetMoonDirection devolvem Vector3 e NAO tem formula publica: permanecem com o stub [LuauBench] MESMO DEPOIS de Vector3 existir -- divergencia declarada, nao divida que a leva de tipos de valor quita. Todo o resto de Lighting continua dado que guarda e devolve, sem render nenhum.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 48,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "lighting",
+        "grupo4"
+      ],
+      "priority": "medium",
+      "acceptance": "Escrever ClockTime atualiza TimeOfDay e GetMinutesAfterMidnight, e vice-versa nas tres direcoes; TimeOfDay aceita 'HH:MM'; SetMinutesAfterMidnight faz wrap; LightingChanged dispara para Ambient/Brightness e NAO dispara para GlobalShadows/FogColor/FogStart/FogEnd; GetMoonPhase devolve 0.75; GetSunDirection/GetMoonDirection erram com [LuauBench]; specs cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-025",
+      "title": "SoundService: cobertura de superficie, sem Behavior proprio",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.5.3. Acrescentar SoundService a tools/coverage.luau e regerar -- e so. 17 membros sobrevivem ao filtro (13 propriedades, 4 funcoes, zero eventos). Para o publico-alvo declarado do LuauBench (logica pura, data manager, state machine) SoundService e irrelevante, e a pesquisa confirmou isso ao procurar uso real. Decisao: propriedades guardam e devolvem (dado morto, como o resto de Lighting); os quatro metodos (GetListener, SetListener, PlayLocalSound, GetMixerTime) ficam com o stub [LuauBench] do ClassBuilder. DUAS NOTAS QUE NAO VIRAM EXCECAO: (a) PlayLocalSound e client-only e erra no servidor real, mas NAO recebe tratamento tipo RejectingSignal -- a regra B.5.5 exige citacao AO VIVO de erro naquele membro para recortar uma excecao do balde de superficie client-only, e a pesquisa so achou relato de comunidade sem string verbatim; o stub [LuauBench] ja erra alto, e trocar o texto sem evidencia seria alargar a excecao por analogia, exatamente o que B.5 proibiu. (b) DISCREPANCIA dump x doc: RespectFilteringEnabled tem Default 'false' no dump e true na doc oficial -- O DUMP VENCE (regra 03, fonte unica); o valor gerado e false e a discrepancia fica registrada no relatorio. Nenhum agente 'corrige' um Default gerado a mao.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 48,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "soundservice",
+        "grupo4"
+      ],
+      "priority": "low",
+      "acceptance": "game:GetService('SoundService') devolve instancia; as 13 propriedades leem o default do dump e aceitam escrita; os 4 metodos erram com [LuauBench]; RespectFilteringEnabled le false; nenhum behavior/SoundService.luau foi criado; spec cobrindo cada item; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-026",
+      "title": "HttpService sub-leva B: rede real via @lune/net, atras do portao HttpEnabled",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.2 INTEIRA, sobretudo L2.2.2, L2.2.4 e L2.2.5. UNICA SUPERFICIE DE REDE DO PROJETO -- merece revisao dedicada. Depende de task-services-022 (sub-leva A) e de task-cli-026 (as flags). RACIOCINIO DA DECISAO, que precisa estar no cabecalho do modulo: a invariante 6 (local-first) tem como sujeito O LUAUBENCH -- ela proibe a FERRAMENTA de mandar dado do usuario para fora por conta propria (telemetria, analise remota). HttpService:PostAsync e o SCRIPT DO USUARIO fazendo o que ele escreveu para fazer, e a regra 00 e explicita sobre o criterio: 'a superficie exposta ao script e a que o Roblox real exporia'. Recusar rede seria DIVERGIR do Roblox (invariante 2) e amputar a metade da API que existe justamente para falar com servico externo. O que justifica o PORTAO (nao o bloqueio) e a invariante 7: um .project.json clonado de repositorio desconhecido nao deve ganhar a rede da maquina do desenvolvedor so por ser executado uma vez -- e o portao default-off e SIMULTANEAMENTE o comportamento mais fiel, porque no Roblox um lugar novo tambem tem HTTP desligado. Implementar: GetAsync/PostAsync/RequestAsync reais sobre net.request do Lune quando Services.Bootstrap tiver recebido a permissao (HttpEnabled passa a true via SetPropertyRaw); forma EXATA de RequestAsync -- entrada { Url, Method, Headers, Body, Compress, Timeout }, saida { Success, StatusCode, StatusMessage, Headers, Body } (doc oficial). ENDURECIMENTO deliberadamente MAIS RESTRITIVO que o Roblox: destinos loopback/link-local/privados (127.0.0.0/8, ::1, 169.254.0.0/16, 10/8, 172.16/12, 192.168/16) recusados salvo segunda permissao explicita -- o modelo de ameaca difere de verdade (um servidor Roblox nao alcanca a rede domestica de ninguem; o LuauBench roda NA MAQUINA do desenvolvedor, onde 127.0.0.1 e 169.254.169.254 sao alvos reais). Divergencias a DECLARAR: Timeout aceito e ignorado (net.request do Lune 0.10.5 nao tem timeout configuravel -- verificado rodando); host inexistente FAZ o Lune LANCAR (nunca deixar 'os error 11001' vazar -- capturar e traduzir para a familia Roblox); sem bloqueio de roblox.com e sem o erro client-only (confirmados so por DevForum e o LuauBench e sempre servidor); sem limite de 500 req/min.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": null,
+      "wave": 49,
+      "reviewResult": null,
+      "tags": [
+        "services",
+        "httpservice",
+        "rede",
+        "seguranca"
+      ],
+      "priority": "high",
+      "acceptance": "Com a permissao ligada, RequestAsync faz requisicao real e devolve a tabela na forma exata do Roblox; sem a permissao, os tres metodos continuam errando 'HTTP nao habilitado'; host inexistente vira erro da familia Roblox e nunca vaza mensagem do SO; destino loopback/privado e recusado sem a segunda permissao e aceito com ela; Timeout aceito e ignorado com divergencia comentada; specs cobrindo cada item sem depender de rede externa para os caminhos de recusa; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-cli-026",
+      "title": "Flags --allow-http e --allow-http-local + auditoria de requisicao em --verbose",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.2.1/L2.2.4. Par de task-services-026; pode ser escrita em paralelo com ela (territorios diferentes). (1) src/cli/Args.luau: Command do tipo 'run' ganha AllowHttp: boolean e AllowHttpLocal: boolean, default false nos dois; --allow-http-local implica --allow-http (ou erra pedindo as duas -- decidir e documentar). (2) Repassar a permissao a Services.Bootstrap (BootstrapOptions ganha o campo correspondente; a definicao exata do campo e de task-services-026, coordenar). (3) Com --verbose ligado, imprimir UMA LINHA por requisicao de saida com metodo + host, NUNCA corpo nem headers -- e a versao auditavel do local-first: o usuario consegue ver o que o script dele mandou para fora. (4) Todos os textos novos em src/cli/Messages.luau, em ingles como o resto dos diagnosticos do CLI (Decisao 13 do desenho de cli). (5) --help documenta as duas flags, deixando claro que a rede e desligada por padrao e que --allow-http-local libera destinos na maquina/rede local. NAO criar luaubench.toml -- a Decisao 10 do desenho de cli continua valendo e as duas flags cabem em Args.Command.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": null,
+      "wave": 49,
+      "reviewResult": null,
+      "tags": [
+        "cli",
+        "httpservice",
+        "flags",
+        "seguranca"
+      ],
+      "priority": "high",
+      "acceptance": "luaubench run --allow-http e --allow-http-local sao reconhecidas e chegam a Services.Bootstrap; sem elas o default e false; --verbose imprime metodo+host por requisicao e nunca corpo; --help lista as duas; nenhuma flag desconhecida regrediu; specs de Args cobrindo cada caso; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-027",
+      "title": "Cenario ProfileStore real: tirar datastore-profilestore-pattern do [SKIP]",
+      "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.1 e o cabecalho do proprio tests/scenarios/datastore-profilestore-pattern.scenario.luau, que ja lista os 5 passos esperados. Depende de task-services-018 (nucleo), task-services-019 (versoes/Pages) e task-runtime-033 (BindToClose). Usar o ProfileStore REAL (MadStudioRoblox/ProfileStore, arquivo unico ProfileStore.luau) copiado como fixture, NUNCA reinventado. O que a pesquisa confirmou que o cenario exercita de verdade: GetDataStore(store_name, nil, DataStoreOptions com SetExperimentalFeatures({v2=true})); UpdateAsync como UNICO caminho de escrita/leitura transacional; GetAsync/GetVersionAsync em view mode; RemoveAsync em WipeProfileAsync; ListVersionsAsync + Pages em ProfileVersionQuery; game:BindToClose; RunService.Heartbeat em cadencia de tempo real; task.wait com backoff exponencial 1s->20s. NAO exercita GetRequestBudgetForRequestType nem IncrementAsync (confirmado por grep no fonte real). A sondagem de saude por SetAsync so roda se IsStudio for true -- e o LuauBench declara IsStudio() == false, entao nem e alcancada. Passos: sessao nova devolve Data com o template; alterar, encerrar, reabrir e confirmar que persistiu DENTRO DO PROCESSO; e o session lock (dois StartSessionAsync concorrentes para a mesma chave, o segundo nao rouba sem Steal). Declarar no cabecalho do cenario que a persistencia e so intra-processo nesta leva.",
+      "column": "todo",
+      "agent": "testador",
+      "reviewer": null,
+      "wave": 50,
+      "reviewResult": null,
+      "tags": [
+        "testes",
+        "datastore",
+        "profilestore",
+        "cenario"
+      ],
+      "priority": "high",
+      "acceptance": "O cenario roda o ProfileStore real de ponta a ponta sem stub inventado, cobre os 5 passos do cabecalho do arquivo, e nao imprime mais [SKIP]; qualquer divergencia encontrada volta como relatorio, nunca como stub silencioso.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
+    },
+    {
+      "id": "task-services-028",
+      "title": "PESQUISA: as 6 pendencias abertas da leva 2 de services",
+      "description": "Fecha a lista 'Pendencias para o pesquisador' de .claude/agents-memory/arquiteto-services-2026-09-05.md, secao L2 (final). Nenhuma bloqueia o inicio das tarefas; todas precisam de resposta antes de revisor-services aprovar a leva. (1) Formula numerica do budget de DataStore por tipo de requisicao, lida LINHA A LINHA do Markdown bruto oficial (https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/cloud-services/data-stores/error-codes-and-limits.md) -- dois fetches da mesma pagina divergiram na pesquisa anterior; so importa se um dia houver modo de throttle opt-in. (2) Mensagem de erro exata para valor nao serializavel em SetAsync/UpdateAsync (NaN, inf, funcao, Instance, tabela com chave mista). (3) RegisterCollisionGroup com nome ja registrado: erra ou e idempotente? Ha restricao cliente/servidor em RegisterCollisionGroup/CollisionGroupSetCollidable? (4) Lighting.ClockTime escrito fora de [0, 24): wrap, clamp ou erro? TimeOfDay lido tem zero-padding? (5) Texto verbatim do erro de HttpService com HTTP desabilitado, e do erro de SoundService:PlayLocalSound chamado no servidor -- este ultimo decide se a regra B.5.5 se aplica a PlayLocalSound. (6) GetGlobalDataStore() devolve ClassName 'GlobalDataStore' ou 'DataStore' no motor real? (O dump diz DataStore e o desenho segue o dump; confirmar.) Marcar NAO CONFIRMADO onde nao houver evidencia -- nunca preencher por inferencia.",
+      "column": "todo",
+      "agent": "pesquisador",
+      "reviewer": null,
+      "wave": 45,
+      "reviewResult": null,
+      "tags": [
+        "pesquisa",
+        "services",
+        "leva2"
+      ],
+      "priority": "medium",
+      "acceptance": "Relatorio em .claude/agents-memory/pesquisa-services-leva2-pendencias-2026-09-05.md com uma secao por pergunta, fonte citada por item e NAO CONFIRMADO explicito onde faltar evidencia; resumo curto devolvido a thread principal.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": null
     }
   ]
 }

@@ -1472,3 +1472,272 @@ não uma feature nova. Registrado aqui para não ser redescoberto como bug novo.
 - **Não** transformar `PlanContext` em objeto com métodos; continua registro de dados puro.
 - **Não** reabrir a Parte 1 da `task-cli-018` (propagação de `Source`/`SourcePath`/`Properties` da
   raiz aninhada): aprovada sem ressalva pelo revisor, verificada contra os pacotes Wally reais.
+
+---
+
+# Decisão 17 — escopo do diagnóstico de classe não-criável no `Plan` (`task-cli-023`)
+
+Fecha a "Lacuna conhecida que a Decisão 16 **não** fecha" (acima), depois da pesquisa de
+`task-cli-022` (`.claude/agents-memory/pesquisa-datamodel-nested-root-2026-09-05.md`).
+
+## Resposta curta
+
+**Escopo (b) — genérico —, com três recortes que a formulação original da task não previa** (duas
+exclusões de posição legítima e um recorte de cobertura; as duas armadilhas que forçaram cada um
+estão documentadas abaixo, foram encontradas verificando o manifesto, não deduzidas).
+
+O diagnóstico **não** é "`DataModel` fora da raiz" nem "qualquer classe com `IsAbstract == true`".
+É: **"o `Materialize` vai chamar `Services.new` para este nó, e essa chamada não pode dar certo,
+porque a classe é criada só pelo motor"** — ou seja, o `Plan` antecipa a **mesma escolha de ramo**
+que `TreeMaterializer.createInstance` já faz, uma fase antes, com a informação que só o `Plan` tem
+(qual `.project.json` declarou o nó).
+
+Motivo de não ser (a): um typo apontando para `"DataModel"` é raro (ninguém digita isso por acaso);
+typos que caem na **mesma família** são muito mais prováveis — `"Instance"`, `"PVInstance"`,
+`"BaseScript"` (querendo `Script`), `"LuaSourceContainer"`, e sobretudo **Service em posição errada**
+(`"$className": "Workspace"` num nó que não é filho direto da raiz) e
+`"MyScripts": {"$className": "StarterPlayerScripts"}` fora de `StarterPlayer` — caso que
+`src/services/init.luau` já documenta explicitamente como esperado errar. Um `if className ==
+"DataModel"` a mais em `cli` compraria o caso menos provável da família e deixaria os outros de fora,
+contra a regra 03 ("registro central, nunca `if ClassName == "Workspace" then`").
+
+## A armadilha que quase invalidou (b) na forma proposta pela task
+
+`ManifestEntry.IsAbstract` **não** significa "classe abstrata" — é a tradução literal da tag
+`NotCreatable` do dump (`src/runtime/ClassRegistry.luau` já documenta isso, inclusive a renomeação
+pendente para `IsNotCreatable`). Verificado em `src/services/generated/Manifest.luau`:
+
+| Classe | `IsService` | `IsAbstract` | `Covered` | Legítima num `.project.json`? |
+|---|---|---|---|---|
+| `Workspace`, `Players`, `ReplicatedStorage`, `ServerScriptService`, `Lighting`, `StarterGui`, `StarterPlayer` | `true` | **`true`** | `true` | **Sim** — filho direto da raiz |
+| `StarterPlayerScripts`, `StarterCharacterScripts` | `false` | **`true`** | `true` | **Sim** — filho fixo de `StarterPlayer` |
+| `Terrain` | `false` | **`true`** | **`false`** | Sim no Roblox; LuauBench ainda não pré-cria |
+| `DataModel` | `false` | `true` | **`false`** (!) | Só na raiz do projeto mais externo |
+| `Instance`, `PVInstance`, `BaseScript`, `LuaSourceContainer`, `WorldRoot`, `BasePlayerGui` | `false` | `true` | `true` | **Não, nunca** |
+| `BasePart`, `GuiObject`, `AnimationClip`, ... | `false` | `true` | `false` | **Não, nunca** (fora da leva) |
+
+`IsAbstract == true` sozinho, como a `task-cli-023` propôs, **marcaria como erro todo Service e todo
+filho fixo do motor** — falso positivo em praticamente todo `.project.json` real do ecossistema.
+A guarda precisa das duas exclusões, e elas são exatamente os dois ramos legítimos de
+`TreeMaterializer.createInstance`.
+
+## Guarda decidida (4 condições, uma por ramo real)
+
+Local: `src/cli/TreePlanner.luau`, dentro de `resolveCore`, **logo após o bloco `isServiceRoot`**
+(hoje `:1119-1133`) e antes do bloco de `$properties` — é o primeiro ponto onde `finalClassName`,
+`isServiceRoot`, `parentClassName` e `name` existem todos ao mesmo tempo.
+
+```lua
+-- Antecipa, uma fase antes, a MESMA escolha de ramo de TreeMaterializer.createInstance:
+--   ramo 1 (game:GetService)   -> isServiceRoot
+--   ramo 2 (adotar filho fixo) -> options.IsEngineFixedChild(parentClassName, name, finalClassName)
+--   ramo 3 (Services.new)      -> tudo o mais  <- só este pode falhar por NotCreatable
+local isEngineFixedChild = parentClassName ~= nil
+    and options.IsEngineFixedChild(parentClassName, name, finalClassName)
+if
+    not isOutermostRoot        -- a raiz do plano vira `game`, nunca passa por Services.new
+    and not isServiceRoot
+    and not isEngineFixedChild
+    and options.IsEngineOnlyClass(finalClassName)
+then
+    bag:Add({
+        Severity = "error",
+        Code = "plan/engine-only-class",
+        Message = Messages.PlanEngineOnlyClass(nodePath, finalClassName),
+        NodePath = nodePath,
+        Field = if explicitClassName ~= nil then "$className" else nil,
+        FilePath = currentProjectFilePath,
+    })
+    return nil
+end
+```
+
+`isOutermostRoot` hoje é calculado **dentro** do ramo `explicitClassName ~= nil` (`:1074`) — precisa
+ser içado para antes, sem mudança de valor nem de comportamento (é expressão pura).
+
+### Por que o recorte "este build simula" (dentro de `IsEngineOnlyClass`) e não `IsAbstract` cru
+
+`IsEngineOnlyClass(c)` = `IsAbstract and (Covered or RUNTIME_OWNED[c])`. A regra que isso codifica:
+**o `Plan` só pré-julga classe que ESTE build sabe simular; qualquer outra continua caindo no
+`Materialize`, que responde `[LuauBench] "..." is not simulated yet` — a mensagem verdadeira.**
+
+Isso é o que mantém `Terrain` correto: `Terrain` é `NotCreatable` e `Covered == false`, então a
+guarda **não** dispara e o usuário continua vendo "LuauBench ainda não simula", que é a causa real —
+e não uma acusação de erro de projeto por algo que é legítimo escrever num `.project.json` do Rojo.
+Efeito colateral bem-vindo: o teste existente `TreeMaterializer.spec.luau:864` (`Workspace.Terrain`
+→ `materialize/invalid-class`) continua válido sem alteração.
+
+#### `RUNTIME_OWNED` — a armadilha nº 2, encontrada verificando o manifesto
+
+`DataModel` tem **`Covered == false`** (verificado: das 915 classes do manifesto, só 24 são
+`Covered`, e `DataModel` não é uma delas). Não porque o LuauBench não a simule — ela é implementada
+por **`runtime`** (`Runtime.DataModel.new()`), fora do pipeline gerado de `services`, e `Covered` é
+gerado por `tools/coverage.luau` a partir do registro de `services`. Ou seja: `Covered == false`
+aqui diz **qual território implementa**, não "não simulada".
+
+Sem esse ajuste, `IsAbstract and Covered` daria `false` para `DataModel` e a guarda **não dispararia
+no caso original** (`task-cli-022`) — o bug que esta decisão existe para fechar. Daí a tabela
+nomeada, em `services` (o território que pode conhecer nome de classe; `cli` continua com zero
+literal novo):
+
+```lua
+-- Classes que o LuauBench simula FORA do pipeline gerado de `services` (implementadas por
+-- `runtime`) e que por isso aparecem com `Covered == false` no manifesto sem que isso signifique
+-- "não simulada". Hoje só `DataModel` (`Runtime.DataModel`).
+local RUNTIME_OWNED_CLASSES: { [string]: boolean } = { DataModel = true }
+```
+
+Confirma que a mensagem de hoje é mesmo ruim para o caso original: como `DataModel` não está
+registrada em `ClassRegistry`, `Services.new("DataModel")` cai no caso 3 e o usuário vê
+`materialize/invalid-class: ... [LuauBench] "DataModel" ... is not simulated yet` — **falso**, o
+LuauBench simula `DataModel`; ela só não pode ser um nó de projeto. O `plan/engine-only-class`
+substitui uma mensagem errada, não só uma tardia.
+
+As 19 classes `NotCreatable and Covered` (mais `DataModel`) se dividem exatamente em três grupos, sem
+resto: Services (`Workspace`, `Players`, `ReplicatedStorage`, `ReplicatedFirst`, `ServerStorage`,
+`ServerScriptService`, `Lighting`, `RunService`, `StarterGui`, `StarterPack`, `StarterPlayer`) →
+`isServiceRoot`; filhos fixos (`StarterPlayerScripts`, `StarterCharacterScripts`) →
+`IsEngineFixedChild`; e os que **nunca** são legítimos num `.project.json` (`Instance`, `PVInstance`,
+`BaseScript`, `LuaSourceContainer`, `WorldRoot`, `BasePlayerGui`, `DataModel` fora da raiz) → é
+exatamente o conjunto que a guarda deve pegar.
+
+### `IsSimulatedClass` **não** serve aqui
+
+`Services.IsSimulatedClass` lê `Runtime.ClassRegistry` (fonte viva) e só é verdadeira **depois** do
+`Services.Bootstrap`, que é o passo 7 do pipeline; `TreePlanner.Plan` é o passo 4
+(`src/cli/RunCommand.luau:16-24`). O único dado puro e disponível nessa fase é o manifesto — mesma
+garantia que `IsServiceClass`/`IsEngineFixedChild`/`GetSimulatedServiceClasses` já documentam
+("SEGURA de chamar ANTES de `Services.Bootstrap`"), e `GetSimulatedServiceClasses` já tem precedente
+de consultar `entry.Covered`.
+
+## Contrato entre territórios (delta)
+
+### `services` expõe (NOVO — vira `task-services-014`, dependência dura de `task-cli-024`)
+
+```lua
+-- src/services/init.luau
+local RUNTIME_OWNED_CLASSES: { [string]: boolean } = { DataModel = true }
+
+-- "Só o MOTOR cria instância desta classe, e este build sabe simulá-la": tag `NotCreatable` do
+-- Roblox API Dump (`ManifestEntry.IsAbstract`) E simulada por este build (`Covered`, ou
+-- `RUNTIME_OWNED_CLASSES` para o que `runtime` implementa fora do pipeline gerado). PURA (só
+-- `generated/Manifest.luau` + a tabela acima), SEGURA antes de `Services.Bootstrap` -- mesma
+-- garantia de `IsServiceClass`. Classe ausente do manifesto (typo) -> `false`, nunca erro:
+-- classificar é aqui, decidir se é erro de projeto é de quem chama (`TreePlanner`).
+function Services.IsEngineOnlyClass(className: string): boolean
+```
+
+Nome deliberado: **não** `IsAbstractClass`. "Abstract" é o nome errado do campo (a renomeação para
+`IsNotCreatable` já está registrada como pendente em `ClassRegistry.luau`), e um leitor que visse
+`IsAbstractClass("Workspace") == true` concluiria a coisa errada. `Engine*` é vocabulário já
+estabelecido no repositório (`EngineFixedChildren`, `NewEngineInstance`) para "criado pelo motor,
+não por script", e o nome carrega o recorte de cobertura sem prometer ser um espelho cru da tag.
+
+### `cli` consome
+
+`TreePlanner.PlanOptions` ganha **dois** campos (hoje só tem `IsServiceClass`):
+
+```lua
+export type PlanOptions = {
+    IsServiceClass: (className: string) -> boolean,
+    IsEngineFixedChild: (parentClassName: string, name: string, className: string) -> boolean,
+    IsEngineOnlyClass: (className: string) -> boolean,
+}
+```
+
+`IsEngineFixedChild` já existe em `services` (usada hoje por `TreeMaterializer` direto); entra em
+`PlanOptions` por **injeção**, como `IsServiceClass`, para manter `TreePlanner` testável com fixture
+em disco e sem `require` de `services` (padrão do módulo, cabeçalho `:10-11`). `RunCommand:141` passa
+as três.
+
+## Mensagem (original do LuauBench — não há Rojo para imitar)
+
+`Messages.PlanEngineOnlyClass(nodePath: string, className: string): string`, em inglês, família do
+arquivo:
+
+```
+"{nodePath}" declares the class "{className}", which the Roblox API Dump tags as NotCreatable --
+only the engine creates instances of it, never a project node. A service is only valid as a direct
+child of the project's root, named exactly like its class; for a plain container, use "Folder".
+```
+
+Quando `className == "DataModel"`, uma frase a mais no fim (o caso observado na prática merece o
+ponteiro exato, e `DataModel` já é vocabulário legítimo de `cli` — ver `MaterializeRootNotDataModel`
+e `parentClassName == "DataModel"` em `TreePlanner`):
+
+```
+ "DataModel" is only valid as the root of the outermost project.
+```
+
+O literal fica em `Messages.luau` (uma condição dentro da função), **não** vira ramo na guarda de
+`TreePlanner` nem `Code` separado.
+
+## Comportamento resultante
+
+| Cenário | Hoje | Depois |
+|---|---|---|
+| Raiz de topo `DataModel` + `$path` de pasta sem `init.*` | passa (+ `plan/root-source-ignored` quando há Source) | **igual** (`isOutermostRoot`) |
+| Raiz de projeto **aninhado** `DataModel` + pasta sem `init.*` | passa no `Plan`, `materialize/invalid-class` | **`plan/engine-only-class`** (o bug original) |
+| Raiz de projeto aninhado `DataModel` + `$path` de arquivo | `plan/class-name-conflict` | **igual** (guarda anterior dispara antes) |
+| `ReplicatedStorage`/`Workspace` como filho direto da raiz | `IsServiceRoot`, ok | **igual** |
+| `Workspace` sob `ReplicatedStorage` (Service mal posicionado) | `materialize/invalid-class` | **`plan/engine-only-class`** |
+| `StarterPlayerScripts` sob `StarterPlayer` | adotado | **igual** (`IsEngineFixedChild`) |
+| `"MyScripts": {"$className":"StarterPlayerScripts"}` | `materialize/invalid-class` | **`plan/engine-only-class`** |
+| `$className: "Instance"`/`"PVInstance"`/`"BasePart"` | `materialize/invalid-class` | **`plan/engine-only-class`** |
+| `Workspace.Terrain` (`Covered == false`) | `materialize/invalid-class` | **igual** (recorte `Covered`) |
+| `$className: "Frame"` (existe, não coberta) | `[LuauBench] not simulated yet` no `Materialize` | **igual** |
+| `$className: "Frmae"` (não existe no dump) | `materialize/invalid-class` | **igual** |
+
+Ganho concreto sobre o `Materialize`: o `Diagnostic` do `Plan` carrega **`FilePath` e `Field`** — em
+projeto aninhado (todo pacote Wally vendorizado) é a diferença entre saber e não saber **qual**
+`.project.json` declarou o nó. `materialize/invalid-class` só tem `NodePath`.
+
+## Fidelidade vs. pragmatismo
+
+- **Não é fidelidade ao Rojo** — a pesquisa de `task-cli-022` provou que o Rojo real não valida
+  posição de classe em lugar nenhum. É validação **original do LuauBench**, justificada pelo dump
+  (tag `NotCreatable`), do mesmo tipo de `plan/service-name-mismatch` (que é o pré-check do
+  `materialize/service-name-mismatch`). Precedente direto, não categoria nova.
+- **Divergência declarada:** um projeto que o `rojo build`/`serve` real aceitaria sem reclamar
+  (porque o Rojo nunca valida isso) é **rejeitado** pelo `luaubench run` na fase de `Plan`. Aceito
+  porque o mesmo projeto já falha hoje uma fase depois — a mudança é *quando* e *com quanta
+  informação*, nunca *se* — e porque o `.rbxlx` correspondente não abriria no Studio.
+- **Não é fidelidade de superfície simulada:** nada disto é visível para o script do usuário; é
+  diagnóstico de ferramenta. Regra 00 não é tocada.
+
+## Riscos
+
+- **Falso positivo** é o único risco real, e as três exclusões (`isOutermostRoot`, `isServiceRoot`,
+  `IsEngineFixedChild`) mais o recorte de cobertura são exatamente o que o fecha. Se `services`
+  cobrir `Terrain` no futuro (`Covered = true`) **sem** registrá-lo em `EngineFixedChildren`, um
+  `Workspace/Terrain` legítimo passaria a ser erro — por isso `task-services-014` inclui um teste de
+  coerência: *toda* classe para a qual `IsEngineOnlyClass` devolve `true` ou é `IsService`, ou
+  aparece em `EngineFixedChildren`, ou está numa lista fechada e explícita de "nunca legítima num
+  `.project.json`" (hoje `Instance`, `PVInstance`, `BaseScript`, `LuaSourceContainer`, `WorldRoot`,
+  `BasePlayerGui`, `DataModel`). Falhar esse teste é o alarme — ele quebra na leva de `services` que
+  introduzir o problema, não meses depois no projeto de um usuário.
+- **`RUNTIME_OWNED_CLASSES` desatualizar:** se `runtime` passar a implementar outra classe fora do
+  pipeline gerado, a tabela precisa acompanhar. O mesmo teste de coerência é o lugar de perceber.
+- **Testes existentes que podem mudar de fase:** `TreeMaterializer.spec.luau:812` (ramo normal
+  `Services.new`) e vizinhos. `coder-cli` **verifica** se cada um monta o `InstancePlan` à mão (nesse
+  caso segue verde, porque a defesa em profundidade do `Materialize` continua intacta e alcançável)
+  ou passa por `TreePlanner.Plan` (nesse caso o teste muda de `Code`, e a mudança é esperada e
+  documentada no relatório) — nunca assume.
+- **Blast radius:** `services` +1 função pura; `cli` um arquivo de lógica (`TreePlanner`), um de
+  mensagem (`Messages`), uma linha de injeção (`RunCommand`).
+
+## O que deliberadamente NÃO fazer agora
+
+- **Não** pré-checar no `Plan` classe **desconhecida do dump** (`"Frmae"`) nem classe **conhecida e
+  não coberta** (`"Frame"`). São duas famílias adjacentes e reais, mas: a segunda tem no
+  `Materialize` a mensagem *verdadeira* (`[LuauBench] ... not simulated yet`), e a primeira é uma
+  decisão própria (o Rojo aceita qualquer string; barrar no `Plan` é outra validação original, com
+  seu próprio custo de falso positivo quando o dump fixado está atrás do Studio do usuário).
+  Registrado aqui para não ser redescoberto como bug novo.
+- **Não** renomear `ManifestEntry.IsAbstract` para `IsNotCreatable` nesta leva — a renomeação
+  pendente segue registrada em `ClassRegistry.luau`; `IsEngineOnlyClass` foi nomeada de modo a
+  sobreviver a ela sem tocar em `cli`.
+- **Não** criar `Code` separado para `DataModel` — um `Code`, uma frase extra na mensagem.
+- **Não** mover a guarda para `TreeMaterializer` nem remover de lá a defesa em profundidade do
+  `pcall(Services.new)`: `TreeMaterializer.Materialize` continua aceitando `InstancePlan` montado à
+  mão, e as duas camadas coexistem como já coexistem para `service-name-mismatch`.

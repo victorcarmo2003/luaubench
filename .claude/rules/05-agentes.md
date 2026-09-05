@@ -17,17 +17,18 @@ Execute inline apenas: mudança trivial de uma linha, leitura pontual para decid
 
 ## Territórios (garantia de não-conflito)
 
-Três agentes de escrita **nunca** podem receber o mesmo território na mesma leva:
+Estes agentes de escrita **nunca** podem receber o mesmo território na mesma leva:
 
 | Agente | Território exclusivo |
 |---|---|
 | `coder-runtime` | `src/runtime/` — DataModel, base de Instance, scheduler |
 | `coder-services` | `src/services/` — Services simulados a partir do API Dump |
 | `coder-cli` | `src/cli/` — comando `luaubench run`, integração Rojo, Rokit |
+| `coder-valuetypes` | `src/valuetypes/` (+ `tools/generate-enums.luau`) — Value Types simulados |
 | `testador` | `tests/scenarios/` — cenários práticos de uso |
 | `github` | git, nada de código |
 
-Revisores (`revisor-runtime`, `revisor-services`, `revisor-cli`), `pesquisador`, `debugger` e `testador` são read-only fora do próprio território — dispare quantos quiser, sempre em paralelo, inclusive junto com coders. `testador` também lê (nunca escreve) `C:\Users\hakor\Documents\Roblox-Games`, fora do repositório.
+Revisores (`revisor-runtime`, `revisor-services`, `revisor-cli`, `revisor-valuetypes`), `pesquisador`, `debugger` e `testador` são read-only fora do próprio território — dispare quantos quiser, sempre em paralelo, inclusive junto com coders. `testador` também lê (nunca escreve) `C:\Users\hakor\Documents\Roblox-Games`, fora do repositório.
 
 Se uma tarefa cruza territórios (ex: mudar a API pública que `runtime` expõe para `services`): **quebre em duas tarefas** com o contrato definido entre elas, ou chame o `arquiteto` primeiro para redesenhar a fronteira. Nunca dê o mesmo arquivo a dois agentes.
 
