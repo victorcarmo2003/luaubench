@@ -14,8 +14,8 @@
 
 ## Formato de projeto Rojo
 
-- Não invente campo do `.project.json` que o Rojo não define. Se o parsing precisar de algo que o formato do Rojo não cobre, isso é uma extensão do LuauBench e vive em campo claramente namespaced (ex: `"luaubench": {...}` dentro do `.project.json`), nunca sobrescrevendo semântica do Rojo.
-- `pesquisador` confirma o formato exato do `.project.json`/sourcemap antes de `coder-cli` implementar o parser, se houver dúvida sobre um campo.
+- Não invente campo do `.project.json` que o Rojo não define. **Confirmado por pesquisa contra o código-fonte real do Rojo (`.claude/agents-memory/pesquisa-formato-projeto-rojo-2026-09-05.md`): o struct raiz do `.project.json` usa `#[serde(deny_unknown_fields)]` — qualquer campo extra no topo (incluindo um namespace tipo `"luaubench": {...}`) faz `rojo serve`/`build` reais falharem.** Extensão do LuauBench NUNCA vive dentro do `.project.json` — vive em arquivo separado (ex: `luaubench.toml` na raiz do projeto do usuário).
+- Formato de referência já pesquisado e confirmado em `.claude/agents-memory/pesquisa-formato-projeto-rojo-2026-09-05.md`: schema completo do `.project.json` (`ProjectNode`: `$className`/`$path`/`$properties`/`$attributes`/`$id`/`$ignoreUnknownInstances`), convenção arquivo→ClassName (`.server.lua`→`Script`, `.client.lua`→`LocalScript`, `init.*` para pastas, etc.), formato do sourcemap (`{name, className, filePaths, children}` — por padrão só inclui Script/LocalScript/ModuleScript, precisa de `--include-non-scripts` pro resto), resolução de `$path` relativa à pasta do `.project.json` que define aquele nó, e detecção de projetos Rojo aninhados. `coder-cli` lê esse arquivo antes de implementar o parser — não repita a pesquisa.
 
 ## Distribuição via Rokit
 
