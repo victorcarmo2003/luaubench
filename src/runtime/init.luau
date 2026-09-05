@@ -136,6 +136,7 @@ export type DataModel = DataModelModule.DataModel
 export type Scheduler = SchedulerModule.Scheduler
 export type TaskHandle = SchedulerModule.TaskHandle
 export type SandboxOptions = SandboxModule.SandboxOptions
+export type SandboxGlobals = SandboxModule.SandboxGlobals
 export type SandboxResult = SandboxModule.SandboxResult
 export type SandboxChunkOptions = SandboxModule.SandboxChunkOptions
 export type OutputRecord = SandboxModule.OutputRecord
