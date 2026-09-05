@@ -1,0 +1,9 @@
+{
+  "name": "MetaFiles",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "shared"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "TripleCycleB",
+  "tree": {
+    "$className": "Folder",
+    "Next": {
+      "$path": "../c"
+    }
+  }
+}

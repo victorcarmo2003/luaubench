@@ -1,0 +1,9 @@
+{
+  "name": "TripleCycleA",
+  "tree": {
+    "$className": "DataModel",
+    "Next": {
+      "$path": "../b"
+    }
+  }
+}

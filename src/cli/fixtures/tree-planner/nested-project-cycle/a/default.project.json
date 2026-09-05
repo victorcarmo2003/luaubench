@@ -1,0 +1,9 @@
+{
+  "name": "CycleA",
+  "tree": {
+    "$className": "DataModel",
+    "Vendor": {
+      "$path": "../b"
+    }
+  }
+}

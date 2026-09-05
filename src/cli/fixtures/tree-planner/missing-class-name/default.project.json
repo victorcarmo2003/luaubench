@@ -1,0 +1,7 @@
+{
+  "name": "MissingClassName",
+  "tree": {
+    "$className": "DataModel",
+    "Mystery": {}
+  }
+}

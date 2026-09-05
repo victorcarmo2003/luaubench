@@ -1,0 +1,9 @@
+{
+  "name": "ServiceNameMismatch",
+  "tree": {
+    "$className": "DataModel",
+    "NotWorkspace": {
+      "$className": "Workspace"
+    }
+  }
+}

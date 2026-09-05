@@ -1,0 +1,9 @@
+{
+  "name": "UnsupportedFile",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "shared"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "NestedProjectOuter",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "shared"
+    },
+    "Vendor": {
+      "$path": "vendor"
+    }
+  }
+}

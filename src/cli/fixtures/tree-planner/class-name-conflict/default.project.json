@@ -1,0 +1,10 @@
+{
+  "name": "ClassNameConflict",
+  "tree": {
+    "$className": "DataModel",
+    "Something": {
+      "$className": "Model",
+      "$path": "script.lua"
+    }
+  }
+}

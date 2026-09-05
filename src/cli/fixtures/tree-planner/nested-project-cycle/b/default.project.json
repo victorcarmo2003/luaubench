@@ -1,0 +1,9 @@
+{
+  "name": "CycleB",
+  "tree": {
+    "$className": "Folder",
+    "Back": {
+      "$path": "../a"
+    }
+  }
+}

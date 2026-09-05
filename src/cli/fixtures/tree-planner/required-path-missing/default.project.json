@@ -1,0 +1,9 @@
+{
+  "name": "RequiredPathMissing",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "does-not-exist"
+    }
+  }
+}

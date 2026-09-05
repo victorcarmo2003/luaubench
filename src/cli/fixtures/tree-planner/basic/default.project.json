@@ -1,0 +1,12 @@
+{
+  "name": "TreePlannerBasic",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "shared"
+    },
+    "OptionalStuff": {
+      "$path": { "optional": "missing-folder" }
+    }
+  }
+}

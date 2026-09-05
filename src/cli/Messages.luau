@@ -221,4 +221,78 @@ function Messages.ProjectInvalidPathValue(): string
 	return '"$path" must be a string, or an object of the form { "optional": "<path>" }.'
 end
 
+--------------------------------------------------------------------------------------------------
+-- SyncRules / TreePlanner (arquivo/pasta -> ClassName, resolução de $path e projetos aninhados)
+-- -- task-cli-003
+--------------------------------------------------------------------------------------------------
+
+-- Decisão 6: TODO arquivo classificado como "Unsupported" (reconhecido pela tabela do Rojo, fora
+-- da leva 1) vira warning citando o caminho REAL -- nunca omissão silenciosa (regra 03).
+function Messages.SyncUnsupportedExtension(absolutePath: string): string
+	return `"{absolutePath}" has a file extension that LuauBench recognizes but does not simulate yet -- it was skipped.`
+end
+
+function Messages.PlanRequiredPathNotFound(nodePath: string, absolutePath: string): string
+	return `"$path" for "{nodePath}" points to "{absolutePath}", which does not exist on disk.`
+end
+
+-- Severidade "info" (Decisão 8) -- $path opcional ausente omite o nó em silêncio, sem ser erro.
+function Messages.PlanOptionalPathOmitted(nodePath: string, absolutePath: string): string
+	return `"{nodePath}" was omitted: its optional "$path" ("{absolutePath}") does not exist on disk, and no other source of ClassName (explicit "$className", or Service inference) was available.`
+end
+
+-- Família de mensagem do Rojo real (pesquisa-formato-projeto-rojo-2026-09-05.md, seção 4) --
+-- reproduzida com fidelidade de UX (aproximação de boa-fé, string não confirmada byte-a-byte,
+-- mesmo protocolo já usado em services pra mensagens de `require`).
+function Messages.PlanMissingClassName(nodePath: string): string
+	return `Instance "{nodePath}" is missing some required information. One of the following must be true: `
+		.. '- "$className" must be set, '
+		.. '- "$path" must be set to an existing file or folder, or '
+		.. "- the instance must be a known service, like ReplicatedStorage."
+end
+
+function Messages.PlanClassNameConflict(nodePath: string): string
+	return `"{nodePath}" has both "$className" and a "$path" that resolves to something other than a Folder -- only a Folder path may be combined with an explicit "$className".`
+end
+
+function Messages.PlanServiceNameMismatch(nodePath: string, name: string, className: string): string
+	return `"{nodePath}" resolves to the service class "{className}", but is named "{name}" -- LuauBench requires a service directly under the DataModel to be named exactly like its class (DataModel:GetService owns the singleton's name).`
+end
+
+function Messages.PlanNonPrimitiveProperty(nodePath: string, propertyName: string, foundKind: string): string
+	return `"$properties.{propertyName}" at "{nodePath}" is a {foundKind}, not a boolean/number/string -- LuauBench does not have value types yet (planned: value-types wave), so it was skipped.`
+end
+
+function Messages.PlanAttributesUnsupported(nodePath: string, attributeNames: { string }): string
+	return `"$attributes" at "{nodePath}" is not applied yet (Instance:SetAttribute is not simulated) -- ignored: {table.concat(attributeNames, ", ")}.`
+end
+
+function Messages.PlanNestedProjectCycle(chain: { string }): string
+	return `Cyclic nested project detected: {table.concat(chain, " -> ")}.`
+end
+
+function Messages.PlanNestedProjectChildrenIgnored(nodePath: string): string
+	return `"{nodePath}" has both a "$path" that resolves to a nested project and its own named children in the project file -- only the nested project's own tree is used; the named children were ignored.`
+end
+
+-- Mesmo padrão de `PlanNestedProjectChildrenIgnored`, acima, pra outra informação do usuário
+-- descartada pelo mesmo ramo de projeto aninhado (achado MÉDIO, revisor-cli-treeplanner-2026-09-
+-- 05.md): um "$className" explícito não sobrevive quando o "$path" do mesmo nó resolve pra um
+-- projeto aninhado -- a classe final vem SEMPRE da raiz do projeto aninhado.
+function Messages.PlanNestedProjectClassNameIgnored(nodePath: string, ignoredClassName: string): string
+	return `"{nodePath}" has both an explicit "$className" ("{ignoredClassName}") and a "$path" that resolves to a nested project -- only the nested project's own root class is used; the explicit "$className" was ignored.`
+end
+
+function Messages.PlanMetaClassNameConflict(nodePath: string, actualKind: string): string
+	return `"init.meta.json" for "{nodePath}" sets "className", but the directory already resolved to {actualKind} (via an init.* file) -- "className" may only override a plain Folder.`
+end
+
+function Messages.PlanMetaFieldUnsupported(nodePath: string, fieldName: string): string
+	return `"{fieldName}" in a meta file for "{nodePath}" is not supported yet -- ignored.`
+end
+
+function Messages.PlanIoError(nodePath: string, path: string, ioError: string): string
+	return `Could not read "{path}" (for "{nodePath}"): {ioError}`
+end
+
 return Messages

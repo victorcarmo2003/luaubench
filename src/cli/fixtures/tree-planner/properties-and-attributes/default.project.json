@@ -1,0 +1,16 @@
+{
+  "name": "PropertiesAndAttributes",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$properties": {
+        "Foo": true,
+        "Position": [1, 2, 3]
+      },
+      "$attributes": {
+        "Level": 5,
+        "Tag": "x"
+      }
+    }
+  }
+}

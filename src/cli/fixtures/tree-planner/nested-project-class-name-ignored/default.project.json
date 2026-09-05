@@ -1,0 +1,10 @@
+{
+  "name": "ClassNameIgnoredOuter",
+  "tree": {
+    "$className": "DataModel",
+    "Something": {
+      "$className": "Model",
+      "$path": "pkg"
+    }
+  }
+}
