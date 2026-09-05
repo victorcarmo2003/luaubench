@@ -1057,7 +1057,7 @@
       "id": "task-cli-011",
       "title": "Mesmo vazamento de path/linha interna em materialize/invalid-class ($className com typo)",
       "description": "Achado ALTO do revisor-cli na revisao de task-cli-010, encontrado por reproducao propria (nao reportado pelo coder). A mesma classe de vazamento corrigida em applyProperties (stripEngineErrorLocation) persiste em TreeMaterializer.luau (por volta da linha 251-262), no caminho materialize/invalid-class: quando node.ClassName tem um typo (ex: 'Frmae' em vez de 'Frame'), Services.new(node.ClassName, node.Name) e chamado dentro de pcall, e o erro real (levantado com error(msg, 2) dentro de Services.new) tem a posicao atribuida ao CALL SITE do pcall -- o proprio TreeMaterializer.luau -- vazando caminho absoluto de disco + linha interna do LuauBench pro usuario. Reproduzido pelo revisor: $className:'Frmae' gera 'Could not create \"...\" as \"Frmae\": D:\\...\\TreeMaterializer:252: Unable to create an Instance of type \"Frmae\"'. O comentario pre-existente no cabecalho do arquivo afirma incorretamente que Services.new 'ja devolve mensagens de otima qualidade' sem vazamento -- esta errado, Services.new tambem usa error(msg, 2) internamente. Correcao: aplicar a MESMA stripEngineErrorLocation (ja existe em TreeMaterializer.luau desde task-cli-010) no ponto onde Messages.MaterializeInvalidClass e chamado com tostring(resultOrError). Corrigir tambem o comentario incorreto do cabecalho.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 23,
@@ -1065,6 +1065,22 @@
       "priority": "high",
       "acceptance": "Erro de $className invalido/typo nunca contem caminho absoluto de disco nem 'TreeMaterializer:NNN:' na mensagem entregue ao usuario -- so o texto real do motor (ex: 'Unable to create an Instance of type \"Frmae\"'); teste novo cobrindo isso (mesmo padrao de grep usado em task-cli-010); comentario incorreto do cabecalho sobre Services.new corrigido; regressao total intacta (405 testes); --!strict sem any.",
       "depends": ["task-cli-010"],
+      "result": "stripEngineErrorLocation aplicada tambem no ponto de Messages.MaterializeInvalidClass (dentro de createInstance, pcall(Services.new)). Comentario incorreto do cabecalho (alegava que Services.new nao vaza) corrigido -- Services.new usa error(msg,2) internamente igual ao __newindex. 1 teste novo em TreeMaterializer.spec (10/10). Reproduziu o bug antes do fix via git stash (spec novo fora do stash, falhou citando TreeMaterializer:252 exatamente como o achado do revisor), restaurou, confirmou 10/10. Regressao total 406/406 (162 runtime + 73 services + 171 cli). Reproducao end-to-end com binario real confirmando mensagem final sem path/linha interna.",
+      "reviewResult": "APROVADO. Revisor reproduziu tudo: 406/406 rodado por ele, leu o arquivo real confirmando stripEngineErrorLocation no ponto certo (TreeMaterializer.luau:282), reproduziu end-to-end com fixture descartavel + git stash confirmando o vazamento original e o fix, confirmou correcao do comentario do cabecalho lendo o texto atual. Caca ativa por terceiro caso: mapeou os 8 pcall reais de src/cli/*.luau um a um, nenhum outro embrulha API de runtime/services com error(msg,2) sem strip. Achou dois pontos SEM pcall (TreeMaterializer.luau:289 .Parent=parent; ScriptRunner.luau:132-134 leitura de Enabled) que teoricamente poderiam vazar do mesmo jeito mas confirmou reachability: estruturalmente inalcancaveis hoje. Achado BAIXO nao bloqueante, registrado como task-cli-012 (defesa em profundidade, baixa prioridade).",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-012",
+      "title": "Defesa em profundidade: proteger .Parent=parent e leitura de Enabled contra vazamento futuro de path interno",
+      "description": "Achado BAIXO do revisor-cli na revisao de task-cli-011. Ao mapear os 8 pcall reais de src/cli/*.luau caçando um terceiro caso da mesma classe de vazamento de path/linha interna, o revisor achou dois pontos SEM pcall que teoricamente poderiam vazar do mesmo jeito se algum invariante mudar no futuro: TreeMaterializer.luau:289 (instance.Parent = parent, sem protecao) e ScriptRunner.luau:132-134 (leitura de node.Properties.Enabled). Hoje sao estruturalmente inalcancaveis (criacao de Instance sempre nova sem ciclo possivel; TreePlanner ja previne ciclo de projeto aninhado; Enabled sempre presente no schema real de qualquer classe de Script) -- nao e um bug ativo, e defesa em profundidade preventiva. Nao bloqueante, baixa prioridade.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 24,
+      "tags": ["cli", "defesa-em-profundidade", "backlog"],
+      "priority": "low",
+      "acceptance": "Avaliar se vale envolver os dois pontos em pcall+stripEngineErrorLocation por simetria com applyProperties/createInstance, ou documentar explicitamente por que sao inalcancaveis e deixar como estao (decisao aceitavel se justificada); se proteger, regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }

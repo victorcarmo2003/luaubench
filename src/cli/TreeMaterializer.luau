@@ -48,9 +48,17 @@
 	`$className` explícito seja uma classe real/simulada) -- ex.: um typo ("Frmae") ou uma classe
 	real do dump ainda não coberta por esta leva ("Frame"). Sem isto, um `.project.json`
 	perfeitamente bem-formado, mas citando uma classe que `services` não cria, derrubaria
-	`Materialize` inteiro com um `error()` cru. `Services.new` já devolve mensagens de ótima
-	qualidade (família Roblox real, ou o prefixo `[LuauBench] ... not simulated yet`) -- este
-	módulo só embrulha em `pcall` e cita o `NodePath`, nunca reconstrói a mensagem.
+	`Materialize` inteiro com um `error()` cru. `Services.new` devolve mensagens de bom CONTEÚDO
+	(família Roblox real, ou o prefixo `[LuauBench] ... not simulated yet`) -- mas, CORREÇÃO
+	task-cli-011 (achado ALTO de `revisor-cli-pathleak-fix-2026-09-05.md`): o comentário anterior
+	aqui afirmava que isso bastava para "nunca vazar" e estava ERRADO -- `Services.new`
+	(`src/services/init.luau`) levanta essas mensagens com `error(msg, 2)`, exatamente como o
+	`__newindex` real do runtime (ver `stripEngineErrorLocation`, abaixo). Nível 2 aponta para o
+	CALL SITE de quem chama `Services.new` dentro do `pcall`, que é sempre este módulo -- sem
+	tratamento, `tostring(resultOrError)` vazaria o mesmo caminho absoluto em disco + linha interna
+	do LuauBench que `applyProperties` já vazava antes de task-cli-010. Este módulo aplica a MESMA
+	`stripEngineErrorLocation` também aqui (ver `createInstance`), então nunca reconstrói a
+	mensagem -- só remove o prefixo de localização interna e cita o `NodePath`.
 
 	Pela MESMA razão, o ramo `IsServiceRoot` valida `Services.IsServiceClass`/
 	`Services.IsSimulatedClass` ANTES de chamar `game:GetService` -- `DataModel.GetService`
@@ -120,6 +128,15 @@ local SCRIPT_CLASS_NAMES: { [string]: boolean } = {
 -- `tostring(err)` cru vazaria o caminho de instalação do LuauBench no disco de quem roda, violando
 -- a regra 04 ("nunca stack trace cru do parser" -- mesma categoria de vazamento de detalhe de
 -- implementação).
+--
+-- task-cli-011 (correção de revisão, achado ALTO de revisor-cli-pathleak-fix-2026-09-05.md): a
+-- MESMA classe de vazamento acontece em `createInstance`, mais abaixo, no `pcall(Services.new(...))`
+-- -- `Services.new` (`src/services/init.luau`) também levanta com `error(msg, 2)`, e o call site
+-- dentro do `pcall` também é sempre este módulo. Reproduzido com um `"$className": "Frmae"`
+-- (typo): sem tratamento, a mensagem final citava `D:\...\TreeMaterializer:252: Unable to create
+-- an Instance of type "Frmae"`. Por isso esta função é usada nos DOIS pontos deste arquivo onde um
+-- erro vindo de dentro de `runtime`/`services` é embrulhado em `pcall` -- não é uma função
+-- exclusiva de `$properties`.
 --
 -- `stripEngineErrorLocation`, abaixo, corta esse prefixo pelo mesmo princípio que
 -- `OutputFormatter.tryReattributeModuleError` já usa para o marcador `[string "..."]:<n>: ` de erro
@@ -253,10 +270,16 @@ local function createInstance(node: TreePlanner.PlanNode, parent: Runtime.Instan
 	end)
 
 	if not ok then
+		-- task-cli-011: `Services.new` levanta com `error(msg, 2)` (`src/services/init.luau`),
+		-- então o call site apontado é este `pcall`, dentro de `TreeMaterializer.luau` -- mesmo
+		-- vazamento de caminho absoluto em disco + linha interna que `applyProperties` já tinha
+		-- (task-cli-010). `stripEngineErrorLocation` (ver cabeçalho e comentário acima da função,
+		-- mais acima neste arquivo) remove só esse prefixo, preservando a mensagem real do motor
+		-- ("Unable to create an Instance of type ..." ou "[LuauBench] ... not simulated yet").
 		bag:Add({
 			Severity = "error",
 			Code = "materialize/invalid-class",
-			Message = Messages.MaterializeInvalidClass(node.NodePath, node.ClassName, tostring(resultOrError)),
+			Message = Messages.MaterializeInvalidClass(node.NodePath, node.ClassName, stripEngineErrorLocation(tostring(resultOrError))),
 			NodePath = node.NodePath,
 		})
 		return nil

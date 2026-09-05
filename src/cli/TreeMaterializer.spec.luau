@@ -544,5 +544,80 @@ test("Materialize: \"$className\" apontando para uma classe inexistente produz D
 	assert(#tree.Scripts == 0, "nenhum Script/LocalScript/ModuleScript nesta fixture")
 end)
 
+--------------------------------------------------------------------------------------------------
+-- task-cli-011 (correção de revisão, achado ALTO de revisor-cli-pathleak-fix-2026-09-05.md): a
+-- MESMA classe de vazamento de task-cli-010 (path absoluto de disco + "TreeMaterializer:NNN:" do
+-- call site interno do pcall, via error(msg, 2)) também acontecia no caminho
+-- materialize/invalid-class ($className com typo, ex.: "Frmae" -> Services.new levanta o erro
+-- real). Reproduzido antes da correção: a mensagem final citava literalmente
+-- "D:\...\TreeMaterializer:252: Unable to create an Instance of type \"Frmae\"". Mesmo padrão de
+-- grep do teste de task-cli-010, acima.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: erro de \"$className\" inválido não vaza caminho absoluto de disco nem 'TreeMaterializer:NNN:' (task-cli-011)", function()
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeTypoProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		Roots = {
+			{
+				Name = "ReplicatedStorage",
+				ClassName = "ReplicatedStorage",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						Name = "Typo",
+						ClassName = "Frmae",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {},
+						Children = {},
+						NodePath = "tree.ReplicatedStorage.Typo",
+					},
+				},
+				NodePath = "tree.ReplicatedStorage",
+			},
+		},
+		Diagnostics = {},
+	}
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local diagnostic = findByCode(bag, "materialize/invalid-class")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/invalid-class'")
+	if diagnostic == nil then
+		return
+	end
+
+	-- Padrão genérico de path absoluto do Windows ("<letra>:\") -- não hardcoda o drive da máquina
+	-- de quem roda o teste (poderia ser C:, D:, etc).
+	assert(
+		string.match(diagnostic.Message, "%a:\\") == nil,
+		`mensagem de '$className' inválido NÃO deveria conter um caminho absoluto de disco (letra:\\), achou: {diagnostic.Message}`
+	)
+	assert(
+		string.find(diagnostic.Message, ".luau:", 1, true) == nil,
+		`mensagem de '$className' inválido NÃO deveria conter '.luau:' (chunk interno vazando), achou: {diagnostic.Message}`
+	)
+	assert(
+		string.find(diagnostic.Message, "TreeMaterializer:", 1, true) == nil,
+		`mensagem de '$className' inválido NÃO deveria conter 'TreeMaterializer:' (call site interno do pcall vazando), achou: {diagnostic.Message}`
+	)
+
+	-- A mensagem real do motor continua presente e acionável -- o strip só remove o PREFIXO de
+	-- localização interna, nunca o texto que ajuda o usuário a corrigir o "$className".
+	assert(
+		string.find(diagnostic.Message, "Unable to create an Instance of type", 1, true) ~= nil,
+		`mensagem real do motor ('Unable to create an Instance of type') deveria continuar presente, achou: {diagnostic.Message}`
+	)
+	assert(string.find(diagnostic.Message, "Frmae", 1, true) ~= nil, "mensagem deveria citar a classe inválida 'Frmae'")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

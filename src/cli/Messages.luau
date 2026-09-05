@@ -331,10 +331,15 @@ function Messages.MaterializeServiceNotSimulated(nodePath: string, className: st
 	return `[LuauBench] "{nodePath}" resolves to the service "{className}", which exists in the Roblox API Dump ({dumpVersion}) but is not simulated by LuauBench yet.`
 end
 
--- `Services.new` já erra com uma mensagem de boa qualidade (família Roblox real, ou
+-- `Services.new` já erra com uma mensagem de bom CONTEÚDO (família Roblox real, ou
 -- "[LuauBench] ... not simulated yet" quando aplicável) -- este wrapper só garante que o
 -- diagnóstico final cita o nó do projeto de onde veio o "$className" problemático, e nunca deixa
--- o erro cru derrubar o comando inteiro (regra 04).
+-- o erro cru derrubar o comando inteiro (regra 04). `engineError` chega AQUI já sem o prefixo de
+-- localização interna (task-cli-011, `TreeMaterializer.stripEngineErrorLocation`) -- assim como
+-- o `__newindex` de `MaterializePropertyAssignmentFailed` abaixo, `Services.new`
+-- (`src/services/init.luau`) também levanta com `error(msg, 2)`, então o call site cru apontaria
+-- para dentro de `TreeMaterializer.luau` (caminho absoluto em disco + linha do MÓDULO INTERNO do
+-- LuauBench) -- essa função nunca deveria receber esse prefixo cru.
 function Messages.MaterializeInvalidClass(nodePath: string, className: string, engineError: string): string
 	return `Could not create "{nodePath}" as "{className}": {engineError}`
 end
