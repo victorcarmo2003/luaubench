@@ -779,7 +779,65 @@ function Instance.NewBase(className: string, name: string?): Instance
 		destroying = SignalModule.new(),
 	}
 
-	local self = (setmetatable({}, InstanceMeta) :: unknown) :: Instance
+	--[[
+		task-runtime-027 (dois achados GRAVE de revisor-runtime na revisão de task-runtime-026,
+		ver .claude/agents-memory/revisor-runtime-whitelist-completa-2026-09-05.md): a partir de
+		task-runtime-026, o Sandbox expõe `getmetatable`/`setmetatable`/`rawset`/`rawget` ao script
+		do usuário (necessário para padrões OOP reais como ProfileStore). Sobre uma Instance que
+		fosse uma tabela Luau comum (`setmetatable({}, InstanceMeta)`, o código deste módulo antes
+		desta tarefa), um script comum conseguia: (1) ler `InstanceMeta` de verdade via
+		`getmetatable(instancia)` — vazamento de detalhe interno impossível no Roblox real, onde
+		Instance é userdata e `getmetatable(workspace) == nil`; (2) TROCAR a metatable de uma
+		Instance já existente e compartilhada via `setmetatable(instancia, {})`, quebrando
+		`__index`/`__newindex` para QUALQUER outro script/host que segure a mesma referência dali
+		em diante; (3), independente dos dois acima, `rawset(instancia, chave, valor)`/`rawget`
+		IGNORAM __index/__newindex por completo (não passam pela metatable) e gravavam/liam DIRETO
+		na tabela crua da Instance — como essa tabela nasce e ficava vazia para sempre (todo estado
+		real vive em `internals[self]`), uma única `rawset` bastava para que toda leitura NORMAL
+		daquela chave (`instancia.Nome`) parasse de invocar `__index` (Lua só invoca `__index`
+		quando a chave está ausente da tabela crua) — corrupção visível para QUALQUER código, dentro
+		ou fora da thread atacante, que segurasse a mesma referência (exploit real do revisor:
+		`rawset(target, "Name", "HIJACKED")`, `rawset(target, "Destroy", function() end)`).
+
+		FIX INICIALMENTE TENTADO E REJEITADO, DOCUMENTADO AQUI PARA O PRÓXIMO AGENTE NÃO REPETIR O
+		MESMO CAMINHO: a correção pedida pelo board era `InstanceMeta.__metatable = "..."` (fecha
+		(1)/(2), convenção padrão Lua/Luau) SOMADA a `table.freeze(self)` no ponto de criação (fecha
+		(3), mesma disciplina de SetClassMethods/SetClassSchema). Comprovado empiricamente (probes
+		descartados, não fazem parte do repositório) que os DOIS são MUTUAMENTE EXCLUSIVOS sobre a
+		MESMA tabela no Luau: `table.freeze(t)` recusa com
+		"invalid argument #1 to 'freeze' (table has a protected metatable)" se a metatable atual de
+		`t` já tiver `__metatable` setado; e `setmetatable`/`debug.setmetatable` (este último nem
+		existe no Luau — só `info`/`traceback` em `debug`) sobre uma tabela JÁ congelada falha com
+		"attempt to modify a readonly table" antes mesmo de chegar a essa checagem — não existe
+		ordem de chamadas que produza as duas propriedades na MESMA tabela.
+
+		FIX REAL: `self` deixa de ser uma tabela Luau e passa a ser USERDATA de verdade
+		(`newproxy(true)`) — exatamente o que uma Instance É no Roblox real (regra 00: isto não é
+		uma divergência de fidelidade, é uma correção QUE AUMENTA a fidelidade, fechando a lacuna
+		"table fingindo ser Instance" que os dois achados exploraram). Nesse desenho:
+		  - `rawset`/`rawget` sobre userdata erram nativamente "table expected, got userdata" —
+		    mesma FAMÍLIA de erro que o Roblox real dá para `rawset(workspace, ...)` ("table
+		    expected, got Instance"), sem precisar de `table.freeze` (que sequer se aplica a
+		    userdata — não há tabela crua para congelar).
+		  - `setmetatable(proxy, {})` erra nativamente "table expected, got userdata" — o Luau não
+		    aceita userdata como primeiro argumento de `setmetatable` em NENHUM caso, protegido ou
+		    não (verificado empiricamente) — fecha (2) sem precisar de `__metatable`.
+		  - `getmetatable(proxy)` devolve exatamente o valor de `__metatable` que setamos abaixo
+		    (mesma convenção do caso tabela, sem o conflito) — fecha (1).
+		`newproxy(true)` cria uma metatable NOVA por chamada (não há como reaproveitar uma única
+		metatable compartilhada para userdata, diferente do padrão anterior com `InstanceMeta`
+		compartilhada) — custo aceito: uma tabela pequena (3 campos) a mais por Instance, desprezível
+		perto do resto de `Internal` (5 Signals). `InstanceMeta.__index`/`__newindex` continuam
+		sendo as MESMAS funções de sempre (toda a lógica dos passos 1-9 documentada acima, inalterada
+		— só o objeto físico que carrega a metatable muda), só reatribuídas aqui por referência.
+	]]
+	local proxy = newproxy(true)
+	local proxyMeta: { [string]: unknown } = (getmetatable(proxy) :: unknown) :: { [string]: unknown }
+	proxyMeta.__index = InstanceMeta.__index
+	proxyMeta.__newindex = InstanceMeta.__newindex
+	proxyMeta.__metatable = "The metatable is locked"
+
+	local self = (proxy :: unknown) :: Instance
 	internals[self] = data
 	return self
 end

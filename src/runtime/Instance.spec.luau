@@ -991,5 +991,119 @@ test("GetPropertyRaw/SetPropertyRaw NUNCA consultam o schema (via de engenharia 
 	)
 end)
 
+--[[
+	Testes NOVOS da task-runtime-027 (travar Instance contra getmetatable/setmetatable e
+	rawset/rawget — dois vetores de corrupção cross-script achados na revisão de
+	task-runtime-026). Nenhum dos 57 testes acima foi alterado.
+
+	Ver o comentário grande dentro de Instance.NewBase (Instance.luau) para o porquê da correção
+	real ser `newproxy(true)` (Instance passa a ser USERDATA de verdade) em vez da combinação
+	`InstanceMeta.__metatable` + `table.freeze(self)` pedida originalmente pelo board — comprovado
+	empiricamente que as duas são mutuamente exclusivas sobre a mesma tabela no Luau
+	(`table.freeze` recusa qualquer tabela cuja metatable já tenha `__metatable`, e `setmetatable`
+	sobre uma tabela já congelada falha antes de chegar nessa checagem, em qualquer ordem).
+
+	`getmetatable`/`setmetatable`/`rawset`/`rawget` têm assinatura de tipo pensada para uma tabela
+	com a marca especial `{@metatable a, {}}` (produzida por `setmetatable` no MESMO escopo que o
+	checker enxerga) — não encaixa estruturalmente com o tipo público `Instance` (uma interface
+	comum, sem essa marca, mesmo a REPRESENTAÇÃO REAL em runtime sendo userdata desde esta tarefa).
+	Mesmo padrão de cast em duas etapas via `unknown` já usado no resto do arquivo (nunca `any`,
+	regra 01) — aqui aplicado às próprias FUNÇÕES builtin, não ao valor, para poder chamá-las com
+	um `Instance` sem violar o overload estrito de tabela.
+]]
+
+type UnaryRawFn = (unknown) -> unknown
+type BinaryRawFn = (unknown, unknown) -> unknown
+type TernaryRawFn = (unknown, unknown, unknown) -> ()
+local getmetatableUnknown: UnaryRawFn = (getmetatable :: unknown) :: UnaryRawFn
+local setmetatableUnknown: BinaryRawFn = (setmetatable :: unknown) :: BinaryRawFn
+local rawsetUnknown: TernaryRawFn = (rawset :: unknown) :: TernaryRawFn
+local rawgetUnknown: BinaryRawFn = (rawget :: unknown) :: BinaryRawFn
+
+test("getmetatable(instance) NÃO devolve a InstanceMeta real (mesmo espírito de getmetatable(workspace) == nil no Roblox real)", function()
+	local instance = InstanceModule.NewBase("TestGetMetatableLocked", nil)
+	local mt = getmetatableUnknown(instance)
+	assert(typeof(mt) ~= "table", `getmetatable(instance) não deveria devolver uma tabela (a InstanceMeta real), recebeu tipo {typeof(mt)}`)
+end)
+
+test("setmetatable(instance, {}) erra em vez de trocar a metatable silenciosamente", function()
+	local instance = InstanceModule.NewBase("TestSetMetatableBlocked", nil)
+	local ok, err = pcall(function()
+		setmetatableUnknown(instance, {})
+	end)
+	assert(not ok, "setmetatable sobre uma Instance deveria errar")
+	assert(
+		string.find(tostring(err), "table expected", 1, true) ~= nil,
+		`mensagem deveria indicar que Instance não é uma tabela (userdata, como no Roblox real), recebeu: {err}`
+	)
+	-- A Instance continua funcional normalmente depois da tentativa (não ficou num estado
+	-- parcialmente corrompido pela tentativa falha de setmetatable).
+	assert(instance.Name == "TestSetMetatableBlocked", "Instance deveria continuar funcional após a tentativa de setmetatable")
+end)
+
+test("rawset(instance, 'Name', ...) erra e NÃO corrompe a propriedade (exploit 1 do revisor)", function()
+	local instance = InstanceModule.NewBase("TestRawsetName", nil)
+	local ok, err = pcall(function()
+		rawsetUnknown(instance, "Name", "HIJACKED-VIA-RAWSET")
+	end)
+	assert(not ok, "rawset sobre uma Instance deveria errar")
+	assert(
+		string.find(tostring(err), "table expected", 1, true) ~= nil,
+		`mensagem deveria indicar que Instance não é uma tabela, recebeu: {err}`
+	)
+	assert(instance.Name == "TestRawsetName", "Name não deveria ter sido corrompido pela tentativa de rawset")
+end)
+
+test("rawset(instance, 'Destroy', noop) erra e NÃO neutraliza o método real (exploit 2 do revisor)", function()
+	local instance = InstanceModule.NewBase("TestRawsetDestroy", nil)
+	local ok = pcall(function()
+		rawsetUnknown(instance, "Destroy", function() end)
+	end)
+	assert(not ok, "rawset sobre o método Destroy de uma Instance deveria errar")
+
+	local parent = InstanceModule.NewBase("Folder", "Pai")
+	instance.Parent = parent
+	instance:Destroy()
+	assert(instance.Parent == nil, "Destroy real deveria continuar funcionando (não foi neutralizado)")
+end)
+
+test("rawget(instance, 'Name') não devolve o valor real via bypass de __index", function()
+	local instance = InstanceModule.NewBase("TestRawgetName", nil)
+	local ok, resultOrErr = pcall(function()
+		return rawgetUnknown(instance, "Name")
+	end)
+	if ok then
+		-- Mesmo que uma versão futura de Luau permitisse rawget sobre userdata sem erro, o
+		-- valor devolvido NUNCA pode ser o Name real -- a tabela crua (se existisse) está vazia,
+		-- todo estado mora em internals[instance].
+		assert(resultOrErr ~= "TestRawgetName", "rawget não deveria enxergar o valor real de Name")
+	else
+		assert(
+			string.find(tostring(resultOrErr), "table expected", 1, true) ~= nil,
+			`mensagem deveria indicar que Instance não é uma tabela, recebeu: {resultOrErr}`
+		)
+	end
+end)
+
+test("uma segunda Instance/script não é afetada por uma tentativa de ataque na primeira", function()
+	local attacked = InstanceModule.NewBase("TestIsolationAttacked", nil)
+	local witness = InstanceModule.NewBase("TestIsolationWitness", nil)
+
+	pcall(function()
+		setmetatableUnknown(attacked, {})
+	end)
+	pcall(function()
+		rawsetUnknown(attacked, "Name", "HIJACKED")
+	end)
+	pcall(function()
+		rawsetUnknown(attacked, "Destroy", function() end)
+	end)
+
+	assert(attacked.Name == "TestIsolationAttacked", "a própria instância atacada deveria permanecer intacta")
+	assert(witness.Name == "TestIsolationWitness", "a segunda Instance não deveria ser afetada pelo ataque na primeira")
+	witness:Destroy()
+	assert(witness.Parent == nil, "Destroy da segunda Instance deveria continuar funcionando normalmente")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)
