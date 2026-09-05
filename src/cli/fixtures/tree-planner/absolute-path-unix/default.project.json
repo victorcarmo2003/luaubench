@@ -1,0 +1,9 @@
+{
+  "name": "AbsolutePathUnix",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "/etc/algo"
+    }
+  }
+}

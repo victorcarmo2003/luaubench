@@ -278,6 +278,35 @@ local function normalizePath(path: string): string
 	return prefix .. table.concat(stack, "/")
 end
 
+-- task-cli-021 (achado registrado em arquiteto-cli-2026-09-05.md durante a investigação de
+-- task-cli-009): detecta um "$path" ABSOLUTO pelo LITERAL da string, ANTES de qualquer
+-- concatenação (`joinPath`) ou toque no filesystem (`fs.isFile`/`fs.isDir`). Rojo documenta
+-- "$path" como SEMPRE relativo à pasta do arquivo de projeto que declara o nó (pesquisa-formato-
+-- projeto-rojo-2026-09-05.md) -- um "$path" absoluto nunca é válido, mas sem esta checagem
+-- `joinPath(containerFolderPath, pathNode.Path)` produzia uma concatenação sem sentido (ex.:
+-- "<pasta>/C:/outra/pasta" no Windows, "<pasta>//etc/algo" no Unix) que ia direto pra
+-- `fs.isFile`/`fs.isDir` -- no Windows isso vaza um erro CRU do sistema operacional ("os error
+-- 123", ERROR_INVALID_NAME, por causa do ":" fora da posição de drive) em vez de um `Diagnostic`
+-- formatado (regra 04: nunca stack trace/erro cru vazando).
+--
+-- Dois formatos, checados SEMPRE, independente da plataforma HOSPEDEIRA (não é `if
+-- process.os == "windows"` -- um `.project.json` pode citar um "$path" no formato errado pra
+-- qualquer SO, e nos dois casos é igualmente inválido pro Rojo):
+--   - Windows: letra de drive seguida de "/" ou "\" (ex. "C:/outra/pasta", "C:\\outra\\pasta").
+--   - Unix: barra inicial (ex. "/etc/algo").
+-- UNC ("\\\\servidor\\share") e caminho "rooted" sem drive (`\\pasta`, raro e ambíguo até no
+-- próprio Windows) NÃO são cobertos aqui -- fora do que o achado original/acceptance pediram;
+-- ficam para uma tarefa futura dedicada se algum caso real aparecer.
+local function isAbsolutePathLiteral(path: string): boolean
+	if string.match(path, "^%a:[/\\]") ~= nil then
+		return true
+	end
+	if string.sub(path, 1, 1) == "/" then
+		return true
+	end
+	return false
+end
+
 local function baseNameOf(path: string): string
 	local trimmed = path
 	if #trimmed > 1 then
@@ -715,6 +744,23 @@ resolveCore = function(
 	end
 
 	if pathNode ~= nil then
+		-- task-cli-021: checado ANTES de `joinPath`/`normalizePath`/qualquer `fs.isFile`/`fs.isDir`
+		-- -- ver `isAbsolutePathLiteral`, acima, pro motivo completo. Erro sempre (nunca "info",
+		-- mesmo quando `pathNode.Kind == "optional"`): um "$path" absoluto não é "ausente", é
+		-- estruturalmente inválido -- mesma categoria de `plan/class-name-conflict`/
+		-- `plan/required-path-not-found` (erro de configuração do projeto, não estado normal).
+		if isAbsolutePathLiteral(pathNode.Path) then
+			bag:Add({
+				Severity = "error",
+				Code = "plan/absolute-path-not-allowed",
+				Message = Messages.PlanAbsolutePathNotAllowed(nodePath, pathNode.Path),
+				NodePath = nodePath,
+				Field = "$path",
+				FilePath = currentProjectFilePath,
+			})
+			return nil
+		end
+
 		-- Normalizado AQUI, no ponto em que "$path" vira caminho absoluto -- todo caminho
 		-- derivado a partir daqui (source, filhos de pasta, `nestedProjectFilePath`) herda a
 		-- forma canônica automaticamente, porque é sempre `joinPath(<algo já canônico>, <nome

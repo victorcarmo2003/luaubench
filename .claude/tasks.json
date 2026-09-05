@@ -1421,7 +1421,7 @@
       "id": "task-cli-021",
       "title": "$path absoluto no .project.json quebra com erro cru do SO em vez de diagnostico formatado",
       "description": "Achado registrado em arquiteto-cli-2026-09-05.md durante a investigacao de task-cli-009, nunca virou task ate agora. TreePlanner.luau (por volta de :633, joinPath/normalizePath/fs.isFile-isDir) nao trata o caso de $path absoluto (ex: 'C:/outra/pasta' ou '/etc/algo') -- hoje isso propaga um erro cru do sistema operacional (visto na pratica como 'os error 123' no Windows) em vez de um Diagnostic formatado. Baixo impacto pratico (Rojo documenta $path como relativo, nenhum .project.json real do usuario usa path absoluto), mas viola a regra 04 ('falha ao ler .project.json e um erro claro, nunca stack trace cru do parser') -- e a mesma categoria de vazamento ja fechada para outros casos (stripEngineErrorLocation em TreeMaterializer). Corrigir: detectar $path absoluto (Windows drive letter tipo 'C:' ou barra inicial '/') ANTES de tentar resolver contra o filesystem, e emitir Diagnostic dedicado citando o NodePath e o $path literal, nunca deixar o erro do SO vazar.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 35,
@@ -1429,7 +1429,9 @@
       "priority": "medium",
       "acceptance": "$path absoluto (Windows 'C:/...'/'C:\\\\...' e Unix '/...') detectado antes de tocar filesystem, produz Diagnostic dedicado (novo Code, ex. plan/absolute-path-not-allowed) citando NodePath e o $path literal -- nunca erro cru do SO ('os error NNN') vazando; teste cobrindo os dois formatos (Windows e Unix); regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "isAbsolutePathLiteral nova, checa drive Windows (%a:[/\\\\]) e barra inicial Unix, chamada ANTES de joinPath/normalizePath/fs.isFile/fs.isDir dentro do bloco $path de resolveCore. Diagnostic plan/absolute-path-not-allowed (Code novo) citando NodePath+$path literal, return nil sem tocar filesystem. 33/33 TreePlanner.spec (2 novos), 15 specs cli intactos. Nao cobre UNC nem rooted-sem-drive (fora do acceptance, documentado).",
+      "reviewResult": "APROVADO. Revisor reproduziu tudo: 199 testes/15 arquivos rodados por ele, testou isAbsolutePathLiteral isolada com 18 casos adversariais (incluindo drive minusculo, UNC, rooted-sem-drive confirmando a limitacao documentada), confirmou ordem exata por leitura (checagem antes de qualquer fs.*), rodou as fixtures de forma independente confirmando mensagens exatas, confirmou Code novo sem colisao, testou CASO NAO PEDIDO pela task (path absoluto dentro de projeto ANINHADO) confirmando que o mecanismo esta no ponto generico, nao amarrado a raiz. Nenhum achado."
     },
     {
       "id": "task-cli-022",

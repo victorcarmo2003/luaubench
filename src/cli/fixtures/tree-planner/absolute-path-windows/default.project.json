@@ -1,0 +1,12 @@
+{
+  "name": "AbsolutePathWindows",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "C:/outra/pasta"
+    },
+    "ServerScriptService": {
+      "$path": "C:\\outra\\pasta"
+    }
+  }
+}

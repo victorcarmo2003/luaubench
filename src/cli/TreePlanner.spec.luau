@@ -196,6 +196,56 @@ test("Plan: $path obrigatório ausente em disco produz erro nomeando nó/campo/c
 end)
 
 --------------------------------------------------------------------------------------------------
+-- $path ABSOLUTO (task-cli-021) -> Diagnostic dedicado, detectado ANTES de tocar o filesystem
+-- (nunca um erro cru do SO -- "os error 123"/ERROR_INVALID_NAME no Windows é a manifestação
+-- prática original; sem a correção, este teste sequer chegaria a `assert`, ele quebraria com um
+-- erro nativo do Lune vazando pro terminal).
+--------------------------------------------------------------------------------------------------
+
+test("Plan: $path absoluto estilo Windows (barra e contrabarra) produz Diagnostic dedicado, nunca erro cru do SO", function()
+	local plan, bag = planFixture("absolute-path-windows")
+	assert(plan == nil, "$path absoluto deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostics: { Diagnostics.Diagnostic } = {}
+	for _, diagnostic in bag:All() do
+		if diagnostic.Code == "plan/absolute-path-not-allowed" then
+			table.insert(diagnostics, diagnostic)
+		end
+	end
+	assert(#diagnostics == 2, `esperava 2 Diagnostic(s) 'plan/absolute-path-not-allowed' (barra e contrabarra), recebeu {#diagnostics}`)
+
+	local sawForwardSlash = false
+	local sawBackslash = false
+	for _, diagnostic in diagnostics do
+		assert(diagnostic.Severity == "error", "$path absoluto deveria ser Severity 'error'")
+		assert(diagnostic.Field == "$path", "Diagnostic deveria nomear o CAMPO ($path)")
+		if diagnostic.NodePath == "tree.ReplicatedStorage" then
+			assert(string.find(diagnostic.Message, "C:/outra/pasta", 1, true) ~= nil, "Message deveria citar o $path literal (barra)")
+			sawForwardSlash = true
+		elseif diagnostic.NodePath == "tree.ServerScriptService" then
+			assert(string.find(diagnostic.Message, "C:\\outra\\pasta", 1, true) ~= nil, "Message deveria citar o $path literal (contrabarra)")
+			sawBackslash = true
+		end
+	end
+	assert(sawForwardSlash, "deveria haver um Diagnostic para o nó com $path 'C:/outra/pasta'")
+	assert(sawBackslash, "deveria haver um Diagnostic para o nó com $path 'C:\\outra\\pasta'")
+end)
+
+test("Plan: $path absoluto estilo Unix (barra inicial) produz Diagnostic dedicado, nunca erro cru do SO", function()
+	local plan, bag = planFixture("absolute-path-unix")
+	assert(plan == nil, "$path absoluto deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostic = findByCode(bag, "plan/absolute-path-not-allowed")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/absolute-path-not-allowed'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "$path absoluto deveria ser Severity 'error'")
+		assert(diagnostic.NodePath == "tree.ReplicatedStorage", "Diagnostic deveria nomear o NÓ")
+		assert(diagnostic.Field == "$path", "Diagnostic deveria nomear o CAMPO ($path)")
+		assert(string.find(diagnostic.Message, "/etc/algo", 1, true) ~= nil, "Message deveria citar o $path literal")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Conflito $className + $path (path não resolve pra Folder) -> erro
 --------------------------------------------------------------------------------------------------
 

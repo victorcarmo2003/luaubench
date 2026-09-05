@@ -236,6 +236,14 @@ function Messages.PlanRequiredPathNotFound(nodePath: string, absolutePath: strin
 	return `"$path" for "{nodePath}" points to "{absolutePath}", which does not exist on disk.`
 end
 
+-- task-cli-021: "$path" é sempre relativo à pasta do arquivo de projeto que declara o nó (Rojo
+-- real, pesquisa-formato-projeto-rojo-2026-09-05.md) -- um valor absoluto (letra de drive do
+-- Windows, ou barra inicial estilo Unix) nunca é válido, e detectá-lo pelo LITERAL (antes de
+-- tocar o filesystem) é o que evita um erro cru do sistema operacional vazando (regra 04).
+function Messages.PlanAbsolutePathNotAllowed(nodePath: string, absolutePathLiteral: string): string
+	return `"$path" for "{nodePath}" is "{absolutePathLiteral}", which is an absolute path -- "$path" must always be relative to the folder of the project file that declares it.`
+end
+
 -- Severidade "info" (Decisão 8) -- $path opcional ausente omite o nó em silêncio, sem ser erro.
 function Messages.PlanOptionalPathOmitted(nodePath: string, absolutePath: string): string
 	return `"{nodePath}" was omitted: its optional "$path" ("{absolutePath}") does not exist on disk, and no other source of ClassName (explicit "$className", or Service inference) was available.`
