@@ -156,7 +156,7 @@
       "id": "task-runtime-007",
       "title": "Criar src/runtime/init.luau (ponto de entrada público) + teste de integração do runtime",
       "description": "Criar src/runtime/init.luau agregando e reexportando a API pública de todos os módulos anteriores sob os namespaces Runtime.Signal/.Instance/.ClassRegistry/.DataModel/.Scheduler/.Sandbox, exatamente como especificado na seção 'Contrato entre territórios' do desenho em .claude/agents-memory/arquiteto-runtime-2026-09-04.md -- esse é o único arquivo que services/cli devem importar (require direto de um módulo individual dentro de src/runtime/ por fora deste agregador é erro de design). Reexportar todos os export type listados no desenho (Signal<T...>, Connection, Instance, ClassDescriptor, DataModel, Scheduler, TaskHandle, SandboxOptions, SandboxResult, OutputRecord, OutputLevel). Incluir um teste de integração leve: registrar uma classe de teste via ClassRegistry.Register, criar DataModel, instanciar via ClassRegistry.new, montar hierarquia com .Parent, rodar um Sandbox.Run que usa Instance.new/task.wait/WaitForChild de verdade e confirma que um erro proposital não derruba o processo. Depende de todas as tasks anteriores (001-006).",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 6,
@@ -177,7 +177,9 @@
         "task-runtime-006"
       ],
       "createdAt": "2026-09-04",
-      "updatedAt": "2026-09-04"
+      "updatedAt": "2026-09-04",
+      "result": "init.luau + init.spec.luau criados. 3/3 testes. API publica reexporta Signal/Instance(so GetPropertyRaw/SetPropertyRaw)/ClassRegistry/DataModel/Scheduler/Sandbox conforme correcao pos-013 (sem NewBase/SetClassChain/SetClassMethods/ThreadBroker). Regressao total intacta (Signal 6/6, Instance 33/33, Scheduler 16/16, Integration 9/9, Sandbox 7/7, ClassRegistry 17/17, DataModel 9/9). Achado de tooling documentado: Lune resolve require de arquivo init.luau de forma ambigua (precisa require estilo diretorio), luau-lsp 1.69.0 tem bug de falso-positivo em arquivos nomeados init* -- nao bloqueia, registrado para arquiteto/pesquisador avaliarem.",
+      "reviewResult": "APROVADO -- fecha o runtime inteiro. Revisor reproduziu tudo independente: regressao dos 7 modulos + init.spec 3/3, superficie publica batendo campo a campo com o desenho corrigido, NewBase/SetClassChain/SetClassMethods/ThreadBroker confirmados nao vazando (testado em diretorio-irmao simulado), gotcha de require do Lune confirmado por mutacao. Achado novo BAIXO: segundo bug de tooling no luau-lsp (mismatch espurio de generics via require(\"./\") self-require), mascarado pelo bug ja documentado, so afeta analise estatica via essa forma de import, nao afeta execucao real nem a forma que services/cli vao usar. Relatorio: .claude/agents-memory/revisor-runtime-init-2026-09-04.md."
     },
     {
       "id": "task-runtime-008",
