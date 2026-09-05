@@ -96,7 +96,16 @@
 	`runtime`):
 	  1. `runtime/DataModel.luau`, em `GetService` -- construção do singleton de Service.
 	  2. `services`, dentro de um `Behavior.Initialize`, para criar filho fixo de uma classe.
-	  3. `cli` NUNCA -- `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
+	  3. `services`, dentro de um `Behavior.Methods`, para construir um objeto do motor que o
+	     método real DEVOLVE e que não é filho de ninguém (ex.: `DataStoreService:GetDataStore`
+	     -> `DataStore`, `GlobalDataStore:GetAsync` -> `DataStoreKeyInfo`,
+	     `DataStore:ListVersionsAsync` -> `DataStoreVersionPages`, `TweenService:Create` ->
+	     `Tween` -- todas `NotCreatable` e `IsService = false`, logo inalcançáveis por
+	     `ClassRegistry.new` (que recusa `IsAbstract`, e deve continuar recusando) e por
+	     `GetService`). Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.0.3 --
+	     `ClassRegistry.NewEngineInstance` ganha um terceiro chamador legítimo" (leva 2 de
+	     `services`, task-runtime-035).
+	  4. `cli` NUNCA -- `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
 	     `Services.new` para o resto; isso preserva o erro claro para um `"$className"` inválido
 	     vindo do `.project.json` (entrada não confiável do usuário) que `NewEngineInstance`,
 	     sem a guarda de `IsAbstract`, deixaria passar como instância malformada em silêncio.
@@ -123,6 +132,20 @@
 	`Services.Bootstrap`) só precisa instalar (`Set`), nunca consultar de volta. Este território
 	continua sem requerer nenhum módulo do território de Value Types em lugar nenhum -- a ponte é
 	sempre este resolvedor injetado.
+
+	task-runtime-033 acrescenta `Runtime.DataModel.RunBindToCloseCallbacks` (ver cabeçalho de
+	DataModel.luau para a semântica completa e a divergência declarada do timeout de 30s do
+	Roblox real, e .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.1.8"). Reexportado
+	de propósito, ao lado de `DataModel.new`: é o ponto de encerramento que uma tarefa futura de
+	`cli` chama depois que o `Scheduler:Run()` principal retorna, antes de encerrar o processo --
+	sem esta reexportação a função ficaria inalcançável de fora de `runtime`. `DataModel:
+	BindToClose` (o método que o script chama para REGISTRAR) já é público via a própria
+	Instance/DataModel devolvida por `Runtime.DataModel.new()` -- não precisa de reexportação
+	própria aqui.
+
+	task-runtime-034 não acrescenta nada à superfície deste arquivo -- `JobId`/`PlaceId`/`GameId`/
+	`PlaceVersion` são propriedades comuns da Instance devolvida por `Runtime.DataModel.new()`,
+	já alcançáveis por `dataModel.JobId` etc. sem nenhum export novo (ver DataModel.luau).
 ]]
 
 local SignalModule = require("./runtime/Signal")
@@ -182,6 +205,8 @@ local Runtime = {
 
 	DataModel = {
 		new = DataModelModule.new,
+		-- task-runtime-033: ver cabeçalho deste arquivo, subseção correspondente.
+		RunBindToCloseCallbacks = DataModelModule.RunBindToCloseCallbacks,
 	},
 
 	Scheduler = {

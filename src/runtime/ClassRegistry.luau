@@ -37,7 +37,16 @@
 	  2. `services`, dentro de um `Behavior.Initialize`, para criar filho fixo de uma classe
 	     (ex.: `StarterPlayer` criando `StarterPlayerScripts`/`StarterCharacterScripts`, as duas
 	     `NotCreatable` e `IsService = false` — inalcançáveis por `GetService`).
-	  3. `cli` NUNCA — `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
+	  3. `services`, dentro de um `Behavior.Methods`, para construir um objeto do motor que o
+	     método real DEVOLVE e que não é filho de ninguém (ex.: `DataStoreService:GetDataStore`
+	     -> `DataStore`, `GlobalDataStore:GetAsync` -> `DataStoreKeyInfo`,
+	     `DataStore:ListVersionsAsync` -> `DataStoreVersionPages`, `TweenService:Create` ->
+	     `Tween` — todas `NotCreatable` e `IsService = false`, logo inalcançáveis por
+	     `ClassRegistry.new` (que recusa `IsAbstract`, e deve continuar recusando) e por
+	     `GetService`). Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.0.3 —
+	     `ClassRegistry.NewEngineInstance` ganha um terceiro chamador legítimo" (leva 2 de
+	     `services`, task-runtime-035).
+	  4. `cli` NUNCA — `cli` usa `game:GetService(...)` para Service e `ClassRegistry.new`/
 	     `Services.new` para o resto, preservando o erro claro para um `"$className"` inválido
 	     vindo do `.project.json` (entrada não confiável do usuário).
 

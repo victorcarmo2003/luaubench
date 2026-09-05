@@ -142,6 +142,13 @@ type Internal = {
 	-- dispararia Changed para cada default semeado).
 	classSchema: ClassSchema?,
 
+	-- `nil` = nenhuma propriedade raw somente-leitura registrada (comportamento de hoje). Não-nil
+	-- = conjunto de chaves que `InstanceMeta.__newindex` rejeita com a família Roblox real de
+	-- propriedade somente-leitura, mesmo a instância continuando LENIENTE para qualquer outra
+	-- chave (task-runtime-034, ver Instance.SetReadOnlyRawProperties, abaixo -- só
+	-- `DataModel.luau` grava aqui até o momento).
+	readOnlyRawKeys: { [string]: boolean }?,
+
 	changed: FireableSignal<string>,
 	childAdded: FireableSignal<Instance>,
 	childRemoved: FireableSignal<Instance>,
@@ -703,6 +710,15 @@ InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown):
 
 	local data = getInternal(self)
 
+	-- task-runtime-034: chave protegida por Instance.SetReadOnlyRawProperties (ex.:
+	-- DataModel.JobId/PlaceId/GameId/PlaceVersion) -- checado ANTES de ClassName/sinais/métodos
+	-- porque é um conjunto por instância, não uma constante fixa desta classe base, mas o
+	-- resultado observável é a MESMA família de erro que ClassName já usa logo abaixo (nenhuma
+	-- colisão real esperada com as chaves fixas, a ordem aqui é só clareza de leitura).
+	if data.readOnlyRawKeys ~= nil and data.readOnlyRawKeys[key] then
+		error(`Unable to assign property {key}. Property is read only`, 2)
+	end
+
 	if key == "ClassName" then
 		-- String CONFIRMADA contra o Roblox real (task-runtime-014, ver
 		-- .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md, "Q1 parcial":
@@ -793,6 +809,7 @@ function Instance.NewBase(className: string, name: string?): Instance
 		destroyed = false,
 		classMethods = nil,
 		classSchema = nil,
+		readOnlyRawKeys = nil,
 
 		changed = SignalModule.new(),
 		childAdded = SignalModule.new(),
@@ -895,6 +912,39 @@ function Instance.SetPropertyRaw(instance: Instance, name: string, value: unknow
 	local data = getInternal(instance)
 	data.properties[name] = value
 	data.changed:Fire(name)
+end
+
+-- task-runtime-034: instala valores CONSTANTES por instância, somente-leitura do ponto de vista
+-- do script, SEM exigir um ClassSchema inteiro instalado -- a instância continua no MODO LENIENTE
+-- para qualquer outra chave. É o canal que `DataModel.luau` usa para JobId/PlaceId/GameId/
+-- PlaceVersion: `DataModel` nunca passa por `ClassRegistry.new`/`Instance.SetClassSchema` (decisão
+-- de cadeia de classe documentada no cabeçalho de DataModel.luau -- não existe segundo caminho
+-- para instanciar um DataModel via registro), então `SetClassSchema` não é uma opção para dar a um
+-- SUBCONJUNTO de propriedades a mesma proteção de escrita que `ClassSchema.ReadOnly` daria a uma
+-- instância ESTRITA (instalar um schema, mesmo que pequeno, flipa a instância inteira para o modo
+-- ESTRITO -- toda chave fora dele passaria a errar em leitura E escrita, um efeito colateral bem
+-- maior do que as quatro propriedades pedidas).
+--
+-- Grava direto em `data.properties` -- mesma disciplina de semeadura de Instance.SetClassSchema:
+-- NÃO dispara `Changed` (é o estado inicial da instância, não uma mudança observável) -- e
+-- registra as chaves em `data.readOnlyRawKeys`, consultado por `InstanceMeta.__newindex` (ver
+-- acima) para rejeitar escrita com a mesma família de erro Roblox real já usada por `ClassName`/
+-- `ClassSchema.ReadOnly` ("Property is read only"). Idempotente: chamar de novo sobre a mesma
+-- instância só une as chaves nas duas chamadas.
+--
+-- ESCOPO EXPLICITAMENTE LIMITADO A INSTÂNCIA LENIENTE: para uma instância ESTRITA
+-- (`classSchema ~= nil`), uma chave gravada aqui que não estivesse também declarada no
+-- `ClassSchema` ficaria inacessível em LEITURA (o passo 8 do `__index`, "not a valid member of",
+-- roda antes de qualquer coisa que dependesse deste canal) -- não é um caso que este módulo
+-- resolve; `DataModel` é o único consumidor hoje e nunca terá `ClassSchema` instalado.
+function Instance.SetReadOnlyRawProperties(instance: Instance, values: { [string]: unknown }): ()
+	local data = getInternal(instance)
+	local readOnlyRawKeys: { [string]: boolean } = data.readOnlyRawKeys or {}
+	data.readOnlyRawKeys = readOnlyRawKeys
+	for key, value in values do
+		data.properties[key] = value
+		readOnlyRawKeys[key] = true
+	end
 end
 
 function Instance.SetClassChain(instance: Instance, chain: { string }): ()

@@ -1850,11 +1850,10 @@
       "id": "task-runtime-033",
       "title": "game:BindToClose(fn) no DataModel + espera dos callbacks no encerramento do Scheduler",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.1.8. Implementa `DataModel:BindToClose(callback: () -> ())` (dump: Function BindToClose, Security None, parametro do tipo Function) instalado via Instance.SetClassMethods, do mesmo jeito que GetService/FindService ja sao. Semantica exigida: no encerramento (Scheduler:Run terminando, ou o caminho equivalente que o cli usa), TODOS os callbacks registrados rodam, e o encerramento so acontece depois que todos retornam -- inclusive quando eles proprios yieldam (task.wait dentro do callback e o padrao real: ProfileStore usa `while ... do task.wait() end` esperando jobs de save). Erro dentro de um callback nao derruba o processo nem impede os outros callbacks de rodar: e capturado e reportado por ThreadError como qualquer outro erro de thread (regra 02). Roblox real tem timeout de 30s no shutdown -- decidir se simula e DOCUMENTAR a escolha (recomendacao: nao simular timeout nesta leva, declarar a divergencia). Isto e pre-requisito DURO do cenario datastore-profilestore-pattern.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 44,
-      "reviewResult": null,
       "tags": [
         "runtime",
         "datamodel",
@@ -1866,17 +1865,17 @@
       "acceptance": "DataModel:BindToClose existe, aceita multiplos callbacks, e o encerramento do Scheduler espera todos retornarem inclusive quando yieldam; erro em um callback nao impede os demais; spec cobrindo callback simples, callback que yielda, dois callbacks, e callback que erra; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": "DataModel:BindToClose instalado via SetClassMethods (protegido, mesmo padrao GetService/FindService), so REGISTRA callback em mapa fraco por instancia. DataModel.RunBindToCloseCallbacks(dataModel, scheduler) funcao separada dispara: cada callback vira thread via scheduler:Spawn, scheduler:Run(shouldContinue) ate todas morrerem, erro de um nao impede os outros (via ThreadError). Timeout de 30s do Roblox real NAO simulado, declarado. Pendencia registrada: cli ainda nao chama RunBindToCloseCallbacks no fim do luaubench run (funcao pronta e exportada, fiacao fica pra task futura de coder-cli). 6 testes novos, DataModel.spec 25/25.",
+      "reviewResult": "APROVADO. Revisor reproduziu tudo: 36 specs rodados por ele, DataModel.spec 25/25 confirmado (delta 16->25 batendo com 6+3 das duas tasks), script proprio confirmando RunBindToCloseCallbacks so retorna apos todos os callbacks terminarem (mediu tempo de parede com scheduler:Wait), erro de um callback nao impede o outro e so sai via ThreadError, sobrescrita de BindToClose sempre erra. Nenhum achado."
     },
     {
       "id": "task-runtime-034",
       "title": "DataModel.JobId/PlaceId/GameId/PlaceVersion com valores fixos por processo",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.3.3. Hoje `game.JobId` devolve nil (DataModel e instancia leniente, sem schema) e o padrao real de MessagingService -- comparar message.Data.JobId com game.JobId para ignorar o proprio eco -- so funciona por acidente (nil ~= nil). Implementa as quatro propriedades, TODAS com Security None e tag ReadOnly no dump fixado (verificado): JobId (string) = um GUID gerado UMA vez por processo; PlaceId (int64) = 0; GameId (int64) = 0; PlaceVersion (int) = 0. Zero e o que o Roblox usa em lugar nao publicado -- coerente com o LuauBench, que nao tem lugar. Read-only do ponto de vista do script (escrever erra com a familia Roblox de propriedade somente-leitura). DOCUMENTAR a divergencia: o JobId muda a cada execucao, e nao ha replicacao/servidor real por tras dele.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 44,
-      "reviewResult": null,
       "tags": [
         "runtime",
         "datamodel",
@@ -1886,17 +1885,17 @@
       "acceptance": "game.JobId devolve string estavel dentro do processo e diferente entre processos; PlaceId/GameId/PlaceVersion devolvem 0; escrever em qualquer uma erra; spec cobrindo leitura, estabilidade dentro do processo e recusa de escrita; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": "Instance.SetReadOnlyRawProperties(instance, values) novo (grava direto em properties sem disparar Changed, marca chaves em readOnlyRawKeys, __newindex rejeita escrita com familia Roblox real) -- evita instalar ClassSchema inteiro que flipiaria a raiz pro modo estrito. DataModel.new() instala JobId/PlaceId/GameId/PlaceVersion por esse canal. PlaceId/GameId/PlaceVersion=0, JobId=GUID formato 8-4-4-4-12 via math.random, gerado UMA vez no carregamento do modulo (compartilhado entre DataModel.new() do mesmo processo -- correto, so existe 1 call site de producao). Confirmado empiricamente que Lune 0.10.5 semeia math.random distinto por processo sem randomseed manual. 3 testes novos.",
+      "reviewResult": "APROVADO. Revisor confirmou SetReadOnlyRawProperties nao dispara Changed (testou fora do construtor com Changed ja conectado), confirmou escrita erra com familia real 'Property is read only' e outras propriedades continuam leniente, confirmou que so existe 1 call site de producao (RunCommand.luau:174) provando que compartilhar o GUID e a decisao certa (nao bug), reproduziu math.random semeado por processo com 2 processos lune run separados de verdade. Nenhum achado."
     },
     {
       "id": "task-runtime-035",
       "title": "Emendar a lista fechada de chamadores legitimos de ClassRegistry.NewEngineInstance",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.0.3. MUDANCA DE COMENTARIO APENAS, zero codigo. A lista fechada nos cabecalhos de src/runtime/ClassRegistry.luau e src/runtime/init.luau tem hoje dois itens (DataModel.GetService; services criando filho fixo dentro de um Behavior.Initialize). A leva 2 de services precisa de um terceiro caso legitimo, que nao cabe em nenhum dos dois: `services`, dentro de um Behavior.Methods, construindo um objeto do motor que o metodo real DEVOLVE e que nao e filho de ninguem -- DataStoreService:GetDataStore -> DataStore, GlobalDataStore:GetAsync -> DataStoreKeyInfo, DataStore:ListVersionsAsync -> DataStoreVersionPages, TweenService:Create -> Tween. Todas NotCreatable e IsService false, logo inalcancaveis por ClassRegistry.new (que recusa IsAbstract, e deve continuar recusando) e por GetService. Acrescentar o item 3 nos DOIS cabecalhos, citando L2.0.3.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 44,
-      "reviewResult": null,
       "tags": [
         "runtime",
         "documentacao",
@@ -1906,7 +1905,8 @@
       "acceptance": "Os dois cabecalhos listam o terceiro caso com os exemplos concretos e a citacao de L2.0.3; nenhuma linha de codigo alterada.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": "Item 3 acrescentado nos cabecalhos de ClassRegistry.luau e init.luau (services dentro de Behavior.Methods construindo objeto do motor devolvido por metodo, ex: GetDataStore->DataStore). Antigo item 3 (cli NUNCA) virou item 4. Zero linha de codigo mudou.",
+      "reviewResult": "APROVADO. Revisor confirmou diff 100% dentro de blocos de comentario ja abertos, nenhuma linha de codigo executavel mudou para este item especifico (a unica linha de codigo nova em init.luau, reexport de RunBindToCloseCallbacks, pertence a task-runtime-033, nao a esta)."
     },
     {
       "id": "task-services-016",

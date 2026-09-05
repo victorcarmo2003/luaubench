@@ -55,6 +55,7 @@ local InstanceModule = require("./Instance")
 local ClassRegistry = require("./ClassRegistry")
 local DataModel = require("./DataModel")
 local UnknownClassResolver = require("./UnknownClassResolver")
+local Scheduler = require("./Scheduler")
 
 type UnknownClassVerdict = UnknownClassResolver.UnknownClassVerdict
 
@@ -377,6 +378,150 @@ test("SEQUESTRO: um Folder filho direto da raiz não é devolvido por GetService
 	assert(
 		dataModel:FindService("Folder") == nil,
 		"FindService('Folder') deveria devolver nil pelo mesmo motivo -- mesmo gate de GetService"
+	)
+end)
+
+--[[
+	Testes NOVOS da task-runtime-034 (JobId/PlaceId/GameId/PlaceVersion) -- ver
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.3.3".
+]]
+
+test("JobId/PlaceId/GameId/PlaceVersion têm os valores esperados", function()
+	local dataModel = DataModel.new()
+	assert(typeof(dataModel.JobId) == "string", `JobId deveria ser string, recebeu {typeof(dataModel.JobId)}`)
+	assert(#dataModel.JobId > 0, "JobId não deveria ser string vazia")
+	assert(dataModel.PlaceId == 0, `PlaceId deveria ser 0, recebeu {dataModel.PlaceId}`)
+	assert(dataModel.GameId == 0, `GameId deveria ser 0, recebeu {dataModel.GameId}`)
+	assert(dataModel.PlaceVersion == 0, `PlaceVersion deveria ser 0, recebeu {dataModel.PlaceVersion}`)
+end)
+
+test("JobId é estável dentro do processo -- duas raízes do MESMO processo compartilham o mesmo JobId", function()
+	local dataModelA = DataModel.new()
+	local dataModelB = DataModel.new()
+	assert(
+		dataModelA.JobId == dataModelB.JobId,
+		`duas raízes do mesmo processo deveriam compartilhar o mesmo JobId, recebeu '{dataModelA.JobId}' e '{dataModelB.JobId}'`
+	)
+end)
+
+test("escrever em JobId/PlaceId/GameId/PlaceVersion erra com a família Roblox real de propriedade somente-leitura", function()
+	local dataModel = DataModel.new()
+	local dynamic = (dataModel :: unknown) :: { [string]: unknown }
+
+	for _, key in { "JobId", "PlaceId", "GameId", "PlaceVersion" } do
+		local ok, err = pcall(function()
+			dynamic[key] = "hijacked"
+		end)
+		assert(not ok, `escrever em {key} deveria erro -- é ReadOnly no dump`)
+		assert(
+			string.find(tostring(err), "Property is read only", 1, true) ~= nil,
+			`mensagem de erro ao escrever em {key} deveria conter 'Property is read only', recebeu: {err}`
+		)
+	end
+end)
+
+--[[
+	Testes NOVOS da task-runtime-033 (BindToClose + RunBindToCloseCallbacks) -- ver
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.1.8".
+]]
+
+test("RunBindToCloseCallbacks sem nenhum BindToClose registrado é no-op", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	-- Não deveria erro nem travar -- só devolve na hora, sem nenhum handle para esperar.
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+end)
+
+test("BindToClose: callback simples roda antes de RunBindToCloseCallbacks devolver o controle", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local ran = false
+
+	dataModel:BindToClose(function()
+		ran = true
+	end)
+
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+	assert(ran, "o callback simples deveria ter rodado")
+end)
+
+test("BindToClose: callback que yielda (Scheduler:Wait) só conta como terminado depois de retornar de verdade", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local finished = false
+
+	dataModel:BindToClose(function()
+		scheduler:Wait(0.01)
+		finished = true
+	end)
+
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+	assert(finished, "o callback deveria ter completado (inclusive o yield) antes de RunBindToCloseCallbacks devolver")
+end)
+
+test("BindToClose: dois callbacks registrados na mesma raiz rodam os dois", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local ranFirst = false
+	local ranSecond = false
+
+	dataModel:BindToClose(function()
+		scheduler:Wait(0.01)
+		ranFirst = true
+	end)
+	dataModel:BindToClose(function()
+		ranSecond = true
+	end)
+
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+	assert(ranFirst, "o primeiro callback (com yield) deveria ter rodado até o fim")
+	assert(ranSecond, "o segundo callback deveria ter rodado até o fim")
+end)
+
+test("BindToClose: erro dentro de um callback não impede os demais de rodar nem propaga -- sai por ThreadError", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local erroredCallbackRan = false
+	local otherCallbackRan = false
+	local threadErrors: { string } = {}
+
+	scheduler.ThreadError:Connect(function(_thread, message: string)
+		table.insert(threadErrors, message)
+	end)
+
+	dataModel:BindToClose(function()
+		erroredCallbackRan = true
+		error("callback de BindToClose falhou de propósito (teste)")
+	end)
+	dataModel:BindToClose(function()
+		scheduler:Wait(0.01)
+		otherCallbackRan = true
+	end)
+
+	local ok = pcall(function()
+		DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+	end)
+
+	assert(ok, "RunBindToCloseCallbacks nunca deveria propagar o erro de um callback")
+	assert(erroredCallbackRan, "o callback que erra deveria ter rodado (e errado) mesmo assim")
+	assert(otherCallbackRan, "o outro callback deveria ter rodado até o fim, sem ser afetado pelo erro do primeiro")
+	assert(#threadErrors == 1, `deveria ter reportado exatamente 1 ThreadError, recebeu {#threadErrors}`)
+	assert(
+		string.find(threadErrors[1], "callback de BindToClose falhou de propósito", 1, true) ~= nil,
+		`ThreadError deveria conter a mensagem original do erro, recebeu: {threadErrors[1]}`
+	)
+end)
+
+test("BindToClose fica protegido contra sobrescrita (mesma disciplina de GetService/FindService)", function()
+	local dataModel = DataModel.new()
+	local dynamic = (dataModel :: unknown) :: { [string]: unknown }
+	local ok, err = pcall(function()
+		dynamic.BindToClose = nil
+	end)
+	assert(not ok, "sobrescrever BindToClose deveria erro, igual a qualquer outro método de Instance")
+	assert(
+		string.find(tostring(err), "BindToClose") ~= nil,
+		`mensagem de erro deveria mencionar 'BindToClose', recebeu: {err}`
 	)
 end)
 
