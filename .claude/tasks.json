@@ -1971,7 +1971,12 @@
       "acceptance": "game:GetService('DataStoreService') devolve instancia; GetDataStore duas vezes com o mesmo (name, scope) devolve a MESMA instancia; GetAsync devolve dois valores e (nil, nil) para chave inexistente; UpdateAsync devolve (value, keyInfo), passa keyInfo como 2o argumento da transform, aborta quando a transform devolve nil e ERRA quando a transform yielda; SetAsync devolve string de versao; RemoveAsync devolve o valor anterior e deixa GetAsync devolvendo nil; DataStoreOptions:SetExperimentalFeatures nao erra; deep copy verificada de ponta a ponta; specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-016",
+        "task-services-017",
+        "task-runtime-035"
+      ]
     },
     {
       "id": "task-services-019",
@@ -1991,7 +1996,10 @@
       "acceptance": "SetAsync/UpdateAsync repetidos geram versoes distintas recuperaveis por GetVersionAsync; ListVersionsAsync devolve Pages navegavel com GetCurrentPage/IsFinished/AdvanceToNextPageAsync; RemoveAsync deixa a versao antiga acessivel (tombstone); specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-018"
+      ]
     },
     {
       "id": "task-services-020",
@@ -2011,7 +2019,11 @@
       "acceptance": "GetSortedAsync devolve paginas ordenadas crescente e decrescente, respeita minValue/maxValue e pagesize; valor nao inteiro e recusado; remocao e permanente; specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-018",
+        "task-services-019"
+      ]
     },
     {
       "id": "task-services-021",
@@ -2030,7 +2042,11 @@
       "acceptance": "PublishAsync num topico assinado pelo proprio processo entrega a todos os callbacks, assincronamente, com { Data, Sent }; erro em um callback nao impede os outros nem derruba o processo; Disconnect cancela; mensagem acima de 1 kB e topico invalido erram; assinatura aberta nao impede o luaubench run de terminar; specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-016",
+        "task-runtime-034"
+      ]
     },
     {
       "id": "task-services-022",
@@ -2050,7 +2066,11 @@
       "acceptance": "game:GetService('HttpService') devolve instancia; JSONEncode/JSONDecode/UrlEncode/GenerateGUID funcionam e erram como o Roblox nos casos invalidos; HttpEnabled le false e escrever erra; GetAsync/PostAsync/RequestAsync erram com a mensagem de HTTP desabilitado; nenhuma chamada de rede acontece (verificavel no codigo: @lune/net nao e requerido neste arquivo); specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-017"
+      ],
+      "coordinationNote": "NOTA DO ORQUESTRADOR (2026-09-05): depends inclui uma tarefa anterior da mesma cadeia so por conflito de arquivo (tools/coverage.luau e/ou generated/ regenerado por lune run tools/generate-services) -- nao e dependencia logica real, e serializacao pra nunca dar o mesmo arquivo a dois coder-services em paralelo (mesmo padrao do incidente Catalog.luau na leva de valuetypes). O planejador original deixou depends:[] nestas tarefas; corrigido aqui antes do despacho."
     },
     {
       "id": "task-services-023",
@@ -2071,7 +2091,11 @@
       "acceptance": "workspace:RegisterCollisionGroup/'IsCollisionGroupRegistered'/CollisionGroupSetCollidable/CollisionGroupsAreCollidable funcionam; 'Default' ja registrado; GetMaxCollisionGroups devolve 32; dois grupos novos colidem por padrao; PhysicsService e workspace compartilham o MESMO registro (spec cruzada nos dois sentidos); registrar acima de 32 erra; specs cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-022"
+      ],
+      "coordinationNote": "NOTA DO ORQUESTRADOR (2026-09-05): depends inclui uma tarefa anterior da mesma cadeia so por conflito de arquivo (tools/coverage.luau e/ou generated/ regenerado por lune run tools/generate-services) -- nao e dependencia logica real, e serializacao pra nunca dar o mesmo arquivo a dois coder-services em paralelo (mesmo padrao do incidente Catalog.luau na leva de valuetypes). O planejador original deixou depends:[] nestas tarefas; corrigido aqui antes do despacho."
     },
     {
       "id": "task-services-024",
@@ -2111,7 +2135,11 @@
       "acceptance": "game:GetService('SoundService') devolve instancia; as 13 propriedades leem o default do dump e aceitam escrita; os 4 metodos erram com [LuauBench]; RespectFilteringEnabled le false; nenhum behavior/SoundService.luau foi criado; spec cobrindo cada item; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-023"
+      ],
+      "coordinationNote": "NOTA DO ORQUESTRADOR (2026-09-05): depends inclui uma tarefa anterior da mesma cadeia so por conflito de arquivo (tools/coverage.luau e/ou generated/ regenerado por lune run tools/generate-services) -- nao e dependencia logica real, e serializacao pra nunca dar o mesmo arquivo a dois coder-services em paralelo (mesmo padrao do incidente Catalog.luau na leva de valuetypes). O planejador original deixou depends:[] nestas tarefas; corrigido aqui antes do despacho."
     },
     {
       "id": "task-services-026",
@@ -2132,7 +2160,10 @@
       "acceptance": "Com a permissao ligada, RequestAsync faz requisicao real e devolve a tabela na forma exata do Roblox; sem a permissao, os tres metodos continuam errando 'HTTP nao habilitado'; host inexistente vira erro da familia Roblox e nunca vaza mensagem do SO; destino loopback/privado e recusado sem a segunda permissao e aceito com ela; Timeout aceito e ignorado com divergencia comentada; specs cobrindo cada item sem depender de rede externa para os caminhos de recusa; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-022"
+      ]
     },
     {
       "id": "task-cli-026",
@@ -2174,7 +2205,12 @@
       "acceptance": "O cenario roda o ProfileStore real de ponta a ponta sem stub inventado, cobre os 5 passos do cabecalho do arquivo, e nao imprime mais [SKIP]; qualquer divergencia encontrada volta como relatorio, nunca como stub silencioso.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-services-018",
+        "task-services-019",
+        "task-runtime-033"
+      ]
     },
     {
       "id": "task-services-028",
@@ -2223,7 +2259,7 @@
       "id": "task-valuetypes-005-fix",
       "title": "Corrigir Color3.fromHex (validacao insuficiente) + consolidar Catalog.luau Simulated=true (Vector3/Vector2/Color3/UDim/UDim2)",
       "description": "Dois achados reais das revisoes de task-valuetypes-004 e task-valuetypes-005, combinados numa so correcao porque tocam os mesmos arquivos (Catalog.luau e Color3.luau). (1) BUG REAL em Color3.fromHex (achado MEDIO do revisor-valuetypes, .claude/agents-memory/revisor-valuetypes-color-udim-udim2-2026-09-05.md): a validacao usa so tonumber(x,16)==nil, que NAO rejeita strings com sinal embutido -- Color3.fromHex('-10000') nao erra, devolve R=72340177116200960 (wraparound de tonumber('-1',16) sem sinal). Corrigir validando o FORMATO antes de converter (regex tipo ^%x%x%x%x%x%x$ ou ^%x%x%x$ pros 2 formatos aceitos, apos remover o # opcional), rejeitando qualquer caractere fora de [0-9a-fA-F] incluindo sinal. (2) CONSOLIDACAO: Catalog.luau e efetivamente um arquivo COMPARTILHADO entre as 3 tarefas paralelas desta wave (o proprio coder do Enum, task-valuetypes-003, avisou isso no relatorio) -- so a entrada 'Enum' foi virada Simulated=true; Vector3/Vector2/Color3/UDim/UDim2, todos totalmente implementados e aprovados (com ressalva), continuam Simulated=false. Virar as 5 entradas pra Simulated=true. NAO mexer nas entradas que ainda nao tem types/*.luau (CFrame e o resto).",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 41,
