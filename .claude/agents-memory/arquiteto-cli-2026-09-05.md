@@ -1071,3 +1071,212 @@ em `EngineFixedChildren.luau`; `cli` não muda nem uma linha. Esse é o teste re
   genérico que mascararia bug de duplicação em nó comum. A lista fechada é o ponto.
 - **Não mover a lista para `runtime`** — a regra 02 é explícita: `runtime` nunca conhece classe por
   nome. Uma tabela de nomes concretos de classe lá dentro inverteria a dependência.
+
+---
+
+# Decisão 15 — `$properties`/`Source` do nó RAIZ (`task-cli-009`)
+
+Data: 2026-09-05. Origem: achado **[BAIXO]** do `revisor-cli` em
+`.claude/agents-memory/revisor-cli-treematerializer-2026-09-05.md`.
+
+## Resposta curta
+
+**(a)** — mas a pergunta da task estava errada nos dois pressupostos, e isso muda a prioridade.
+
+A task perguntou: "vale mudar o contrato `InstancePlan` por um caso de uso raro, ou documentar a
+limitação é mais barato?" Os dois pressupostos embutidos são falsos:
+
+1. **Não é caso de uso raro.** O mesmo descarte atinge a raiz de **todo projeto aninhado**, não só o
+   `DataModel` de topo. Na prática isso é **100% dos pacotes Wally** — verificado contra os projetos
+   reais do usuário.
+2. **A correção principal não muda o contrato `InstancePlan`.** A raiz de um projeto aninhado já
+   vira um `PlanNode` comum, e `PlanNode` **já tem** `Source`/`SourcePath`/`Properties`. O contrato
+   fixado em `task-cli-003` não precisa ser tocado para corrigir a parte que importa.
+
+Não é um achado BAIXO cosmético: **é um bug ALTO de correção que quebra o caso de uso central do
+LuauBench.** `task-cli-009` sai de `priority: low` e gera `task-cli-018` com `priority: high`.
+
+## Evidência reproduzida (não inferida)
+
+`TreePlanner.planProjectTree` (`src/cli/TreePlanner.luau:1154-1175`) devolve
+`(core.ClassName, children)` — descarta `core.Source`, `core.SourcePath` e `core.Properties`. Essa
+função é chamada em **dois** lugares:
+
+- linha 1195, para a raiz do projeto de topo (o caso que o revisor descreveu — de fato raro);
+- **linha 841, para a raiz de todo projeto aninhado** (o caso que ninguém tinha olhado).
+
+No ramo de projeto aninhado (`:878-889`) o `CoreResolution` devolvido fixa `Source = nil` e
+`SourcePath = nil` literais, e monta `Properties` **só** com o `$properties` do nó externo
+(`:872-876`) — o `$properties` da própria raiz do projeto aninhado nunca entra.
+
+Rodei o `TreePlanner` real contra os pacotes reais de
+`C:\Users\hakor\Documents\Roblox-Games\AnimeFallen` (copiados para um fixture temporário, originais
+nunca tocados):
+
+```
+RootClassName: DataModel
+ReplicatedStorage :: ReplicatedStorage | Source=nil
+  Jecs         :: ModuleScript | Source=nil
+  ProfileStore :: ModuleScript | Source=nil
+  Promise      :: ModuleScript | Source=nil
+    init.spec  :: ModuleScript | Source=<50139 bytes>
+```
+
+**Zero diagnósticos emitidos.** Silêncio completo.
+
+Leia a linha do `ProfileStore`: o `ClassName` resolve certo, o nó existe, e o **código é `nil`**.
+`require(ServerPackages.ProfileStore)` sob `luaubench run` hoje devolve um ModuleScript **vazio**.
+O `init.spec` do Promise ter 50139 bytes é a prova de que os *filhos* funcionam — só a raiz do
+projeto aninhado é perdida.
+
+Os `.project.json` reais desses pacotes:
+
+| Pacote | `tree` | Forma |
+|---|---|---|
+| `ddashdev_profilestore@1.0.4` | `{"$path": "ProfileStore.luau"}` | raiz É o arquivo |
+| `ukendio_jecs@0.11.0` | `{"$path": "src/jecs.luau"}` | raiz É o arquivo |
+| `evaera_promise@4.0.0` | `{"$path": "lib"}` | diretório com `init.lua` |
+| `enzzyfrenzzy_sera@0.0.2` | `{"$path": "src"}` | diretório com `init.luau` |
+| `realdeedy_fusion@0.3.0` | `{"$path": "src"}` | diretório com `init.luau` |
+
+As duas formas (raiz-arquivo e raiz-diretório-com-`init`) perdem o `Source`. Não sobra nenhum
+pacote funcionando. **ProfileStore é exatamente o caso de uso citado no `CLAUDE.md`** ("permitindo
+escrever e testar código (ProfileStore, data managers, state managers etc.) fora do editor").
+
+Já a raiz de **topo** o revisor acertou: os três projetos reais do usuário (`AnimeFallen`,
+`BallBrawl`, `BLOXIA`) declaram `{"$className": "DataModel", <filhos>}` e **nenhum** declara
+`$properties` na raiz. Aquela metade continua de baixo impacto — mas custa menos corrigir do que
+documentar, ver abaixo.
+
+## Por que (b) — documentar — está descartado
+
+Documentar "nunca declare `$properties` na raiz" não tem relação com o dano real: ninguém declara
+`$properties` na raiz de topo, e o usuário **não controla** o `.project.json` dos pacotes que o
+Wally instala. Uma limitação documentada que o usuário não pode evitar não é limitação aceita, é
+bug com aviso legal. E um *warning* sozinho também não serve: dizer "o código do ProfileStore foi
+ignorado" sem carregá-lo deixa a ferramenta igualmente inútil.
+
+Vale a regra 00: divergência é sempre declarada — mas a via padrão da regra 02 é
+**implementar a superfície real**, não declarar ausência quando implementar é barato. Aqui é barato.
+
+## Desenho da correção
+
+Princípio: **aplicar o que dá para aplicar, avisar só onde aplicar é impossível.**
+
+### Parte 1 — raiz de projeto aninhado (o bug). Sem mudança de contrato.
+
+`InstancePlan` **não muda**. `PlanNode` **não muda**. Muda só o retorno de uma função interna.
+
+Novo tipo interno (não exportado) em `src/cli/TreePlanner.luau`:
+
+```luau
+-- O que a raiz de um projeto (de topo ou aninhado) resolve, além dos filhos. Existe porque a raiz
+-- NÃO vira um `PlanNode` (Decisão 3) e portanto precisava de um carona para `Source`/`Properties`
+-- -- que antes eram descartados aqui (Decisão 15).
+type RootResolution = {
+	ClassName: string,
+	Source: string?,
+	SourcePath: string?,
+	Properties: { [string]: PlanPropertyValue },
+}
+```
+
+`planProjectTree` passa de `(string?, { PlanNode })` para `(RootResolution?, { PlanNode })` —
+declaração adiantada em `:576-581` e corpo em `:1154-1175`. O corpo só monta o registro a partir do
+`core` que já tem em mãos; nenhuma lógica nova de resolução.
+
+No ramo de projeto aninhado de `resolveCore` (`:841-889`):
+
+- `Source = nestedRoot.Source` e `SourcePath = nestedRoot.SourcePath` no lugar dos `nil` literais.
+- `nestedProperties` **começa** com uma cópia de `nestedRoot.Properties` e só então recebe
+  `applyProperties(nestedProperties, jsonNode.Properties, ...)` por cima — o `$properties` do nó
+  externo continua vencendo em caso de chave repetida, que é o comportamento já shipado hoje
+  (`:872-876`) e o único que permite o consumidor sobrescrever um default do pacote.
+- `:842` (`if nestedRootClassName == nil`) vira checagem do registro; `:879`
+  (`ClassName = nestedRootClassName`) vira `nestedRoot.ClassName`.
+
+`SourcePath` importa tanto quanto `Source`: é dele que sai o nome de arquivo/linha no output de erro
+(Decisão 13). Sem ele, um erro dentro do ProfileStore sairia sem origem.
+
+Nada em `TreeMaterializer.luau` muda nesta parte — ele já aplica `PlanNode.Source` via
+`SetPropertyRaw` e `PlanNode.Properties` pela via pública.
+
+### Parte 2 — raiz de topo. Um campo aditivo, um warning.
+
+**`$properties` na raiz de topo → aplicar.** `InstancePlan` ganha **um campo aditivo**:
+
+```luau
+export type InstancePlan = {
+	ProjectName: string,
+	ProjectPath: string,
+	RootClassName: string,
+	RootProperties: { [string]: PlanPropertyValue }, -- NOVO (Decisão 15)
+	Roots: { PlanNode },
+	Diagnostics: { Diagnostics.Diagnostic },
+}
+```
+
+Campo novo em tipo de registro não quebra consumidor nenhum — `TreeMaterializer` é o único leitor e
+é atualizado na mesma task. `TreePlanner.Plan` preenche com `rootResolution.Properties`.
+`TreeMaterializer.Materialize` chama a `applyProperties` que **já existe** no módulo, passando o
+`game` já validado como `DataModel` e `plan.RootProperties`, logo depois da checagem
+`materialize/root-not-datamodel` e antes de materializar os `Roots`. Reusa o mesmo caminho de
+diagnóstico (`materialize/invalid-property`) — propriedade inexistente ou somente-leitura na raiz
+vira `Diagnostic`, não crash. São ~5 linhas.
+
+Escolhi aplicar em vez de avisar porque custa **menos** código que o warning e elimina a divergência
+em vez de trocá-la por um aviso que o usuário não tem como resolver.
+
+**`Source` na raiz de topo → warning, porque aplicar é impossível.** Se a raiz resolve para um
+script, `RootClassName ~= "DataModel"` e o `TreeMaterializer` **já** erra
+`materialize/root-not-datamodel` — nada silencioso. Sobra um único canto: o
+`{"$className": "DataModel", "$path": "algo.lua"}`, em que a classe explícita vence e sobra um
+`Source` sem destino (um `DataModel` não tem `Source` no dump). Aí, e só aí, warning:
+
+```luau
+-- Único ponto em que Source resolvido não tem onde ser aplicado: a raiz é um DataModel (que não
+-- tem a propriedade Source no dump) mas o "$path" dela também produziu código. Avisar em vez de
+-- descartar em silêncio -- regra 00 (Decisão 15).
+function Messages.PlanRootSourceIgnored(nodePath: string, sourcePath: string): string
+```
+
+Texto: `the project root resolved to "DataModel", but its "$path" also produced script source from
+"<sourcePath>" -- a DataModel has no "Source" property, so the file's contents were ignored.`
+
+Emitido em `TreePlanner.Plan`, `Severity = "warning"`, `Code = "plan/root-source-ignored"`,
+`Field = "$path"`, quando `rootResolution.Source ~= nil` **e** `RootClassName == "DataModel"`.
+`InstancePlan.RootSource` **não** é criado — não existe consumidor possível para ele.
+
+### Ponto para o `pesquisador` (não bloqueia)
+
+Confirmar contra o código do Rojo qual é a precedência real quando o nó externo e a raiz do projeto
+aninhado declaram a **mesma** chave em `$properties`. O desenho acima mantém "externo vence", que é
+o comportamento já shipado; se o Rojo fizer o contrário, é uma linha invertida. **Não bloqueia** —
+o `Source` (todo o dano medido) não tem ambiguidade nenhuma.
+
+## Fidelidade vs. pragmatismo
+
+- **Exato depois da correção:** raiz de projeto aninhado carrega `Source`/`SourcePath`/`Properties`
+  como qualquer outro nó; `$properties` da raiz de topo aplicado no `game`.
+- **Aproximação declarada, única:** `Source` numa raiz `DataModel` explícita é descartado — com
+  warning. Não há para onde aplicá-lo sem inventar propriedade fora do dump (proibido pela
+  invariante 1).
+
+## Riscos
+
+- **Regressão em projeto que já funciona:** baixa. Nós que hoje têm `Source` continuam idênticos; a
+  mudança só preenche campos que hoje são `nil`. Nenhum caminho existente muda de valor.
+- **Projeto aninhado cujo `$path` de raiz não produz `Source`** (o `{"$path": "src"}` sem `init.*`,
+  que vira `Folder`): `Source` continua `nil`, como deve. O fixture precisa cobrir os dois.
+- **Ciclo/`$path` ausente:** inalterados — `planProjectTree` devolvendo `nil` continua sendo o único
+  sinal de falha da raiz, agora como registro `nil` em vez de string `nil`.
+
+## O que deliberadamente NÃO fazer agora
+
+- **Não adicionar `RootSource` ao `InstancePlan`** — sem consumidor possível.
+- **Não mexer em `$attributes` da raiz** — já tem o warning `warnAttributesIfAny`, comportamento
+  correto e fora do escopo.
+- **Não tratar `$path` absoluto.** Descobri de passagem que `$path` absoluto quebra com erro cru do
+  SO (`os error 123`) em `TreePlanner.luau:633`, em vez de diagnóstico. O Rojo documenta `$path`
+  como relativo, então não é o mesmo bug — fica registrado aqui como pendência separada, **não**
+  entra em `task-cli-018`.
