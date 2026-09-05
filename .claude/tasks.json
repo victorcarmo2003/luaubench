@@ -1416,6 +1416,62 @@
       "updatedAt": "2026-09-05",
       "result": "PlanContext ganhou OutermostProjectFilePath: string. normalizePath(project.FilePath) sobe pra antes da construcao do ctx em TreePlanner.Plan, preenchendo o campo. Excecao em resolveCore trocada de isRoot pra isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath. isRoot mantido intocado em todos os outros usos (:686). Fixture nested-project-project-root-datamodel-conflict reproduz o cenario original do revisor. 29/29 TreePlanner.spec (27+2 novos), 449/449 total (447+2, zero regressao). Nada fora de src/cli/ tocado, Messages.luau intocado.",
       "reviewResult": "APROVADO. Revisor (o mesmo que achou o furo original) reproduziu tudo: 449/449 rodado por ele, reproduziu o cenario sintetico original com fixture PROPRIO confirmando o furo fechado (antes: zero diagnostico + erro enganoso; agora: plan/class-name-conflict correto), confirmou root-source-ignored intacto, testou CASO NOVO de 3 niveis de aninhamento (A->X->C) nao coberto pelo coder confirmando que so a raiz de A recebe tratamento especial, testou variacao de path suja diferente da do coder, confirmou isRoot intocado em todo o resto do arquivo, confirmou contra pacotes Wally reais (AnimeFallen) que o fix original de task-cli-018 nao regrediu. Nenhum achado novo. Fecha task-cli-018 tambem (que ficava em review esperando exatamente esta correcao)."
+    },
+    {
+      "id": "task-cli-021",
+      "title": "$path absoluto no .project.json quebra com erro cru do SO em vez de diagnostico formatado",
+      "description": "Achado registrado em arquiteto-cli-2026-09-05.md durante a investigacao de task-cli-009, nunca virou task ate agora. TreePlanner.luau (por volta de :633, joinPath/normalizePath/fs.isFile-isDir) nao trata o caso de $path absoluto (ex: 'C:/outra/pasta' ou '/etc/algo') -- hoje isso propaga um erro cru do sistema operacional (visto na pratica como 'os error 123' no Windows) em vez de um Diagnostic formatado. Baixo impacto pratico (Rojo documenta $path como relativo, nenhum .project.json real do usuario usa path absoluto), mas viola a regra 04 ('falha ao ler .project.json e um erro claro, nunca stack trace cru do parser') -- e a mesma categoria de vazamento ja fechada para outros casos (stripEngineErrorLocation em TreeMaterializer). Corrigir: detectar $path absoluto (Windows drive letter tipo 'C:' ou barra inicial '/') ANTES de tentar resolver contra o filesystem, e emitir Diagnostic dedicado citando o NodePath e o $path literal, nunca deixar o erro do SO vazar.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 35,
+      "tags": ["cli", "rojo", "erro", "bug"],
+      "priority": "medium",
+      "acceptance": "$path absoluto (Windows 'C:/...'/'C:\\\\...' e Unix '/...') detectado antes de tocar filesystem, produz Diagnostic dedicado (novo Code, ex. plan/absolute-path-not-allowed) citando NodePath e o $path literal -- nunca erro cru do SO ('os error NNN') vazando; teste cobrindo os dois formatos (Windows e Unix); regressao total intacta; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-022",
+      "title": "DataModel em posicao nao-raiz de projeto aninhado sem init.* passa sem diagnostico dedicado",
+      "description": "Lacuna conhecida registrada na Decisao 16 de arquiteto-cli-2026-09-05.md (task-cli-019/020), explicitamente fora de escopo daquela correcao, nunca virou task ate agora. Cenario: um no {\"$className\":\"DataModel\",\"$path\":\"pasta-sem-init\"} dentro de um projeto aninhado (nao a raiz mais externa) -- a guarda de plan/class-name-conflict so cobre className explicito, nunca cobriu pathClassName=='Folder' por desenho. Hoje esse caso passa pelo Plan sem nenhum diagnostico, so falhando depois no Materialize com erro generico (materialize/invalid-class ou parecido), nao o diagnostico especifico que ajudaria o usuario a entender o real problema (DataModel so pode ser a raiz do plano inteiro). Precisa de pesquisador confirmar o que o Rojo real faz nesse cenario especifico (mesma classe de investigacao ja feita para task-cli-013, mas para esse caso -- nao adivinhar) antes de coder-cli implementar.",
+      "column": "todo",
+      "agent": "pesquisador",
+      "reviewer": "revisor-cli",
+      "wave": 35,
+      "tags": ["cli", "rojo", "pesquisa", "bug"],
+      "priority": "low",
+      "acceptance": "Comportamento real do Rojo confirmado com fonte (codigo-fonte, mesma tecnica das pesquisas anteriores) para $className=DataModel em projeto aninhado nao-raiz-de-topo; resposta suficiente pra coder-cli implementar sem re-pesquisar (nova task gerada se a resposta pedir codigo).",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-runtime-031",
+      "title": "ARQUITETURA: desenhar sistema de Value Types simulados (Vector3/CFrame/Color3/Enum/etc, 22 tipos)",
+      "description": "Prioridade alta pos-sessao: e a maior lacuna real que impede scripts de producao rodarem de verdade no LuauBench hoje -- todo projeto real testado usa Vector3/CFrame/Color3 em $properties ou em codigo de script, e hoje isso so erra nomeando a lacuna (src/cli/UnsimulatedGlobals.luau). Escopo: os 22 tipos hoje listados como nao simulados (Vector3, Vector2, CFrame, Color3, UDim, UDim2, Rect, Region3, Ray, NumberRange, NumberSequence, ColorSequence, BrickColor, TweenInfo, PhysicalProperties, Faces, Axes, Random, DateTime, Font, RaycastParams, OverlapParams, Enum). Decisoes que o arquiteto precisa tomar: (1) ONDE vive a implementacao -- runtime (tipos genericos, sem saber nomes especificos, na linha da regra 02) ou um territorio novo (ex: src/valuetypes/, paralelo a runtime/services/cli, dado que sao ~22 tipos com semantica propria de operador +/-/==/tostring, nao Instance nem Service); (2) qual API Dump-like fonte de verdade usar pra cada tipo (Vector3/CFrame tem campos e metodos bem documentados no Roblox real -- confirmar com pesquisador antes de inventar assinatura); (3) como o sandbox de scripts expõe esses tipos como globals (Vector3.new, CFrame.new, etc) sem abrir brecha de seguranca (mesma disciplina do Sandbox.luau atual); (4) qual subconjunto e prioridade -- Vector3/CFrame/Color3/Enum/UDim/UDim2 sao usados por praticamente todo script real (confirmado pelo testador contra jogos reais), o resto (Font/RaycastParams/OverlapParams/etc) e cauda longa, pode ser leva 2; (5) precisao numerica -- Vector3 do Roblox real usa float32, Luau usa double -- decidir se simula a perda de precisao (fidelidade) ou usa double reto (pragmatismo), documentar a divergencia se escolher o segundo. Isso e ESCOPO NOVO GRANDE -- nao pular pro planejador sem esse desenho completo primeiro (regra 05).",
+      "column": "todo",
+      "agent": "arquiteto",
+      "reviewer": null,
+      "wave": 36,
+      "tags": ["arquitetura", "value-types", "runtime", "escopo-novo", "prioridade-alta"],
+      "priority": "high",
+      "acceptance": "Desenho completo registrado em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (arquivo novo): territorio decidido (onde vivem os modulos), fonte de dados por tipo confirmada (pesquisador acionado se necessario), contrato de exposicao no sandbox, leva 1 vs leva 2 definida com justificativa de prioridade real (uso observado nos jogos testados), decisao de precisao numerica documentada; pronto para planejador quebrar em tasks paralelas por tipo/grupo de tipos.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-013",
+      "title": "ARQUITETURA: desenhar services wave 2 (TweenService, DataStoreService, HttpService, MessagingService, Lighting/SoundService/PhysicsService)",
+      "description": "Continuacao da prioridade de cobertura ja definida em .claude/rules/03-services-api-dump.md (grupos 2-4). Grupo 1 (arvore basica) 100% coberto. Faltam: Grupo 2 -- TweenService (RunService ja feito); Grupo 3 -- DataStoreService, HttpService, MessagingService (caso de uso central citado no CLAUDE.md, data management/ProfileStore); Grupo 4 -- Lighting/SoundService/PhysicsService (cobertura minima de API, comportamento simplificado e documentado, ja com precedente nas divergencias de RunService/RejectingSignal). Decisoes que o arquiteto precisa tomar por classe (nao adivinhar, pesquisador aciona se houver duvida sobre comportamento real): (1) DataStoreService -- e local-first (regra 00 CLAUDE.md, 'nada do projeto do usuario sai da maquina'), entao NAO pode fazer chamada de rede real pro DataStore do Roblox -- decidir se simula um datastore em memoria/arquivo local, com que fidelidade de API (GetAsync/SetAsync/UpdateAsync/budget/throttling); (2) HttpService -- mesma tensao local-first vs. HttpService real faz rede de verdade no Roblox -- decidir se permite rede real (contradiz 'local-first'? ou e aceitavel pois e o script do usuario pedindo, nao o LuauBench) ou simula/mocka; (3) MessagingService -- singleplayer/sem replicacao real (ja documentado como limitacao aceita do projeto) -- decidir semantica de PublishAsync/SubscribeAsync num processo unico; (4) TweenService -- depende de value-types (task-runtime-031) para simular a interpolacao de verdade -- avaliar se depende disso ou pode ter uma leva 1 minima sem interpolacao real; (5) Lighting/SoundService/PhysicsService -- cobertura minima de propriedades, sem simulacao fisica/render real, documentado como fidelidade menor (regra 02 permite). Gerar o desenho e as tasks paralelas por servico pro planejador.",
+      "column": "todo",
+      "agent": "arquiteto",
+      "reviewer": null,
+      "wave": 36,
+      "tags": ["arquitetura", "services", "escopo-novo"],
+      "priority": "high",
+      "acceptance": "Desenho completo registrado em .claude/agents-memory/arquiteto-services-2026-09-05.md (nova secao): decisao por servico (Grupo 2/3/4) sobre fidelidade vs. local-first vs. pragmatismo, dependencias entre servicos e task-runtime-031 explicitadas, ordem de leva sugerida; pronto para planejador quebrar em tasks paralelas por servico.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
     }
   ]
 }
