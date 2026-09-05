@@ -15,6 +15,14 @@
 local process = require("@lune/process")
 local nativeTask = require("@lune/task")
 local InstanceModule = require("./Instance")
+local Scheduler = require("./Scheduler")
+-- Módulo-folha interno do território (ver ThreadBroker.luau) -- não faz parte da API pública
+-- reexportada por init.luau para services/cli, mas este é um teste de caixa-branca DENTRO do
+-- próprio território runtime (mesmo padrão já usado em Integration.spec.luau/task-runtime-012):
+-- precisa registrar uma segunda limpeza na MESMA thread para provar, de forma determinística,
+-- que a Connection interna de WaitForChild já foi desconectada ANTES dela rodar (ver teste de
+-- cancelamento abaixo, task-runtime-020).
+local ThreadBroker = require("./ThreadBroker")
 
 type Instance = InstanceModule.Instance
 
@@ -322,6 +330,53 @@ test("WaitForChild com timeout devolve o filho se ele aparecer antes do prazo", 
 	assert(result ~= nil, "deveria encontrar o filho que apareceu antes do prazo")
 	assert((result :: Instance).Name == "Atrasado", "deveria devolver o filho certo")
 end)
+
+test(
+	"Cancelar um task.spawn real parado em WaitForChild(nome, timeout) desconecta a Connection de ChildAdded no momento do Cancel (task-runtime-020)",
+	function()
+		local scheduler = Scheduler.new()
+		local parent = InstanceModule.NewBase("Folder", "Pai")
+
+		local resolvedNaturally = false
+		local handle = scheduler:Spawn(function()
+			parent:WaitForChild("Alvo", 10)
+			resolvedNaturally = true
+		end)
+
+		assert(
+			coroutine.status(handle) == "suspended",
+			"esperava a thread presa no ramo gerido (B) de WaitForChild sob o Scheduler"
+		)
+
+		-- Registra uma SEGUNDA limpeza na mesma thread, DEPOIS da que WaitForChild já registrou
+		-- internamente (RunCleanups roda na ordem de registro -- ver ThreadBroker.luau). Quando
+		-- Scheduler:Cancel chamar RunCleanups, a limpeza de Instance.luau (desconectar a
+		-- Connection de ChildAdded) roda PRIMEIRO; só depois roda este probe. Nesse instante
+		-- exato a coroutine ainda está "suspended" (Cancel só fecha com coroutine.close DEPOIS
+		-- de RunCleanups retornar) e ThreadBroker já não tem mais driver para `handle` (Release
+		-- roda antes de RunCleanups em Cancel) -- então, SE a Connection interna ainda estivesse
+		-- conectada, criar aqui um filho chamado "Alvo" a encontraria viva e
+		-- ThreadBroker.Resume cairia no fallback standalone (coroutine ainda suspensa ->
+		-- coroutine.resume cru), resumindo `handle` de verdade e virando
+		-- `resolvedNaturally = true`. Se a Connection já foi desconectada (comportamento
+		-- corrigido por esta tarefa), este ChildAdded não encontra mais ninguém e nada acontece.
+		local probeRanDuringCancel = false
+		ThreadBroker.RegisterCleanup(handle, function()
+			probeRanDuringCancel = true
+			local phantom = InstanceModule.NewBase("Folder", "Alvo")
+			phantom.Parent = parent
+		end)
+
+		scheduler:Cancel(handle)
+
+		assert(probeRanDuringCancel, "a limpeza de instrumentação deveria ter rodado dentro de Scheduler:Cancel")
+		assert(
+			not resolvedNaturally,
+			"a Connection de ChildAdded criada por WaitForChild deveria ter sido desconectada pelo cleanup que Instance.luau registra (roda ANTES deste probe, mesma ordem de RegisterCleanup) -- se ainda estivesse conectada, o ChildAdded disparado pelo probe (coroutine ainda 'suspended', antes de coroutine.close) teria resumido a thread de verdade"
+		)
+		assert(coroutine.status(handle) == "dead", "após Cancel, a coroutine deveria estar fechada (dead)")
+	end
+)
 
 test("ClearAllChildren destrói todos os filhos (como Destroy em cada um)", function()
 	local parent = InstanceModule.NewBase("Folder", "Pai")

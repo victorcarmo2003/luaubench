@@ -5,7 +5,7 @@
     "review",
     "done"
   ],
-  "updatedAt": "2026-09-04",
+  "updatedAt": "2026-09-05",
   "tasks": [
     {
       "id": "task-runtime-001",
@@ -406,7 +406,7 @@
       "column": "todo",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
-      "wave": 7,
+      "wave": 8,
       "tags": [
         "runtime",
         "core",
@@ -419,9 +419,10 @@
       "acceptance": "Instância COM schema: ler nome fora do schema erra e a mensagem contém 'is not a valid member of'; escrever nome fora do schema erra; escrever propriedade somente-leitura erra com a string confirmada 'Unable to assign property X. Property is read only'; ler propriedade do schema cujo default é nil devolve nil SEM errar (é o caso que motivou o schema — teste obrigatório); defaults do schema são semeados sem disparar Changed. Instância SEM schema (NewBase direto): comportamento idêntico ao de hoje, todos os specs anteriores intactos. Regressão total: Signal, Instance, Scheduler, Integration, Sandbox, ClassRegistry, mais o spec da primeira classe real de services. luau-lsp limpo; zero 'any'. Comentários de divergência que task-runtime-016 deixou nos fallbacks são REMOVIDOS ou reescritos aqui — não podem ficar descrevendo uma divergência que deixou de existir.",
       "depends": [
         "task-runtime-016",
-        "task-runtime-017"
+        "task-runtime-017",
+        "task-runtime-021"
       ],
-      "note": "Deve entrar JUNTO com a primeira classe real de services (não antes): o modo estrito precisa nascer com pelo menos uma classe que o exercite de ponta a ponta, senão é código sem consumidor. Enquanto isso a divergência fica declarada no código pelos comentários de task-runtime-016 — não é omissão silenciosa.",
+      "note": "AMPLIADA E REDECIDIDA PELO ARQUITETO EM 2026-09-05 — ler .claude/agents-memory/arquiteto-services-2026-09-05.md, seções 'Decisão 3', 'Decisão 4' e 'Decisão 6' ANTES de escrever qualquer linha; elas SUBSTITUEM o contrato provisório escrito na descrição acima. Quatro mudanças: (1) FORMATO FECHADO — PropertyDescriptor vira MemberDescriptor = {Kind: MemberKind, Default: unknown, ReadOnly: boolean} com export type MemberKind = 'Property' | 'Event' | 'Callback'; ClassDescriptor.Properties vira ClassDescriptor.Schema (coerente com ClassSchema/SetClassSchema). Kind existe porque os 1087 Event e 18 Callback do dump moram no mesmo espaço de nomes das Property mas se comportam diferente na escrita (evento erra com 'is an event of X and cannot be reassigned'; Callback como BindableFunction.OnInvoke é assinável por design). (2) BLOQUEIO NOVO — depends task-runtime-021: ligar o modo estrito sem a resolução de filho por nome transforma 'ReplicatedStorage.Modules' (o padrão mais frequente do ecossistema) de nil silencioso em ERRO barulhento em código válido. revisor-runtime REPROVA esta tarefa se task-runtime-021 não estiver done. A ordem final de __index/__newindex está escrita na Decisão 4 do desenho — seguir literalmente. (3) ClassRegistry.new passa a criar um Signal.new() FRESCO POR INSTÂNCIA para cada entrada com Kind == 'Event', no mesmo passo em que semeia os defaults (um Signal é por instância e não pode vir do Default, que é compartilhado numa tabela congelada por classe). (4) GetPropertyRaw/SetPropertyRaw NUNCA consultam o schema (via de engenharia, abaixo do enforcement — é o que permite services instalar o Heartbeat do Scheduler sobre uma entrada ReadOnly e cli guardar Script.Source, que é PluginSecurity e fica fora do schema); e SetClassSchema NÃO rejeita colisão com a superfície fixa de Instance, diferente de SetClassMethods (o schema de Instance legitimamente contém Name/Parent/ClassName/Changed, tratados nos passos 1-2 antes do schema). Continua valendo: entra JUNTO com a primeira classe real de services (task-services-003), o modo leniente permanece para NewBase direto e para a raiz do DataModel, e init.luau NÃO reexporta SetClassSchema.",
       "createdAt": "2026-09-04",
       "updatedAt": "2026-09-04"
     },
@@ -429,7 +430,7 @@
       "id": "task-runtime-020",
       "title": "Fechar o vazamento real: Instance.luau e Signal.luau chamando ThreadBroker.RegisterCleanup",
       "description": "A infraestrutura de limpeza (ThreadBroker.RegisterCleanup/RunCleanups, Scheduler:Cancel chamando RunCleanups) ja existe e esta testada (task-runtime-011), mas os dois pontos de producao que de fato vazam ficaram fora do territorio daquela tarefa. Contexto completo em .claude/agents-memory/ (relatorio do coder de task-runtime-011, secao PENDENCIA DECLARADA nos cabecalhos de ThreadBroker.luau e Scheduler.luau). Escopo: (1) Instance.luau, ramo B (gerido) de WaitForChild com timeout: logo apos criar a Connection de data.childAdded:Connect, chamar ThreadBroker.RegisterCleanup(coroutine.running(), function() connection:Disconnect() end). (2) Signal.luau, Wait(): em torno do listener interno criado via connect(listeners, ..., true) (o Once que Wait usa por baixo), registrar a mesma limpeza -- mas SEM importar ThreadBroker.luau em Signal.luau (Signal.luau nao deve ganhar dependencia nova de modulo do runtime; usar o mesmo padrao de deteccao opcional que Wait ja usa hoje via table de fallback, ou expor um hook fraco -- decidir a forma mais simples que nao viole a regra de Signal.luau ficar sem dependencia de Scheduler/ThreadBroker; se nao houver jeito limpo, reportar ao arquiteto em vez de forcar). (3) Teste reproduzindo cancelamento de verdade: task.spawn real chamando Instance:WaitForChild(nome, timeout) sob um Scheduler:Run() de verdade, cancelado no meio via Scheduler:Cancel(handle), confirmando que a Connection de childAdded foi desconectada (contagem de listeners cai a zero) -- e o mesmo para uma thread parada em Signal:Wait() cancelada no meio. Regressao total obrigatoria (Signal/Instance/Scheduler/ThreadBroker/ClassRegistry/DataModel/Sandbox/Integration) sem alterar nenhum arquivo alem do escopo desta tarefa.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 6,
@@ -446,6 +447,194 @@
       "depends": [
         "task-runtime-011"
       ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": "Instance.luau (WaitForChild ramo B) e Signal.luau (Wait, listener interno) agora chamam ThreadBroker.RegisterCleanup/desregistram idempotentemente. Signal.luau ja importava ThreadBroker desde o patch 008, entao nao e dependencia nova. Signal 7/7, Instance 34/34, regressao total intacta (Scheduler 16/16, Integration 9/9, Sandbox 7/7, ClassRegistry 17/17, DataModel 9/9, init 3/3). Testes provam desconexao real (nao so ausencia de erro) via segundo probe registrado como cleanup.",
+      "reviewResult": "APROVADO. Revisor reproduziu cancelamento real (task.spawn + Scheduler:Cancel) confirmando desconexao no momento exato; confirmou determinismo da tecnica de probe lendo RunCleanups; confirmou idempotencia sob cancel duplo/pos-resolucao (13/13 cenarios ad-hoc); confirmou decisao de reaproveitar import existente de ThreadBroker em Signal.luau como tecnicamente correta (a premissa da descricao da task de que seria dependencia nova estava desatualizada -- Signal ja importava ThreadBroker desde task-008). Regressao exata nos 8 arquivos. Fecha a saga 008->011->020."
+    },
+    {
+      "id": "task-runtime-021",
+      "title": "__index/__newindex resolvem filho por nome (ReplicatedStorage.Modules)",
+      "description": "Achado do arquiteto ao desenhar services (2026-09-05) — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Decisão 4 — Como task-runtime-018 entra, e o buraco que ela abriria sozinha' INTEIRA antes de escrever qualquer linha. Contexto: InstanceMeta.__index (Instance.luau:493-539) resolve ClassName/Name/Parent -> sinais fixos -> métodos base -> métodos de classe -> data.properties[key]. NÃO existe nenhuma busca entre os filhos. No Roblox real, acesso a membro que não é membro da classe resolve para um FILHO de mesmo nome — 'ReplicatedStorage.Modules.Combat' é o padrão mais frequente do ecossistema Roblox inteiro. Hoje o LuauBench devolve nil (divergência silenciosa já ruim); com o modo estrito de task-runtime-018 ligado ANTES desta correção, viraria erro barulhento em código perfeitamente válido — regressão, não avanço. Por isso esta tarefa PRECEDE task-runtime-018. Escopo: src/runtime/Instance.luau + src/runtime/Instance.spec.luau, nenhum outro arquivo. (1) __index ganha um passo NOVO, imediatamente antes do fallback final: se a chave não foi resolvida como campo fixo/sinal/método base/método de classe/propriedade, procurar um filho direto de mesmo nome (equivalente a FindFirstChild(key) NÃO recursivo) e devolvê-lo se existir. Membro VENCE filho: a busca por filho vem DEPOIS de data.properties[key] ~= nil. (2) A ordem exata está escrita na Decisão 4 do desenho (passos 1..8) — implementar os passos que existem hoje (1..4, 6, 7 e o fallback leniente do 8); os passos 5 e 8-estrito são de task-runtime-018 e NÃO entram aqui. (3) __newindex NÃO ganha comportamento novo nesta tarefa (escrever sobre nome que é filho continua caindo no fallback leniente de hoje) — o erro correto para esse caso depende do schema e entra em 018; registrar isso em comentário. (4) HIPÓTESE NÃO CONFIRMADA, mesmo protocolo de task-runtime-002: a ordem 'membro vence filho' e o comportamento em colisão (workspace.Name havendo um filho chamado Name) NÃO foram confirmados contra o Roblox real nesta sessão — gravar comentário explícito no ponto exato do código dizendo que é hipótese, citando a tarefa de pesquisa task-services-006. revisor-runtime REPROVA se esse comentário não estiver presente. (5) Custo de performance: FindFirstChild é linear sobre children a cada miss de membro. Aceito nesta fase; se aparecer gargalo real, um índice por nome é tarefa própria — registrar a nota no código, não otimizar agora.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 7,
+      "tags": [
+        "runtime",
+        "core",
+        "instance",
+        "fidelidade",
+        "hipotese-nao-confirmada",
+        "bloqueia-services"
+      ],
+      "priority": "high",
+      "acceptance": "parent.Filho devolve a Instance filha chamada 'Filho' (teste com hierarquia de 2 e de 3 níveis encadeados, ex. rs.Modules.Combat); propriedade de mesmo nome VENCE o filho (semear uma propriedade via SetPropertyRaw e criar um filho homônimo: a leitura devolve a propriedade); campo fixo vence filho (criar um filho chamado 'Name' e confirmar que instance.Name continua devolvendo o nome da própria instância, não o filho); método base vence filho (filho chamado 'Destroy' não esconde o método); nome sem membro e sem filho continua devolvendo nil (modo leniente intacto); remover o filho (Parent = nil) faz a leitura voltar a nil; Instance.spec.luau continua com os 33 testes existentes INTACTOS (só testes novos podem ser acrescentados — se algum dos 33 precisar mudar, o patch está errado, parar e voltar ao arquiteto); regressão total: Signal, Scheduler, Integration, Sandbox, ClassRegistry, DataModel, init sem alterar esses arquivos; luau-lsp analyze --platform=standard limpo; zero ocorrências de 'any'; comentário de hipótese não confirmada presente.",
+      "depends": [
+        "task-runtime-016"
+      ],
+      "note": "BLOQUEIA task-runtime-018 e, por consequência, a primeira leva de services. Nenhum outro agente pode tocar src/runtime/Instance.luau enquanto esta tarefa estiver in-progress. Roda em PARALELO com task-services-001/002 (territórios distintos).",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-runtime-022",
+      "title": "init.luau reexporta MemberKind/MemberDescriptor/ClassSchema e o tipo FireableSignal",
+      "description": "Consequência de contrato do desenho de services (.claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Contrato entre territórios', subseção 'runtime -> services'). Escopo: src/runtime/init.luau + src/runtime/init.spec.luau, nenhum outro arquivo. (1) Reexportar os export type NOVOS que task-runtime-018 cria em Instance.luau: MemberKind, MemberDescriptor, ClassSchema. Sem eles, services não consegue declarar o tipo do schema que ele mesmo gera, e cairia em cast cego. (2) Reexportar o export type FireableSignal<T...> de Signal.luau — hoje init.luau só reexporta Signal<T...> (sem Fire). services PRECISA disparar eventos de classe concreta (ex.: Players.PlayerAdded) e alcança o sinal via Runtime.Instance.GetPropertyRaw(instance, 'PlayerAdded'), que devolve unknown; sem o tipo FireableSignal exportado, o estreitamento desse unknown seria um cast para um tipo que services teria de redeclarar à mão — divergência de tipo esperando para acontecer. Reexportar SÓ O TIPO: a função Signal.new já é exposta e continua sendo a única forma de criar. (3) NÃO reexportar Instance.SetClassSchema — mesma decisão e mesma razão de NewBase/SetClassChain/SetClassMethods, já registradas no cabeçalho de init.luau: ClassRegistry.new é o único chamador legítimo, na ordem que garante a validação. O cabeçalho de init.luau deve ganhar essa terceira entrada na lista de plumbing não exportado. (4) Atualizar o cabeçalho do arquivo citando o desenho de services como origem da mudança.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 9,
+      "tags": [
+        "runtime",
+        "core",
+        "public-api",
+        "bloqueia-services"
+      ],
+      "priority": "medium",
+      "acceptance": "require('../runtime') expõe os tipos MemberKind, MemberDescriptor, ClassSchema e FireableSignal<T...> — comprovado por um arquivo de teste em diretório irmão que os usa em anotação de tipo e analisa limpo com luau-lsp; SetClassSchema confirmadamente NÃO exposta (mesmo teste de vazamento que init.spec.luau já faz para NewBase/SetClassChain/SetClassMethods/ThreadBroker); init.spec.luau continua passando com os testes existentes intactos; regressão total dos 8 módulos; luau-lsp limpo; zero 'any'.",
+      "depends": [
+        "task-runtime-018"
+      ],
+      "note": "Pequena e mecânica, mas é dependência dura de task-services-001 (o ClassBuilder e o Types.luau de services declaram esses tipos). Não pode ser feita antes de task-runtime-018 porque os três tipos de schema ainda não existem.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-001",
+      "title": "Esqueleto de services: Types.luau, Context.luau, ClassBuilder.luau, init.luau",
+      "description": "Primeira tarefa do território services — LER .claude/agents-memory/arquiteto-services-2026-09-05.md INTEIRO antes de escrever qualquer linha (é o desenho completo; as seções 'Módulos', 'Contrato entre territórios' e 'Decisão 6' trazem as assinaturas exatas). Território: src/services/ e mais nada. Nenhuma classe real ainda — esta tarefa constrói o esqueleto contra o qual o gerador (task-services-002) vai emitir. (1) src/services/Types.luau — MÓDULO FOLHA, só tipos, existe para quebrar o ciclo generated/classes/X -> ClassBuilder -> generated/Index -> generated/classes/X. Exporta GeneratedClass = {ClassName, Superclass, IsService, IsAbstract, Schema: Runtime.ClassSchema, MethodNames: {string}}, Behavior = {Methods: {[string]: unknown}?, Initialize: ((Runtime.Instance) -> ())?} e BootstrapOptions = {scheduler: Runtime.Scheduler, dataModel: Runtime.DataModel}. (2) src/services/Context.luau — Set/GetScheduler/GetDataModel/IsSet. Existe porque o Initialize de uma classe só recebe `instance` e o RunService precisa alcançar o Scheduler. Get* erram com mensagem clara em português se Bootstrap não foi chamado. Mesma invariante documentada de ClassRegistry: um processo por execução, sem reset. REJEITADO explicitamente pelo arquiteto: popular o contexto por efeito colateral de require. (3) src/services/ClassBuilder.luau — ClassBuilder.Build(generated: Types.GeneratedClass, behavior: Types.Behavior?): Runtime.ClassDescriptor. Faz, nesta ordem: (a) VALIDA que toda chave de behavior.Methods existe em generated.MethodNames, erro alto no load em português (`método '{X}' não existe em '{Class}' segundo o Roblox API Dump {versão}`) — isto é a invariante 1 da regra 00 virando código verificável, não regra de revisão; (b) para cada nome em MethodNames SEM implementação, instala stub que erra `[LuauBench] {Class}:{Method}() exists in the Roblox API Dump but is not simulated by LuauBench yet` (regra 03: nunca stub silencioso, nunca nil); (c) table.freeze na tabela de métodos (exigência de SetClassMethods); (d) devolve o ClassDescriptor com ClassName/SuperClassName/IsAbstract/IsService/Methods/Schema/Initialize. (4) src/services/init.luau — Register() idempotente por guarda local (ClassRegistry.Register erra em duplicata e não tem reset), Bootstrap(options) = Register() + Context.Set(), IsKnownClass, IsSimulatedClass, GetDumpVersion, e new(className, name) com a família de três erros da 'Decisão 5' do desenho. NESTA TAREFA Register() ainda não registra nada (não há classe gerada) e new() opera só contra o manifesto quando ele existir — deixar o ponto de extensão pronto e testado com um GeneratedClass/Behavior FICTÍCIO montado no próprio spec, nunca com uma classe do dump inventada à mão. (5) Testes na mesma tarefa (src/services/*.spec.luau), rodáveis com `lune run`, mesmo padrão dos specs de runtime. REGRA DE IDIOMA DOS ERROS (seção 'Decisão 5' do desenho): erro com contraparte no Roblox real usa a família do Roblox, em inglês, sem prefixo; erro SEM contraparte real (só existe porque o LuauBench é incompleto) usa inglês COM prefixo [LuauBench]; erro de engenharia interna (uso errado da API por services/cli) continua em português.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 10,
+      "tags": [
+        "services",
+        "core",
+        "public-api",
+        "class-builder"
+      ],
+      "priority": "high",
+      "acceptance": "Types.luau não importa nada além de ../runtime e não tem lógica; Context erra claro quando consultado antes de Bootstrap; ClassBuilder.Build REJEITA com erro alto um Behavior cujo Methods declara um nome fora de MethodNames (teste obrigatório — é a invariante 1 da regra 00 sendo verificada mecanicamente); ClassBuilder.Build completa MethodNames sem implementação com stub que ERRA ao ser chamado, com a mensagem [LuauBench] exata (teste obrigatório: chamar o stub via pcall e casar a substring 'is not simulated by LuauBench yet'); a tabela de métodos devolvida está congelada; Register() é idempotente (chamar duas vezes não erra); Bootstrap seta o Context; services registra e instancia uma classe FICTÍCIA de teste de ponta a ponta via Runtime.ClassRegistry; nenhum arquivo fora de src/services/ tocado; --!strict, zero 'any', luau-lsp analyze --platform=standard limpo.",
+      "depends": [
+        "task-runtime-022"
+      ],
+      "note": "Pode ser despachada em PARALELO com task-runtime-018/022 se o contrato de tipos for tratado como congelado pelo desenho (mesmo precedente de task-runtime-001/002, decidido pelo usuário na leva do runtime) — nesse caso a integração real é reconciliada na revisão. Não pode rodar junto com nenhuma outra tarefa de coder-services: território único, mesmos arquivos.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-002",
+      "title": "Gerador dev-time: tools/api-dump.lock.json + tools/coverage.luau + tools/generate-services.luau",
+      "description": "O gerador que transforma o Roblox API Dump em .luau committado — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seções 'Decisão 1', 'Decisão 2', 'Decisão 3' e 'Módulos' INTEIRAS antes de escrever qualquer linha. Território: tools/generate-services.luau, tools/api-dump.lock.json, tools/coverage.luau e src/services/generated/ — mais nada. FATOS JÁ VERIFICADOS, não repesquisar: dump em https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/28360dea4b90b35dc3fe9f829baae64fb6c50e75/Full-API-Dump.json, 8006149 bytes, HTTP 200 pela URL fixada por SHA; raiz do JSON tem exatamente Classes/Enums/Version; Version == 1 é o esquema, não a versão do Roblox; 916 classes e 629 enums; toda classe tem Members/MemoryCategory/Name/Superclass e Tags só quando existe (ausente em 293/916); tags de classe: NotCreatable 553, NotReplicated 340, Service 334, Deprecated 48, NotBrowsable 31, PlayerReplicated 1, mais 15 tags-OBJETO (não-string) que precisam ser filtradas; Workspace.Superclass == 'WorldRoot' (não Instance, não Model) e StarterGui.Superclass == 'BasePlayerGui'; Lune 0.10.5 tem serde.decode('json', s), fs.readFile/writeFile/writeDir e net.request({url,method}).body como string; ler+decodificar o dump inteiro custa ~0,2s. (1) tools/api-dump.lock.json com os campos exatos da Decisão 2 do desenho (source/commit/robloxVersion/versionGuid/dumpSchemaVersion/url/sizeBytes/sha256/fetchedAt). (2) tools/coverage.luau — lista à mão das classes-alvo; a lista exata da primeira leva está na 'Decisão 5' do desenho (Instance, ReplicatedStorage, ServerStorage, ServerScriptService, ReplicatedFirst, StarterPack, Folder, StarterGui, StarterPlayer, StarterPlayerScripts, StarterCharacterScripts, LuaSourceContainer, BaseScript, Script, LocalScript, ModuleScript, Workspace, Lighting, RunService, Players). NÃO listar as superclasses (WorldRoot/Model/PVInstance/BasePlayerGui) — o fecho é calculado pelo gerador. (3) tools/generate-services.luau — script Lune executável por `lune run tools/generate-services`, NUNCA requerido por src/. Pipeline de 9 passos escrito na seção 'Módulos' do desenho. Pontos que o revisor cobra: baixa para .cache/api-dump/<commit>.json e VALIDA sizeBytes+sha256, abortando se divergir; ABORTA com erro claro se Version ~= 1; calcula o fecho de superclasses parando em 'Instance' e IGNORANDO a classe 'Object' (raiz real do dump é Object, Superclass '<<<ROOT>>>' — os membros de Object são DOBRADOS dentro do schema emitido de Instance, e o relatório lista os membros de Object/Instance que runtime/Instance.luau não cobre); filtra tags-objeto antes de tipar Tags como {string}; trata chave AUSENTE (não null) para Tags. (4) REGRA DE EMISSÃO DO SCHEMA — tabela exata na 'Decisão 3' do desenho, seguir literalmente: exclui se NotScriptable OU Security.Read ~= 'None' OU tag WriteOnly; ReadOnly = true se tag ReadOnly OU Security.Write ~= 'None'; Kind 'Event' sempre ReadOnly = true; Kind 'Callback' ReadOnly = false. Deprecated e Hidden ENTRAM no schema (princípio 'em dúvida, incluir' — schema restritivo demais quebra código válido com erro barulhento, que é muito pior que deixar passar um typo). (5) Default PARSEADO por ValueType.Category (nunca a string bruta): Primitive vira valor Luau real; Class vira nil sempre; Enum e DataType viram nil NESTA FASE (emitir a string mentiria: part.Shape == Enum.PartType.Block falharia) e entram na lista do relatório. (6) SAÍDA: src/services/generated/Manifest.luau (as 916, {Superclass, IsService, IsAbstract, Covered} + DumpCommit/DumpVersion), src/services/generated/classes/<X>.luau por classe do fecho (devolve Types.GeneratedClass E exporta o tipo Luau da classe, com unknown — nunca any — para ValueType não representável), src/services/generated/Index.luau com requires LITERAIS (o require do Lune resolve estaticamente, não há require dinâmico por string). Todo arquivo gerado abre com o cabeçalho 'ARQUIVO GERADO ... NÃO EDITAR À MÃO' + commit + versão + comando de regeração. (7) RELATÓRIO impresso ao fim: deprecated emitidas, defaults não representáveis por classe, membros de Object/Instance não cobertos por runtime/Instance.luau, classes puladas. (8) Adicionar .cache/ ao .gitignore. O Full-API-Dump.json NÃO é committado.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 11,
+      "tags": [
+        "services",
+        "gerador",
+        "api-dump",
+        "tooling"
+      ],
+      "priority": "high",
+      "acceptance": "`lune run tools/generate-services` roda de ponta a ponta e é IDEMPOTENTE (rodar duas vezes produz saída byte-a-byte idêntica — o revisor confere com git diff limpo na segunda execução); aborta com erro claro se o sha256/sizeBytes do dump baixado divergir do lock e se Version ~= 1; o fecho de superclasses puxa WorldRoot/Model/PVInstance a partir de Workspace e BasePlayerGui a partir de StarterGui SEM que estejam em coverage.luau (prova de que o fecho é calculado, não escrito à mão); Manifest.luau tem exatamente 916 entradas; todo arquivo gerado tem o cabeçalho com commit e versão; todo arquivo gerado é --!strict e analisa limpo no luau-lsp com zero 'any'; nenhuma propriedade NotScriptable ou com Security.Read ~= 'None' aparece em nenhum schema emitido (o revisor amostra e confere contra o dump real); Script.Source confirmadamente FORA do schema de Script (é PluginSecurity); o relatório é impresso e não vazio; nenhum arquivo fora de tools/ e src/services/generated/ é tocado; o dump não é committado e .cache/ está no .gitignore.",
+      "depends": [
+        "task-services-001"
+      ],
+      "note": "tools/ pertence a coder-services (o gerador é indivisível do território que produz) — coder-cli nunca escreve lá. Sequencial com as outras tarefas de services: mesmo território, mesmos arquivos.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-003",
+      "title": "Primeira leva de classes reais: contêineres da árvore Rojo + Scripts + Workspace + Lighting",
+      "description": "As primeiras classes de verdade registradas no ClassRegistry — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Decisão 5 — Escopo da primeira leva' antes de começar. Território: src/services/behavior/ + src/services/init.luau + specs, mais nada (o dado gerado já veio de task-services-002 e NÃO pode ser editado à mão). Classes desta tarefa: Instance (abstrata, só schema — é ela que fornece Archivable e o resto dos membros de Object/Instance ao achatamento; sem ela o modo estrito erraria em membro válido), ReplicatedStorage, ServerStorage, ServerScriptService, ReplicatedFirst, StarterPack, Folder, StarterGui (+ BasePlayerGui), StarterPlayer (+ StarterPlayerScripts, StarterCharacterScripts), LuaSourceContainer/BaseScript/Script/LocalScript/ModuleScript, Workspace (+ WorldRoot, Model, PVInstance), Lighting. (1) src/services/behavior/Index.luau — mapa ClassName -> Behavior, escrito À MÃO de propósito (é a lista curada do que tem comportamento; o gerador nunca deve poder apagá-la). (2) A maioria dessas classes NÃO tem comportamento nenhum: são contêineres puros (ReplicatedStorage tem Members == [] no dump, verificado). Para elas, Behavior ausente — o ClassBuilder já preenche os MethodNames com stub-que-erra. Escrever comportamento à mão SÓ onde o resultado correto é trivialmente derivável de um mundo sem render/física/jogadores; nos demais, deixar o stub. (3) StarterPlayer nasce com os filhos StarterPlayerScripts e StarterCharacterScripts (comportamento no Initialize — criar filho e setar o Parent DELE para self é legítimo; o que o contrato proíbe é o Initialize setar o Parent da PRÓPRIA instância). (4) DIVERGÊNCIAS OBRIGATÓRIAS de documentar no código, listadas na seção 'Fidelidade vs. pragmatismo' do desenho: Workspace.Terrain e Workspace.CurrentCamera ficam nil (Terrain puxaria BasePart inteira; Camera fica para a leva de render); Lighting guarda e devolve todas as propriedades e NÃO renderiza nada — Lighting.Ambient = x é dado morto; Default de ValueType Enum/DataType é nil nesta fase (part.Size devolve nil, não Vector3.new(4,1,2)). (5) Script.Source está FORA do schema (é PluginSecurity no dump) — fiel ao Roblox, onde um script comum não lê Source. Documentar que cli grava/lê por Runtime.Instance.SetPropertyRaw/GetPropertyRaw, que não passam pelo schema. (6) Services.Register() passa a registrar de verdade, iterando generated/Index.luau e cruzando com behavior/Index.luau via ClassBuilder.Build. (7) TESTES na mesma tarefa, cobrindo por classe (regra 03 exige): instanciação via game:GetService, ao menos uma propriedade lida com o Default correto do dump e uma escrita, e o modo estrito funcionando (ler nome fora do schema ERRA; ler propriedade do schema cujo default é nil devolve nil SEM errar). Mais o teste que fecha o buraco do arquiteto: rs.Modules.Combat com Folders reais parenteados resolve por task-runtime-021.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 12,
+      "tags": [
+        "services",
+        "classes",
+        "containers",
+        "fidelidade"
+      ],
+      "priority": "high",
+      "acceptance": "game:GetService('ReplicatedStorage') devolve um singleton com ClassName correto, parenteado sob a raiz, e a segunda chamada devolve o MESMO objeto; Instance.new('Folder') funciona e Instance.new('Workspace') ERRA (NotCreatable); um Folder parenteado em ReplicatedStorage é alcançável por rs.NomeDoFolder e encadeado em 2 níveis; ler um nome que a classe não declara ERRA com 'is not a valid member of' (modo estrito ativo); ler uma propriedade do schema cujo default é nil devolve nil SEM errar (o caso que motivou o schema); escrever propriedade ReadOnly erra com a string confirmada 'Unable to assign property X. Property is read only'; chamar um método sem implementação erra com a mensagem [LuauBench]; StarterPlayer nasce com os dois filhos; nenhum arquivo em src/services/generated/ foi editado à mão (o revisor confere com git diff); regressão total do runtime intacta; --!strict, zero 'any', luau-lsp limpo; toda divergência da lista (4) documentada em comentário no código E no relatório do agente.",
+      "depends": [
+        "task-services-002",
+        "task-runtime-018"
+      ],
+      "note": "É a tarefa que exercita task-runtime-018 de ponta a ponta — a nota original de 018 ('deve entrar JUNTO com a primeira classe real de services') se refere exatamente a esta. Sequencial com as demais tarefas de coder-services.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-004",
+      "title": "RunService e Players: as duas classes com comportamento real da primeira leva",
+      "description": "As duas classes mais usadas do recon do testador depois de ReplicatedStorage — RunService (196 usos) e Players (154) — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seções 'Decisão 5' e 'Fidelidade vs. pragmatismo'. Território: src/services/behavior/RunService.luau, src/services/behavior/Players.luau, src/services/behavior/Index.luau e specs. (1) RunService: Heartbeat e Stepped são ligados ao Signal REAL do Scheduler (a MESMA instância, sem proxy nem reemissão — evita qualquer dessincronia), instalados no Initialize via Runtime.Instance.SetPropertyRaw sobre a entrada do schema, alcançando o scheduler por Context.GetScheduler(). RenderStepped EXISTE no schema e NUNCA dispara — aliasar para Heartbeat foi explicitamente REJEITADO pelo arquiteto (fabricaria frames de render inexistentes e faria código de render rodar à toa); comentar isso no ponto exato. IsServer() -> true, IsClient() -> false, IsStudio() -> false, IsRunning() -> true: o LuauBench se apresenta como SERVIDOR RODANDO, escolha deliberada porque o uso medido é dominado por lógica de servidor (ProfileStore, DataStore); um flag --client é tarefa futura, nunca implícito aqui. Os demais métodos do dump (BindToRenderStep, Pause, Run, Set3dRenderingEnabled, ...) ficam com o stub-que-erra do ClassBuilder. (2) Players: comportamento MÍNIMO e honesto — GetPlayers() devolve {}, LocalPlayer é nil, GetPlayerByUserId/GetPlayerFromCharacter devolvem nil, PlayerAdded/PlayerRemoving existem e NUNCA disparam. Isto NÃO é stub: é o resultado correto de um mundo sem jogadores, e é por isso que esses métodos são implementados de verdade em vez de errarem. A classe Player NÃO entra nesta leva. Documentar a divergência com clareza (um jogo real espera PlayerAdded; aqui ele nunca vem). (3) services dispara evento de classe via Runtime.Instance.GetPropertyRaw(instance, 'NomeDoEvento') estreitado para Runtime.FireableSignal<...> — o tipo é reexportado por task-runtime-022 exatamente para isso; nunca redeclarar o tipo à mão. (4) Testes: Heartbeat conectado num RunService obtido por GetService dispara quando o Scheduler dá StepOnce (prova de que é o MESMO Signal); RenderStepped conectado nunca dispara sob N StepOnce; IsServer/IsClient batem; Players.GetPlayers() devolve tabela vazia e PlayerAdded é conectável sem erro; escrever sobre Heartbeat ERRA com a mensagem de evento.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 13,
+      "tags": [
+        "services",
+        "classes",
+        "runservice",
+        "players",
+        "scheduler"
+      ],
+      "priority": "high",
+      "acceptance": "RunService.Heartbeat é rawequal ao scheduler.Heartbeat (mesma instância, não um proxy) — teste explícito; conectar em Heartbeat e chamar StepOnce dispara o callback com deltaTime; RenderStepped conectado não dispara em nenhum StepOnce; IsServer()==true, IsClient()==false, IsStudio()==false; Players:GetPlayers() devolve {} e LocalPlayer é nil sem erro; PlayerAdded é conectável; atribuir sobre Heartbeat erra com 'is an event of RunService and cannot be reassigned'; chamar RunService:BindToRenderStep erra com a mensagem [LuauBench]; regressão total (runtime + task-services-003) intacta; --!strict, zero 'any', luau-lsp limpo; a decisão 'LuauBench é servidor' e a de RenderStepped-nunca-dispara documentadas em comentário E no relatório.",
+      "depends": [
+        "task-services-003"
+      ],
+      "note": "Sequencial com as demais tarefas de coder-services. Depois desta, o cenário tests/scenarios/scheduler-multi-script-concurrency deveria poder usar RunService de verdade — vale disparar o testador em paralelo com o revisor.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-005",
+      "title": "Services.new: a família de três erros de classe e o Instance.new do sandbox",
+      "description": "Fecha o contrato de services com cli — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Decisão 5', subseção 'Manifesto completo — as outras 894', e a seção 'Contrato entre territórios'. Território: src/services/init.luau + specs. O ponto desta tarefa é que É AQUI, e não em runtime, que 'não existe no Roblox' deixa de ser indistinguível de 'existe no Roblox e ainda não simulado' — runtime só sabe dizer 'classe não registrada' (ClassRegistry.new), o que confunde um typo com uma lacuna de cobertura. (1) Services.new(className, name) consulta generated/Manifest.luau (as 916) e produz TRÊS erros distintos: (a) className AUSENTE do manifesto -> `Unable to create an Instance of type \"{X}\"` — família Roblox, em inglês, sem prefixo, mas com comentário no código dizendo que a string real NÃO foi confirmada (aproximação de boa-fé, pendência de task-services-006); (b) className no manifesto com IsAbstract == true -> a MESMA mensagem, que é o que o Roblox real faz para classe NotCreatable; (c) className no manifesto, não abstrata, mas Covered == false -> `[LuauBench] {X} exists in the Roblox API Dump ({versão}) but is not simulated by LuauBench yet` — prefixo [LuauBench] obrigatório porque este erro NÃO tem contraparte no Roblox real (lá a classe funciona); ele só existe porque o LuauBench é incompleto, e nunca pode ser confundido com uma mensagem do motor. (2) Services.IsKnownClass / IsSimulatedClass / GetDumpVersion. (3) Documentar no cabeçalho de init.luau a SEQUÊNCIA DE BOOTSTRAP que cli deve seguir (os 8 passos da seção 'Quem chama primeiro' do desenho), incluindo que Services.Bootstrap vem ANTES de qualquer GetService e que cli injeta extraGlobals.Instance = { new = Services.new }. (4) Documentar que cli NUNCA requer src/services/generated/** nem src/services/behavior/** — só require('../services'). (5) Testes cobrindo os três erros por pcall + casamento de substring, e um teste de fumaça da sequência de bootstrap completa (Runtime.DataModel.new -> Services.Bootstrap -> GetService -> Instance.new dentro de um Sandbox.Run real com Instance.new injetado em extraGlobals, confirmando que o script do usuário cria uma Folder e a parenteia).",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 14,
+      "tags": [
+        "services",
+        "public-api",
+        "erros",
+        "cobertura"
+      ],
+      "priority": "high",
+      "acceptance": "Instance.new('Frmae') (fora do dump) erra com a família Roblox e SEM prefixo [LuauBench]; Instance.new('Workspace') (NotCreatable) erra com a mesma família; Instance.new('Frame') (no dump, não coberta) erra COM o prefixo [LuauBench] e a mensagem cita a versão do dump; Instance.new('Folder') funciona; os três casos são distinguíveis por substring num pcall (teste obrigatório para os três); IsKnownClass('Frame')==true e IsSimulatedClass('Frame')==false; GetDumpVersion devolve o commit e a versão do lock; teste de fumaça do bootstrap completo passa com um Sandbox.Run real; a sequência de bootstrap está documentada no cabeçalho de init.luau; --!strict, zero 'any', luau-lsp limpo.",
+      "depends": [
+        "task-services-003"
+      ],
+      "note": "Sequencial com as demais tarefas de coder-services. É o que desbloqueia coder-cli — depois desta, cli tem tudo que precisa de services para montar a árvore do .project.json.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-006",
+      "title": "Confirmar contra o Roblox real: membro vs. filho no __index, Instance.new de classe inválida, Hidden, Source, RenderStepped",
+      "description": "Quatro pendências abertas pelo arquiteto em .claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Pendências para o pesquisador'. NÃO bloqueia o início de nenhuma tarefa — roda em PARALELO com task-runtime-021 e com as tarefas de services —, mas todas precisam estar respondidas antes de revisor-services aprovar a primeira leva. (1) ORDEM MEMBRO VS. FILHO: no Roblox real, `instance.Foo` resolve para um FILHO chamado Foo quando Foo não é membro da classe — confirmar. E em colisão: havendo um filho chamado 'Name', `workspace.Name` devolve a propriedade ou o filho? A hipótese implementada em task-runtime-021 é 'membro sempre vence filho, FindFirstChild é a saída para o filho'. Confirmar também o que acontece ao ESCREVER num nome que é filho (`rs.Modules = 1`): erra, cria propriedade, ou substitui? (2) STRING EXATA de Instance.new para classe que não existe ('Instance.new(\"Frmae\")') e para classe NotCreatable ('Instance.new(\"Workspace\")') — a aproximação usada é `Unable to create an Instance of type \"X\"`, não confirmada. São a mesma mensagem nos dois casos? (3) Propriedade com tag `Hidden` no dump mas SEM `NotScriptable`: é acessível por um Script comum? A leitura assumida pelo gerador é que Hidden esconde do Property window do Studio, não do script — se estiver errado, 926 propriedades entram no schema indevidamente. (4) `script.Source` lido de um Script comum (Source é PluginSecurity no dump): erra com 'is not a valid member of', erra com mensagem de identidade/capability, ou devolve string vazia? E `RunService.RenderStepped` no SERVIDOR real: o membro existe, erra ao conectar, ou existe e nunca dispara? Devolver fatos com fonte (documentação oficial da Roblox e/ou o Full-API-Dump.json do commit 28360dea), marcando explicitamente o que ficar NÃO CONFIRMADO em vez de preencher com suposição, e salvar em .claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md. NÃO implementar nada — o resultado volta ao arquiteto se alguma resposta contradisser o desenho.",
+      "column": "in-progress",
+      "agent": "pesquisador",
+      "reviewer": "revisor-services",
+      "wave": 7,
+      "tags": [
+        "services",
+        "runtime",
+        "pesquisa",
+        "fidelidade",
+        "roblox-api"
+      ],
+      "priority": "medium",
+      "acceptance": "As quatro perguntas respondidas com fonte citada (URL/arquivo/trecho real), marcando explicitamente o que ficou não confirmado; relatório salvo no caminho indicado; recomendação clara de se alguma nota de fidelidade ou alguma regra de emissão do gerador precisa mudar — em especial se a hipótese 'membro vence filho' de task-runtime-021 ou a inclusão de Hidden no schema estiverem erradas.",
+      "depends": [],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }

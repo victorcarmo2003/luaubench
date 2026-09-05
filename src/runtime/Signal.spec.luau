@@ -11,6 +11,14 @@
 
 local process = require("@lune/process")
 local Signal = require("./Signal")
+local Scheduler = require("./Scheduler")
+-- Módulo-folha interno do território (ver ThreadBroker.luau) -- não faz parte da API pública
+-- reexportada por init.luau para services/cli, mas este é um teste de caixa-branca DENTRO do
+-- próprio território runtime (mesmo padrão já usado em Integration.spec.luau/task-runtime-012):
+-- precisa registrar uma segunda limpeza na MESMA thread para provar, de forma determinística,
+-- que o listener interno de Wait() já foi desconectado ANTES dela rodar (ver teste de
+-- cancelamento abaixo, task-runtime-020).
+local ThreadBroker = require("./ThreadBroker")
 
 -- Roda cada teste imediatamente (em vez de registrar e rodar via pcall depois): o stub de
 -- tipo do `pcall` do Luau não modela o valor de erro quando a função protegida retorna `()`
@@ -148,6 +156,45 @@ test("Wait() bloqueia a coroutine chamadora até o próximo Fire e retorna os ar
 	assert(resultA == 7, "Wait() deveria devolver o primeiro argumento do Fire")
 	assert(resultB == "acordou", "Wait() deveria devolver o segundo argumento do Fire")
 	assert(coroutine.status(waiter) == "dead", "coroutine deveria ter terminado após Wait() retornar")
+end)
+
+test("Cancelar uma thread real parada em Signal:Wait() desconecta o listener interno no momento do Cancel (task-runtime-020)", function()
+	local scheduler = Scheduler.new()
+	local signal: Signal.FireableSignal<number> = Signal.new()
+
+	local resolvedNaturally = false
+	local handle = scheduler:Spawn(function()
+		signal:Wait()
+		resolvedNaturally = true
+	end)
+
+	assert(coroutine.status(handle) == "suspended", "esperava a thread presa em Signal:Wait() sob o Scheduler")
+
+	-- Registra uma SEGUNDA limpeza na mesma thread, DEPOIS da que Signal.luau já registrou
+	-- dentro de Wait() (RunCleanups roda na ordem de registro -- ver ThreadBroker.luau). Quando
+	-- Scheduler:Cancel chamar RunCleanups, a limpeza de Signal.luau (desconectar o listener
+	-- interno) roda PRIMEIRO; só depois roda este probe. Nesse instante exato a coroutine ainda
+	-- está "suspended" (Cancel só fecha com coroutine.close DEPOIS de RunCleanups retornar) e
+	-- ThreadBroker já não tem mais driver para `handle` (Release roda antes de RunCleanups em
+	-- Cancel) -- então, SE o listener interno de Wait() ainda estivesse conectado, este Fire o
+	-- encontraria vivo e ThreadBroker.Resume cairia no fallback standalone (coroutine ainda
+	-- suspensa -> coroutine.resume cru), resumindo `handle` de verdade e virando
+	-- `resolvedNaturally = true`. Se o listener já foi desconectado (comportamento corrigido por
+	-- esta tarefa), este Fire não encontra mais ninguém e nada acontece.
+	local probeRanDuringCancel = false
+	ThreadBroker.RegisterCleanup(handle, function()
+		probeRanDuringCancel = true
+		signal:Fire(99)
+	end)
+
+	scheduler:Cancel(handle)
+
+	assert(probeRanDuringCancel, "a limpeza de instrumentação deveria ter rodado dentro de Scheduler:Cancel")
+	assert(
+		not resolvedNaturally,
+		"o listener interno de Signal:Wait() deveria ter sido desconectado pelo cleanup que Signal.luau registra (roda ANTES deste probe, mesma ordem de RegisterCleanup) -- se ainda estivesse conectado, o Fire disparado pelo probe (coroutine ainda 'suspended', antes de coroutine.close) teria resumido a thread de verdade"
+	)
+	assert(coroutine.status(handle) == "dead", "após Cancel, a coroutine deveria estar fechada (dead)")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

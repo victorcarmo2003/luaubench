@@ -13,6 +13,15 @@
 	precisava de um jeito de retomar a thread chamadora pelo ponto único de resume do driver
 	que a gerir (sem importar Scheduler.luau diretamente, o que criaria ciclo de require), e
 	ThreadBroker é esse canal por identidade de thread.
+
+	task-runtime-020 (fecha a PENDÊNCIA DECLARADA por task-runtime-011 em ThreadBroker.luau/
+	Scheduler.luau): Wait() também chama ThreadBroker.RegisterCleanup para desconectar o
+	próprio listener interno se a thread chamadora for cancelada (Scheduler:Cancel) antes do
+	próximo Fire — sem isso o listener ficava pendurado em `listeners` para sempre. Isto NÃO é
+	uma dependência nova: este módulo já importa ThreadBroker.luau (linha 18) desde a revisão
+	acima só para `ThreadBroker.Resume`; `RegisterCleanup` usa o mesmo require. O invariante de
+	módulo-folha original mirava dependência de Scheduler/Instance (que criaria ciclo ou
+	acoplaria Signal a um driver concreto), não outro módulo-folha como ThreadBroker.
 ]]
 
 local ThreadBroker = require("./ThreadBroker")
@@ -95,9 +104,45 @@ function Signal.new<T...>(): FireableSignal<T...>
 		-- cru — mesmo comportamento de hoje.
 		Wait = function(_self: Signal<T...>): T...
 			local co = coroutine.running()
-			connect(listeners, function(...: T...)
+			local unregisterCleanup: (() -> ())? = nil
+			local listener = connect(listeners, function(...: T...)
+				-- task-runtime-020: se o Fire chegou a disparar este listener antes de
+				-- qualquer cancelamento, desfaz o próprio registro de limpeza no ThreadBroker
+				-- ANTES de retomar -- sem isto, uma thread que chama Wait() em laço (ex.:
+				-- Instance:WaitForChild ramo A, "while true do data.childAdded:Wait() end")
+				-- acumularia uma entrada morta em ThreadBroker.cleanups[co] por iteração,
+				-- nunca liberada até a thread morrer de vez (ver ThreadBroker.RegisterCleanup:
+				-- o desregistro devolvido é idempotente, feito exatamente para este uso).
+				if unregisterCleanup ~= nil then
+					unregisterCleanup()
+				end
 				ThreadBroker.Resume(co, table.pack(...) :: ThreadBroker.PackedArgs)
 			end, true)
+			-- task-runtime-020 (vazamento real fechado aqui, ver PENDÊNCIA DECLARADA em
+			-- ThreadBroker.luau/Scheduler.luau deixada por task-runtime-011): se esta thread
+			-- for cancelada (Scheduler:Cancel) enquanto ainda presa neste Wait(), o listener
+			-- acima nunca dispara -- sem este registro ele ficaria pendurado em `listeners`
+			-- para sempre. RunCleanups desconecta no MOMENTO do cancelamento, nunca espera
+			-- este Signal disparar de novo.
+			--
+			-- DECISÃO DE DEPENDÊNCIA (não é uma dependência nova de fato, é uma leitura
+			-- atualizada do desenho original): este módulo já importa ThreadBroker.luau desde
+			-- a "Revisão pós-integração 2026-09-04 -- contrato Wait/resume" (ver cabeçalho
+			-- deste arquivo e de ThreadBroker.luau), exatamente para rotear
+			-- `ThreadBroker.Resume` acima sem reintroduzir um require de Scheduler.luau (que
+			-- criaria ciclo). Chamar `ThreadBroker.RegisterCleanup` usa esse MESMO require já
+			-- existente -- não adiciona nenhuma aresta nova ao grafo de dependências do
+			-- território, e não recria o ciclo que a proibição original evitava (Signal ->
+			-- Scheduler): ThreadBroker.luau continua módulo-folha, sem importar nada (ver
+			-- ThreadBroker.luau, linhas 20-24, que já documenta "Signal.luau -> ThreadBroker"
+			-- como aresta aceita do grafo). O invariante "módulo-folha sem dependência de
+			-- outro módulo do runtime", tal como escrito originalmente, mirava a dependência
+			-- de Scheduler/Instance (que criaria ciclo ou acoplaria Signal a um driver
+			-- concreto) -- não outro módulo-folha como ThreadBroker, que foi desenhado
+			-- deliberadamente para ser a raiz da árvore no lugar deste arquivo.
+			unregisterCleanup = ThreadBroker.RegisterCleanup(co, function()
+				listener:Disconnect()
+			end)
 			return coroutine.yield()
 		end,
 

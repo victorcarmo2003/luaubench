@@ -434,8 +434,25 @@ function Methods.WaitForChild(self: Instance, name: string, timeout: number?): I
 			end
 			ThreadBroker.Resume(co, nil)
 		end)
+		-- task-runtime-020 (vazamento real fechado aqui, ver PENDÊNCIA DECLARADA em
+		-- ThreadBroker.luau/Scheduler.luau deixada por task-runtime-011): se esta thread for
+		-- cancelada (Scheduler:Cancel) enquanto ainda presa neste yield, a Connection acima
+		-- nunca dispara nem é desconectada pelos dois caminhos normais logo abaixo -- sem este
+		-- registro ela ficaria pendurada em `data.childAdded` para sempre. RunCleanups
+		-- desconecta no MOMENTO do cancelamento, nunca espera ChildAdded disparar de novo (e
+		-- nunca vai disparar por essa thread, já que Cancel fecha a coroutine em seguida).
+		local unregisterCleanup = ThreadBroker.RegisterCleanup(co, function()
+			connection:Disconnect()
+		end)
 		cancelDeadline = driver.WakeAfter(co, timeout :: number)
 		coroutine.yield()
+		-- Chegar aqui só é possível por resolução normal (match encontrado ou deadline
+		-- vencido, ambos abaixo) -- nunca via Cancel/RunCleanups, que fecha a coroutine sem
+		-- retomá-la. Desfaz o próprio registro de limpeza ANTES de qualquer Disconnect "pelo
+		-- caminho normal" logo abaixo -- evita um Disconnect duplicado (inofensivo, mas
+		-- redundante) se esta mesma thread terminar por outro caminho depois (ver
+		-- ThreadBroker.RegisterCleanup, desregistro idempotente feito exatamente para isto).
+		unregisterCleanup()
 		if not settled then
 			-- Quem acordou foi o deadline (WakeAfter), não o ChildAdded: desconecta a
 			-- conexão pendente, senão ela ficaria viva esperando um filho que já deixou de
