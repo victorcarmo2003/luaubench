@@ -1727,7 +1727,7 @@
       "id": "task-valuetypes-006",
       "title": "types/CFrame.luau",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. 180 referencias no dump (2o lugar). Depende de types/Vector3.luau (task-valuetypes-004). Assinaturas de .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md, que confirmou os SEIS overloads de CFrame.new (0/1/2/3/7/12 argumentos) com a ordem exata dos 12 componentes, mais lookAt/lookAlong/fromMatrix/fromAxisAngle/fromEulerAnglesXYZ/fromEulerAnglesYXZ/Angles/fromOrientation. Os 12 componentes sao float32. Operadores: CFrame*CFrame->CFrame, CFrame*Vector3->Vector3, CFrame+Vector3->CFrame, CFrame-Vector3->CFrame; CFrame+CFrame NAO existe (deixe o Luau errar sozinho). DIVERGENCIA D7 OBRIGATORIA no cabecalho: :Orthonormalize() e exposto como metodo explicito (existe no Roblox real), mas a re-ortonormalizacao IMPLICITA que o Roblox faz em alguns caminhos nao e reproduzida -- P1 nao foi confirmada. D1 tambem: componentes de entrada/saida sao f32 exatos, o caminho interno usa double, entao pode haver diferenca no ultimo ulp.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 41,
@@ -1740,7 +1740,8 @@
       "updatedAt": "2026-09-05",
       "depends": [
         "task-valuetypes-004"
-      ]
+      ],
+      "reviewResult": "APROVADO. 296/296 na suite completa do territorio, CFrame.spec 63/63, Catalog.spec 15/15 (teste de coerencia via fs.readDir confirma Simulated=true). Revisor reproduziu: 6 overloads de new, 4 operadores validos + 4 invalidos errando, round-trip Inverse/ToWorldSpace-ToObjectSpace, Lerp com prova numerica de slerp real (nao lerp linear ingenuo), ordem exata de GetComponents/tostring, Orthonormalize corrigindo matriz nao-ortonormal, fabrica unica confirmada, --strict zero any, territorio limpo, convencao right-handed/Y-up confirmada numericamente. 1 achado BAIXO nao bloqueante: comentario no cabecalho justifica nao implementar fromRotationBetweenVectors/Euler generico citando acoplamento com Enum como se fosse cross-territorio, mas Enum.luau ja existe no mesmo diretorio (mesma leva 40) -- decisao de escopo continua correta, so o texto do comentario ficou desatualizado. Relatorio: .claude/agents-memory/revisor-valuetypes-cframe-2026-09-05.md"
     },
     {
       "id": "task-valuetypes-007",
@@ -1937,7 +1938,7 @@
       "id": "task-services-017",
       "title": "coverage.luau + regeracao das 16 classes DataStore + datastore/Value.luau + datastore/Store.luau",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secoes L2.1.2 a L2.1.7. (1) Acrescentar a tools/coverage.luau: DataStoreService, GlobalDataStore, DataStore, OrderedDataStore, DataStoreKeyInfo, DataStoreSetOptions, DataStoreOptions, DataStoreGetOptions, DataStoreIncrementOptions, Pages, DataStorePages, DataStoreKeyPages, DataStoreListingPages, DataStoreVersionPages, DataStoreObjectVersionInfo, DataStoreInfo -- e rodar `lune run tools/generate-services`. NUNCA editar generated/ a mao. (2) src/services/datastore/Value.luau -- dado puro, SEM Instance, SEM I/O: validacao de chave (<= 50 chars), de nome de store/scope (<= 50), de tamanho do valor (<= 4194304 bytes) e de serializabilidade (recusa tabela com chave mista, funcao, Instance, thread, NaN, inf -- os mesmos limites da doc oficial), mais deep copy. A copia profunda e OBRIGATORIA na leitura E na escrita: no Roblox o valor e serializado, e sem copia o LuauBench criaria um alias silencioso que ESCONDE uma classe inteira de bug real. Mensagem de erro para valor nao serializavel: aproximacao de boa-fe na familia Roblox, comentada como tal (string exata NAO CONFIRMADA -- ver pendencia 2 de L2). (3) src/services/datastore/Store.luau -- o store em memoria, tambem sem Instance: (storeId, key) -> { value, version, createdTime, updatedTime, userIds, metadata, tombstone }, com versionamento e tombstone (RemoveAsync nao apaga: marca, e versoes antigas continuam legiveis). Persistencia em disco NAO entra nesta leva e services NUNCA chama @lune/fs -- o contrato de injecao (Types.DataStorePersistence) esta fechado em L2.1.2 para a leva futura.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 45,
@@ -2216,7 +2217,7 @@
       "id": "task-services-028",
       "title": "PESQUISA: as 6 pendencias abertas da leva 2 de services",
       "description": "Fecha a lista 'Pendencias para o pesquisador' de .claude/agents-memory/arquiteto-services-2026-09-05.md, secao L2 (final). Nenhuma bloqueia o inicio das tarefas; todas precisam de resposta antes de revisor-services aprovar a leva. (1) Formula numerica do budget de DataStore por tipo de requisicao, lida LINHA A LINHA do Markdown bruto oficial (https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/cloud-services/data-stores/error-codes-and-limits.md) -- dois fetches da mesma pagina divergiram na pesquisa anterior; so importa se um dia houver modo de throttle opt-in. (2) Mensagem de erro exata para valor nao serializavel em SetAsync/UpdateAsync (NaN, inf, funcao, Instance, tabela com chave mista). (3) RegisterCollisionGroup com nome ja registrado: erra ou e idempotente? Ha restricao cliente/servidor em RegisterCollisionGroup/CollisionGroupSetCollidable? (4) Lighting.ClockTime escrito fora de [0, 24): wrap, clamp ou erro? TimeOfDay lido tem zero-padding? (5) Texto verbatim do erro de HttpService com HTTP desabilitado, e do erro de SoundService:PlayLocalSound chamado no servidor -- este ultimo decide se a regra B.5.5 se aplica a PlayLocalSound. (6) GetGlobalDataStore() devolve ClassName 'GlobalDataStore' ou 'DataStore' no motor real? (O dump diz DataStore e o desenho segue o dump; confirmar.) Marcar NAO CONFIRMADO onde nao houver evidencia -- nunca preencher por inferencia.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "pesquisador",
       "reviewer": null,
       "wave": 45,

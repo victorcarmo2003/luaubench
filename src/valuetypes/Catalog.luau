@@ -102,7 +102,12 @@ local CATALOG: { CatalogEntry } = {
 	-- 23 nomes originais (ver cabeçalho, fonte: arquiteto-cli-2026-09-05.md, Decisão 12).
 	{ Name = "Axes", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "BrickColor", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "CFrame", Simulated = false, HasGlobalConstructor = true },
+	-- Simulated = true a partir de task-valuetypes-006: src/valuetypes/types/CFrame.luau existe e
+	-- implementa os 6 overloads de construtor, lookAt/lookAlong/fromMatrix/fromAxisAngle/
+	-- fromEulerAngles*/Angles/fromOrientation, propriedades vetoriais, GetComponents/Euler/
+	-- AxisAngle/ToWorldSpace/ToObjectSpace/PointTo*/VectorTo*/Inverse/Lerp/Orthonormalize e os 4
+	-- operadores válidos (*, *Vector3, +Vector3, -Vector3) -- ver cabeçalho deste arquivo.
+	{ Name = "CFrame", Simulated = true, HasGlobalConstructor = true },
 	-- Simulated = true a partir de task-valuetypes-005-fix (consolidação): src/valuetypes/types/
 	-- Color3.luau existe e foi aprovado (com ressalva de fromHex, corrigida na mesma tarefa) desde
 	-- task-valuetypes-005, mas a entrada ficou `false` porque Catalog.luau é compartilhado entre as
