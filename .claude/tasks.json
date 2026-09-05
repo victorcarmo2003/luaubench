@@ -742,6 +742,213 @@
       "depends": [],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-runtime-025",
+      "title": "Sandbox.Load: compilar um chunk sem criar thread (pré-requisito do require simulado)",
+      "description": "Adicionar `Sandbox.Load(options: SandboxChunkOptions): () -> ...unknown` em src/runtime/Sandbox.luau e reexportar em src/runtime/init.luau. Compila `options.source` reusando EXATAMENTE a mesma `buildEnvironment` que `Sandbox.Run` usa (a MESMA função, nunca uma segunda cópia da whitelist -- a whitelist é superfície de segurança e não pode ter duas definições) e devolve a função do chunk SEM criar thread e SEM chamá-la. NÃO registra thread em `ownThreads` e NÃO se inscreve em `ThreadError`: o erro dentro do chunk PROPAGA para quem chamou, que é o que faz `pcall(require, m)` funcionar no script do usuário; se ninguém tratar, sobe até a thread do Script que originou a cadeia, que já é `ownThread` do `Sandbox.Run` dele e é reportada lá uma vez só. Um único cast de fronteira comentado no retorno de `luau.load` (que é `(...any) -> ...any`), mesmo precedente do cast de `LoadOptions.environment` já presente no arquivo. Motivo: `Sandbox.Run` faz `scheduler:Spawn` + `chunk()` descartando o retorno -- as duas coisas são incompatíveis com `require`, que precisa do valor de retorno E de rodar na thread chamadora (para que um `task.wait()` no topo do módulo suspenda quem pediu). Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 5.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 15,
+      "depends": [],
+      "tags": [
+        "runtime",
+        "sandbox",
+        "require"
+      ],
+      "priority": "high",
+      "acceptance": "Sandbox.Load compila e devolve a função do chunk sem criar thread; o chunk usa a mesma whitelist de Sandbox.Run (verificado por teste que confirma que `fs`/`net`/`process`/`require` continuam nil dentro dele); chamar o chunk devolve o valor de retorno do módulo; erro dentro do chunk propaga para o chamador (capturável por pcall) e NÃO vira OutputRecord duplicado; `Sandbox.Run` continua com o comportamento de hoje, sem regressão nos specs existentes; reexportada em init.luau; --!strict sem any (cast de fronteira comentado).",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-runtime-026",
+      "title": "Completar a whitelist de globals do Sandbox (setmetatable e família raw*, wait/spawn/delay, buffer, os.date)",
+      "description": "A whitelist atual de src/runtime/Sandbox.luau NÃO tem `setmetatable` -- nem `getmetatable`, `rawget`, `rawset`, `rawequal`, `rawlen`, `newproxy`, `buffer`, `wait`, `spawn`, `delay`, `tick`, `time`. Isso invalida o caso de uso central declarado no CLAUDE.md: todo módulo OOP do ecossistema Roblox (ProfileStore, state managers, proxytable, metatable/OOP) usa `setmetatable`. Adicionar, cada um com comentário justificando 'existe no ambiente Roblox real E não concede acesso ao host': setmetatable/getmetatable/rawget/rawset/rawequal/rawlen/newproxy (Luau puro), `buffer` (biblioteca padrão do Luau, presente no Roblox moderno), `os.date`/`os.difftime` somando ao `os` restrito atual (mantendo getenv/exit/remove/rename/tmpname FORA -- esses vazam o host), e os globais depreciados mas onipresentes `wait`/`spawn`/`delay`/`tick`/`time`, que DEVEM rotear pelo `options.scheduler` exatamente como `task.*` já faz (nunca @lune/task cru) e ser comentados como depreciados. `unpack` só entra se task-cli-007 confirmar que o Luau mantém o alias global. `debug` fica DELIBERADAMENTE fora desta tarefa (precisa de análise própria do que debug.info/traceback revelam do host dentro de um chunk sandboxed). `_G`/`shared` NÃO entram aqui: são estado por execução, criados e injetados por `cli` via extraGlobals. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 12.",
+      "column": "in-progress",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 15,
+      "depends": [],
+      "tags": [
+        "runtime",
+        "sandbox",
+        "globals"
+      ],
+      "priority": "high",
+      "acceptance": "Um fixture que define uma classe com setmetatable/__index roda dentro do Sandbox; getmetatable/rawget/rawset/rawequal/rawlen/newproxy/buffer disponíveis; os.date e os.difftime disponíveis e os.getenv/os.exit/os.remove ausentes (teste explícito); wait/spawn/delay/tick/time disponíveis e roteando pelo Scheduler (teste: `wait(0.05)` avança pelo passo do scheduler, não por sleep de SO); `fs`/`net`/`process`/`serde`/`io`/`require` continuam ausentes (teste de regressão do isolamento); cada adição tem comentário justificando; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-009",
+      "title": "Services.IsServiceClass + Services.GetSimulatedServiceClasses (leitura pura do manifesto)",
+      "description": "Adicionar duas funções em src/services/init.luau, ambas leitura PURA de `generated/Manifest.luau` -- não tocam ClassRegistry nem Context, e por isso são explicitamente SEGURAS de chamar ANTES de `Services.Bootstrap` (documentar isso no comentário de cada uma: `cli` chama `IsServiceClass` no passo 4 do pipeline, antes do Bootstrap no passo 7). (1) `Services.IsServiceClass(className: string): boolean` -- a tag `Service` do dump, para as 916 classes do manifesto (`ManifestEntry.IsService`). É o que permite a `cli` reproduzir a inferência de Service do Rojo (filho nomeado da raiz que bate com um Service real vira aquele Service, sem `$className`) sem `cli` conhecer nome de classe nenhum e sem abrir `generated/Manifest.luau` por fora (regra 03: registro central). (2) `Services.GetSimulatedServiceClasses(): { string }` -- as classes com `IsService == true` E `Covered == true`, ordenadas por nome (ordem determinística). `cli` faz `game:GetService(x)` para cada uma no bootstrap, porque no Roblox real TODO Service existe sempre: sem pré-criar, `game.ReplicatedStorage` num projeto que não declara ReplicatedStorage devolveria nil (DataModel é leniente) -- divergência silenciosa, proibida pela regra 00. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 4.",
+      "column": "done",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 15,
+      "depends": [],
+      "tags": [
+        "services",
+        "manifest",
+        "cli-contract"
+      ],
+      "priority": "medium",
+      "acceptance": "IsServiceClass('ReplicatedStorage')==true, IsServiceClass('Folder')==false, IsServiceClass('Frmae')==false; GetSimulatedServiceClasses devolve só classes com IsService e Covered, ordenada e estável entre chamadas; teste confirmando que as duas funcionam ANTES de Services.Bootstrap ter sido chamado (sem erro de Context); cada `GetService` do resultado de GetSimulatedServiceClasses funciona depois do Bootstrap; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": "IsServiceClass/GetSimulatedServiceClasses implementadas, ambas leitura pura de Manifest, confirmadas seguras antes de Bootstrap. GetSimulatedServiceClasses devolve 11 classes ordenadas (Lighting/Players/ReplicatedFirst/ReplicatedStorage/RunService/ServerScriptService/ServerStorage/StarterGui/StarterPack/StarterPlayer/Workspace). 73/73 testes (16 init, 2 novos). Verificacao cruzada independente do conjunto contra Manifest.Classes.",
+      "reviewResult": "APROVADO, sem achados. Revisor recalculou GetSimulatedServiceClasses independentemente (iterando Manifest.Classes num script proprio, nao reusando a funcao), confirmou as duas funcoes nao tocam Context/ClassRegistry antes de Bootstrap, confirmou GetService funcionando depois para as 11 classes. 143 runtime + 73 services."
+    },
+    {
+      "id": "task-cli-001",
+      "title": "Esqueleto do território cli: main.luau, init.luau, Args, Messages, Diagnostics",
+      "description": "Criar src/cli/ com os cinco módulos de base. `main.luau`: executável fino -- lê `process.args`, chama `Cli.Main`, chama `process.exit(code)`, nada mais; requer `./` (estilo diretório). `init.luau`: API pública programática (`Cli.Main(argv: { string }): MainResult` com `MainResult = { ExitCode: number, ErrorCount: number, WarningCount: number }`), existe para que tests/scenarios/ (território do testador) rode um projeto de ponta a ponta sem disparar processo. ATENÇÃO ao gotcha de require já documentado nos cabeçalhos de src/runtime/init.luau e src/services/init.luau: carregado estilo diretório, o chunk é identificado por `src/cli` e a base dos require relativos escritos DENTRO do init desloca um nível -- aqui dentro usa-se `./cli/Args`, `./runtime`, `./services`; de fora de src/cli/ (módulo de nome normal) usa-se `require('../runtime')`. `Args.luau`: argv -> `Command` (union de `run`/`version`/`help`/`error`), flags `--timeout <s>`, `--no-color`, `--verbose`; reconhece `--watch` e devolve o motivo real (Lune 0.10.5 não expõe observador de filesystem e o LuauBench não faz polling -- regra 04), nunca 'flag desconhecida'. `Messages.luau`: TODAS as strings voltadas ao usuário num lugar só (ver 'Decisão que precisa do usuário' no desenho: o idioma dos diagnósticos do CLI ainda pode ser revertido pelo usuário, e isolar aqui faz disso a edição de um arquivo). `Diagnostics.luau`: `Diagnostic{Severity, Code, Message, ProjectPath?, NodePath?, FilePath?, Field?}`, `Bag` acumuladora e `Render`. `Code` é identificador estável (ex: 'project/unknown-field') para o teste asserir sem casar texto. `luaubench --version` imprime a versão do LuauBench mais `Services.GetDumpVersion()`. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 9, 13 e 14 e seção 'Módulos'.",
+      "column": "in-progress",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 15,
+      "depends": [],
+      "tags": [
+        "cli",
+        "esqueleto",
+        "args"
+      ],
+      "priority": "high",
+      "acceptance": "`lune run src/cli/main.luau --help` e `--version` funcionam e o --version cita commit/versão do dump vindos de Services.GetDumpVersion(); Args.Parse cobre run/version/help, as três flags, argumento faltando em --timeout, flag desconhecida e --watch (com o motivo técnico, não 'desconhecida'); Diagnostics.Bag acumula e conta por severidade; Render produz linha legível com e sem cor; nenhuma string voltada ao usuário fora de Messages.luau; --!strict sem any em todos os cinco módulos; specs na mesma tarefa.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-002",
+      "title": "JsonValue (narrowing de serde) + ProjectFile (localizar, ler e validar o .project.json)",
+      "description": "`JsonValue.luau`: único ponto do território que toca a saída de `serde.decode`, que é tipada `any` (regra 01 proíbe any -- narrowing obrigatório, com um cast de fronteira comentado). Decodifica SEMPRE com o formato 'jsonc' (verificado: Lune 0.10.5 suporta 'jsonc' e JSON estrito é subconjunto; o Rojo real também não ramifica por extensão). Acessores `AsObject/AsString/AsNumber/AsBoolean/AsArray` que carregam o CAMINHO do campo (ex: 'tree.ReplicatedStorage.$path') e devolvem `(valor?, Diagnostic?)` em vez de erro cru -- é o mecanismo que cumpre a regra 04 ('erro claro apontando o campo problemático, nunca stack trace cru do parser'). `ProjectFile.luau`: `Locate(pathArg, cwd)` (arquivo -> usa direto; diretório ou ausente -> procura `default.project.json` e depois `default.project.jsonc`, que são os DEFAULT_PROJECT_NAMES reais do Rojo) e `Read(filePath, bag) -> Project`. ESPELHA o `deny_unknown_fields` do Rojo no nível raiz: chave desconhecida no topo é ERRO nomeando a chave e listando as válidas (é o que impede um `\"tre\"` em vez de `\"tree\"` de passar como projeto vazio, e o que garante na prática que ninguém enfie `\"luaubench\": {...}` ali -- isso quebra `rojo serve`/`build` de verdade). Campos: `tree` obrigatório; `name` (ausente -> derivado do arquivo/pasta); `$schema`/`servePort`/`serveAddress`/`serveAllowedHosts`/`servePlaceIds`/`blockedPlaceIds`/`placeId`/`gameId`/`syncbackRules` aceitos e ignorados SEM warning (documentado no código); `emitLegacyScripts: false` -> warning; `globIgnorePaths` não-vazio -> warning de não suportado listando os globs; `syncRules` não-vazio -> warning. Nó: `$className`/`$path` (PathNode string ou {optional})/`$properties`/`$attributes`/`$id` (warning)/`$ignoreUnknownInstances` (aceito e ignorado SEM warning, documentado -- é semântica de sync bidirecional) e qualquer outra chave = filho nomeado. Formato confirmado em .claude/agents-memory/pesquisa-formato-projeto-rojo-2026-09-05.md -- NÃO repesquisar. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 2 e 14.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 16,
+      "depends": [
+        "task-cli-001"
+      ],
+      "tags": [
+        "cli",
+        "rojo",
+        "parsing"
+      ],
+      "priority": "high",
+      "acceptance": "Decodifica .project.json com comentários e trailing comma (JSONC); campo de topo desconhecido vira Diagnostic de erro nomeando a chave; `tree` ausente vira erro nomeando o campo; JSON malformado vira Diagnostic com o caminho do arquivo, nunca erro cru de serde; Locate acha default.project.json a partir de um diretório e a partir do cwd; PathNode nas duas formas (string e {optional}) parseado; globIgnorePaths/syncRules/emitLegacyScripts:false/$id produzem warning; $ignoreUnknownInstances aceito em silêncio; nenhum `any`; specs com fixtures em src/cli/fixtures/.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-003",
+      "title": "SyncRules (arquivo/pasta -> ClassName) + TreePlanner (.project.json + disco -> InstancePlan puro)",
+      "description": "`SyncRules.luau`: dados puros, sem I/O, cabeçalho registrando 'Rojo v7.7.0, pesquisa de 2026-09-05'. Arquivos, primeira regra que casa vence (ordem significativa: .server.lua casa ANTES de .lua): `*.server.lua|luau`->Script, `*.client.lua|luau`->LocalScript, `*.lua|luau`->ModuleScript, `*.project.json|jsonc`->projeto aninhado, `*.meta.json|jsonc`->metadado do irmão (não é Instance). Fora da leva: `*.plugin.*`, `*.model.json`, `*.json`/`*.jsonc`, `*.toml`, `*.yml|yaml`, `*.csv`, `*.txt`, `*.rbxm|rbxmx` -> classificados como Unsupported e reportados. Diretórios, ordem de prioridade FIXA (o próprio Rojo comenta que não pode mudar por compatibilidade): (1) default.project.json|jsonc dentro -> projeto aninhado, vence TUDO inclusive init.*; (2) init.luau|lua -> ModuleScript; (3) init.server.* -> Script; (4) init.client.* -> LocalScript; (5) init.plugin.* e (6) init.csv -> Unsupported; (7) senão Folder. `TreePlanner.luau`: `Plan(project, {IsServiceClass}, bag) -> InstancePlan`. NÃO requer runtime nem services -- `IsServiceClass` é INJETADA, o que torna o módulo testável sem DataModel/Bootstrap. Resolve ClassName na precedência real do Rojo: $className explícito > classe do $path > inferência de Service (SÓ quando o pai é o DataModel); $className + $path juntos só é legal se o $path resolver para Folder; $path que resolve Folder sob a raiz com nome de Service -> a inferência de Service vence. $path é relativo à pasta do .project.json QUE DEFINE AQUELE NÓ (num projeto aninhado, à pasta dele) -- carregar o path do projeto corrente no walk, sem variável global de raiz. Path obrigatório ausente -> erro nomeando nó/campo/caminho absoluto tentado; path {optional} ausente -> nó omitido sem erro, com Diagnostic 'info' (só visível em --verbose). Projeto aninhado = recursão do mesmo parser, com PROTEÇÃO DE CICLO obrigatória (conjunto de caminhos absolutos de projeto no ramo corrente; ciclo -> erro listando a cadeia) -- é a única recursão não-limitada do território. Meta files: `<nome>.meta.json` aplica properties; `init.meta.json` aplica properties e className (className só pode sobrescrever se a pasta resolveu para Folder puro, igual ao Rojo); `id`/`ignoreUnknownInstances` no meta -> warning. $properties: só boolean/number/string entram no plano; array/objeto (Vector3/Color3/CFrame no formato ambíguo do Rojo) -> WARNING E PULA, nunca erro duro e nunca gravar a tabela crua (mentiria: não há tipos de valor até a leva 3 de services). $attributes -> warning listando os não aplicados. TODO arquivo Unsupported vira warning com o caminho real -- nunca omissão silenciosa (um .json que sumisse calado viraria um require falhando dez minutos depois). Nenhuma Instance é criada nesta tarefa. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 3, 4, 6, 7 e 8.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 17,
+      "depends": [
+        "task-cli-002"
+      ],
+      "tags": [
+        "cli",
+        "rojo",
+        "filesystem"
+      ],
+      "priority": "high",
+      "acceptance": "SyncRules classifica as 5 formas suportadas de arquivo e as 7 de diretório na ordem certa (teste explícito de que .server.lua não cai em .lua e de que default.project.json vence init.luau); TreePlanner monta o InstancePlan de um fixture com Service inferido sem $className, Folder por pasta, ModuleScript por arquivo, init.luau virando ModuleScript-pasta, projeto aninhado e $path opcional ausente; ciclo de projeto aninhado erra listando a cadeia; $path obrigatório ausente erra nomeando nó/campo/caminho; $properties primitivo entra no plano e não-primitivo vira warning; arquivo não suportado vira warning com caminho; TreePlanner não requer runtime nem services (verificável por leitura); --!strict sem any; specs com fixtures próprios.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-004",
+      "title": "TreeMaterializer: InstancePlan -> DataModel real (Services, hierarquia, Source, $properties)",
+      "description": "`TreeMaterializer.Materialize(plan, game, bag) -> MaterializedTree{Game, Scripts}`. Nó com `IsServiceRoot` -> `game:GetService(ClassName)`; todo o resto -> `Services.new(ClassName, Name)` (NUNCA `Runtime.ClassRegistry.NewEngineInstance` -- o cabeçalho de src/runtime/init.luau lista `cli` como proibido de usá-la, exatamente porque $className vem de arquivo do usuário e NewEngineInstance não tem a guarda de NotCreatable); hierarquia por `.Parent`. `Source` de Script/LocalScript/ModuleScript por `Runtime.Instance.SetPropertyRaw(inst, 'Source', texto)` -- Source está FORA do schema (capability PluginOrOpenCloud) e Get/SetPropertyRaw não consultam schema por design; é o canal que o desenho de services já reservou, e mantém `script.Source` ilegível pelo script, fiel ao Roblox. $properties vai pela VIA PÚBLICA de escrita, NÃO por SetPropertyRaw: `local writable = (instance :: unknown) :: { [string]: unknown }` (cast de fronteira único e comentado -- a chave vem do .project.json, é dinâmica) dentro de pcall, deixando o `__newindex` do runtime fazer o enforcement contra o ClassSchema; falha -> Diagnostic de erro citando NodePath + propriedade + a mensagem do motor. Razão de não usar SetPropertyRaw: ele ignora o schema, e um typo do usuário ('Gravty') gravaria propriedade fantasma que o script depois não conseguiria LER (o __index estrito erraria) -- erro no lugar errado, dez passos depois da causa. Service na raiz com Name != ClassName -> erro claro (divergência declarada: o Rojo permite, o LuauBench não, porque DataModel:GetService é dono da nomeação do singleton). Raiz com $className != DataModel -> erro dedicado (projeto de modelo/pacote não tem `game`; é caso comum e merece mensagem própria). Devolve a lista de scripts NA ORDEM DETERMINÍSTICA DO PLANO, para que ScriptRunner não precise reandar a árvore. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 4, 5 e 7.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 18,
+      "depends": [
+        "task-cli-003",
+        "task-services-009"
+      ],
+      "tags": [
+        "cli",
+        "runtime-contract",
+        "datamodel"
+      ],
+      "priority": "high",
+      "acceptance": "Um fixture com ReplicatedStorage/ServerScriptService/Folder/ModuleScript materializa e `game.ReplicatedStorage.Modules.Foo` resolve por acesso de ponto; Source gravado é recuperável por GetPropertyRaw e invisível para o script; $properties primitivo válido aplicado; $properties com nome inválido vira Diagnostic de erro citando nó e propriedade (não derruba o comando); propriedade somente-leitura idem; raiz não-DataModel erra com mensagem dedicada; Service com nome divergente erra; cli não chama NewEngineInstance em lugar nenhum (verificável por grep); ordem da lista de Scripts é determinística e igual à do plano; --!strict sem any (o único cast comentado).",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-005",
+      "title": "ScriptEnvironment + UnsimulatedGlobals + ModuleLoader (o require simulado)",
+      "description": "`ScriptEnvironment.Build(context, scriptInstance) -> Runtime.SandboxGlobals`: monta o extraGlobals de UMA Instance de script -- `game`, `workspace`, `script`, `Instance = { new = Services.new }`, `require`, `_G`, `shared`, mais os UnsimulatedGlobals. É o ÚNICO lugar de cli que decide o que o script enxerga além da whitelist do runtime. `_G`/`shared` são UMA tabela por execução compartilhada entre os scripts do run (estado de ciclo de vida do run, por isso vive em cli e não na whitelist do runtime); se são a mesma tabela no Roblox real está pendente de task-cli-007 -- a leva 1 usa a mesma para os dois e documenta. `UnsimulatedGlobals.Build()`: para cada nome de uma lista explícita (Vector3, Vector2, CFrame, Color3, UDim, UDim2, Rect, Region3, Ray, NumberRange, NumberSequence, ColorSequence, BrickColor, TweenInfo, PhysicalProperties, Faces, Axes, Random, DateTime, Font, RaycastParams, OverlapParams, Enum), uma tabela cujo __index erra `[LuauBench] Vector3 is not simulated by LuauBench yet (planned: value-types wave)`. Extensão do LuauBench FORA do namespace de qualquer classe real (regra 00 permite, em módulo próprio) e mesma disciplina da regra 03: nunca stub silencioso, nunca `attempt to index nil with 'new'`. `ModuleLoader.luau`: o `require` simulado. `Require(target: unknown)` -- `unknown` de propósito, vem do script do usuário. Cache por identidade de Instance. Módulo carregando em OUTRA thread -> o segundo requerente espera (usar `Runtime.Signal.new()` por módulo em voo; `:Wait()` de dentro de thread gerida roteia pelo ThreadBroker, funciona sem nada novo). Carregando na MESMA thread -> ciclo -> erro `Requested module was required recursively`. Módulo que não retorna exatamente um valor -> `Module code did not return exactly one value`. target não-ModuleScript -> `Attempted to call require with invalid argument(s).`. As TRÊS são família Roblox, inglês, SEM prefixo, e são APROXIMAÇÃO DE BOA-FÉ -- comentar como tal no código (task-cli-007 confirma). target numérico (asset id) -> `[LuauBench] require by asset id is not supported (LuauBench runs offline)` -- prefixo OBRIGATÓRIO: não tem contraparte no Roblox real (lá funciona), a razão é local-first (regra 00). Executa o módulo via `Runtime.Sandbox.Load` chamado na thread CORRENTE, com extraGlobals próprios (script = o ModuleScript). Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 5 e 12.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 19,
+      "depends": [
+        "task-cli-004",
+        "task-runtime-025",
+        "task-runtime-026"
+      ],
+      "tags": [
+        "cli",
+        "require",
+        "sandbox"
+      ],
+      "priority": "high",
+      "acceptance": "require(m) devolve o valor do módulo e o cacheia (segunda chamada não re-executa -- teste com contador); ciclo A->B->A erra com a mensagem de recursão; módulo sem return erra; require(Folder) erra; require(123) erra com prefixo [LuauBench]; módulo que faz task.wait() no topo suspende quem chamou e um segundo requerente em outra thread espera pelo mesmo resultado; erro dentro do módulo é capturável por pcall no script chamador; Vector3.new erra com [LuauBench] nomeando a lacuna (nunca 'index nil'); _G escrito por um script é lido por outro do mesmo run; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-006",
+      "title": "ScriptRunner + OutputFormatter + RunCommand: o pipeline luaubench run de ponta a ponta",
+      "description": "`ScriptRunner.Run(tree, ctx) -> RunSummary`: política de execução. `Script` roda se (a) é descendente de um contêiner de `ServerScriptContainers` (default {'ServerScriptService','Workspace'} -- APROXIMAÇÃO DECLARADA, lista pendente de task-cli-007) e (b) `Enabled ~= false`. `LocalScript` NUNCA executa (o LuauBench é servidor: IsServer()==true, RenderStepped recusa conexão) -- é carregado, o Source fica disponível, e o sumário final diz quantos foram. `ModuleScript` nunca executa sozinho. Ordem determinística: profundidade primeiro, contêineres na ordem de ServerScriptContainers, irmãos por nome -- o Roblox real não garante ordem; determinismo é melhor que arbitrário para depurar, e a divergência é declarada. Notar no código que `Scheduler:Spawn` roda a função até o PRIMEIRO YIELD antes de devolver, então o script N+1 só é spawnado depois que o N cedeu ou terminou (próximo do comportamento real). `OutputFormatter.new(useColor)`: print -> stdout (stdio.write), warn/error -> stderr (stdio.ewrite) -- comportamento correto de CLI, permite redirecionar. Cor por stdio.color; o Lune 0.10.5 NÃO expõe detecção de TTY, então cor ligada por padrão e desligada por --no-color E pela variável NO_COLOR (process.env). SEM coluna de timestamp na leva 1 (OutputRecord.timestamp tem resolução de segundo). REATRIBUIÇÃO DE LINHA: erro dentro de um ModuleScript chega com `line == nil` e a message contendo `[string \"ReplicatedStorage.Modules.Combat\"]:12: ...` (o splitErrorMessage do Sandbox procura o marcador do script de FORA); o formatter faz uma segunda passada sobre esse padrão e renderiza atribuindo ao módulo que de fato errou, citando o script que originou a cadeia -- isso vive em cli de propósito (é apresentação, mantém runtime intocado). scriptName = instance:GetFullName(); se vier com prefixo 'DataModel.', remover (uma linha, comentada). Conta erros -- é a fonte do exit code. `RunCommand.Execute(options)`: orquestra os 12 passos do pipeline (Args -> Locate -> Read -> Plan -> se houver erro imprime TODOS e sai 2 -> Scheduler.new + DataModel.new -> Services.Bootstrap -> GetService de cada Services.GetSimulatedServiceClasses() -> Materialize -> ScriptRunner -> scheduler:Run(shouldContinue de --timeout) -> sumário). Passos 4 e 7 nesta ordem de propósito: planejar ANTES de registrar dá a propriedade mais valiosa do pipeline -- projeto inválido recusado com o mundo ainda não construído. Exit codes: 0 sucesso, 1 o script do usuário levantou erro não tratado, 2 erro de projeto ou de uso. --timeout usa shouldContinue e é rede de segurança para script que CEDE (`while true do task.wait() end`), NÃO watchdog: não interrompe `while true do end` sem yield (limitação já registrada e aceita no desenho do runtime) -- documentar assim. Fixture end-to-end em src/cli/fixtures/ exercitando setmetatable/OOP + require entre módulos. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 11 e 13 e seção 'Pipeline'.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 20,
+      "depends": [
+        "task-cli-005"
+      ],
+      "tags": [
+        "cli",
+        "execucao",
+        "output"
+      ],
+      "priority": "high",
+      "acceptance": "`lune run src/cli/main.luau run src/cli/fixtures/<projeto>` executa um Script de ServerScriptService que requer um ModuleScript de ReplicatedStorage que usa setmetatable, e imprime a saída; print vai para stdout e warn/error para stderr (verificável por redirecionamento); erro dentro do módulo é renderizado com o nome e a linha do MÓDULO, não do script de fora; LocalScript não executa e aparece contado no sumário; Script em ReplicatedStorage não executa; Enabled=false não executa; ordem de execução é determinística e reprodutível; --timeout encerra um script que faz `while true do task.wait() end`; NO_COLOR e --no-color desligam a cor; exit code 0/1/2 corretos nos três cenários; --!strict sem any.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-007",
+      "title": "Pesquisa: lune build/bundling, watcher de filesystem no Lune, contêineres que executam Script, mensagens de require, globais do Roblox",
+      "description": "Cinco perguntas, nenhuma bloqueia o início da leva. (1) `lune build`: embute os módulos `require`ados num único executável standalone, ou exige arquivo único (bundle prévio)? Qual a invocação exata e o layout esperado? -- BLOQUEIA qualquer tarefa de release/Rokit, não esta leva; se não embutir, a topologia de src/ precisa de um passo de bundle antes do build. (2) Watcher de filesystem no Lune: confirmar a AUSÊNCIA em 0.10.5 (verificado nos typedefs instalados: fs tem readFile/readDir/writeFile/writeDir/removeFile/removeDir/metadata/isFile/isDir/move/copy e nada mais) e verificar se alguma versão publicada ou o roadmap expõe fs.watch/equivalente. É o insumo da conversa com o USUÁRIO sobre watch mode: a regra 04 exige observador e proíbe polling, e as três saídas (atualizar Lune / binário externo / polling) mexem em invariante ou regra -- decisão do usuário, não do arquiteto. (3) Quais contêineres executam `Script` (RunContext Legacy) num servidor Roblox real -- a lista exata. O desenho assume ServerScriptService + Workspace. (4) Mensagens reais de require: (a) módulo requerido recursivamente, (b) módulo que não retorna exatamente um valor, (c) require com argumento inválido -- as três são aproximação de boa-fé hoje. (5) Ambiente global do Roblox real: `unpack` ainda existe como global (decide se entra em task-runtime-026)? `shared` e `_G` são a mesma tabela no servidor? `tick`/`time`/`elapsedTime` continuam disponíveis mesmo depreciados? Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, seção 'Pendências para o pesquisador'.",
+      "column": "done",
+      "agent": "pesquisador",
+      "reviewer": "revisor-cli",
+      "wave": 15,
+      "depends": [],
+      "tags": [
+        "pesquisa",
+        "lune",
+        "rokit",
+        "roblox"
+      ],
+      "priority": "medium",
+      "acceptance": "Cada uma das cinco perguntas respondida com fonte verificável (código/typedef/doc oficial), marcando explicitamente o que ficou não confirmado; relatório em .claude/agents-memory/; a resposta de (1) diz se o repositório precisa de passo de bundle antes do release; a resposta de (2) é factual o suficiente para o usuário decidir sobre watch mode sem repesquisa.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05",
+      "result": "lune build NAO embute require (confirmado no codigo-fonte real, crates/lune/src/cli/build/mod.rs) -- precisa de bundle darklua antes de release, bloqueia tarefa futura de Rokit, nao esta leva. Watcher confirmado ausente em 0.10.5 e main, issue oficial lune-org/lune#63 aberto desde 2023 sem previsao -- resposta definitiva pro usuario decidir watch mode. Containers de Script confirmados corretos (Workspace+ServerScriptService, fonte oficial). unpack confirmado presente e nao depreciado. Achado corrigido no desenho: _G e shared sao tabelas SEPARADAS no Roblox real (design antigo propunha mesma tabela) -- corrigido diretamente em arquiteto-cli-2026-09-05.md. tick/time confirmados NAO depreciados (contra crenca comum)."
     }
   ]
 }

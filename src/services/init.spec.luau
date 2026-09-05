@@ -87,6 +87,70 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
+--[[
+	task-services-009 (arquiteto-cli-2026-09-05.md, Decisão 4): `IsServiceClass`/
+	`GetSimulatedServiceClasses` são leitura PURA de `generated/Manifest.luau` -- não tocam
+	`Runtime.ClassRegistry` nem `Context`. Este teste PRECISA rodar antes de qualquer
+	`Services.Bootstrap`/`Context.Set` deste arquivo (é por isso que vem primeiro, antes até do
+	teste "Register() é idempotente" -- `Services.Register()` sozinho não mexe em `Context`, mas
+	`Bootstrap` faz, e nenhum outro teste acima deste ponto no arquivo chamou `Bootstrap`) -- a
+	asserção `not Context.IsSet()` prova isso, não só documenta.
+]]
+test("IsServiceClass/GetSimulatedServiceClasses funcionam ANTES de Services.Bootstrap (leitura pura do manifesto, sem erro de Context)", function()
+	assert(
+		not Context.IsSet(),
+		"este teste precisa rodar ANTES de qualquer Services.Bootstrap neste arquivo -- se isto falhar, um teste anterior chamou Bootstrap e a ordem do arquivo foi violada"
+	)
+
+	assert(Services.IsServiceClass("ReplicatedStorage"), "'ReplicatedStorage' carrega a tag Service no dump")
+	assert(not Services.IsServiceClass("Folder"), "'Folder' existe no dump mas não carrega a tag Service")
+	assert(not Services.IsServiceClass("Frmae"), "'Frmae' (typo) não existe no manifesto -- devolve false, nunca erro")
+
+	local first = Services.GetSimulatedServiceClasses()
+	local second = Services.GetSimulatedServiceClasses()
+	assert(#first == #second, "GetSimulatedServiceClasses deveria devolver o mesmo tamanho em chamadas repetidas")
+	for i, name in first do
+		assert(name == second[i], `GetSimulatedServiceClasses deveria ser estável entre chamadas -- posição {i} divergiu ('{name}' vs '{second[i]}')`)
+	end
+
+	for i = 2, #first do
+		assert(first[i - 1] < first[i], `GetSimulatedServiceClasses deveria vir ordenada por nome -- '{first[i - 1]}' apareceu antes de '{first[i]}'`)
+	end
+
+	-- Verificação independente (não usa Services.GetSimulatedServiceClasses de novo -- recalcula
+	-- do zero direto do Manifest, para não ser um teste tautológico): confirma que o resultado é
+	-- EXATAMENTE o conjunto de classes com IsService==true e Covered==true, nem uma a mais nem a
+	-- menos.
+	local expected: { [string]: boolean } = {}
+	local expectedCount = 0
+	for className, entry in Manifest.Classes do
+		if entry.IsService and entry.Covered then
+			expected[className] = true
+			expectedCount += 1
+		end
+	end
+	assert(#first == expectedCount, `GetSimulatedServiceClasses deveria devolver {expectedCount} classes (IsService e Covered no manifesto atual), recebeu {#first}`)
+	for _, name in first do
+		assert(expected[name], `'{name}' não deveria estar no resultado -- não tem IsService==true e Covered==true no manifesto`)
+		expected[name] = nil
+	end
+	assert(next(expected) == nil, "GetSimulatedServiceClasses omitiu ao menos uma classe com IsService==true e Covered==true")
+
+	-- Sanidade pontual com nomes conhecidos da leva atual (falha alto e claro se a leva mudar sem
+	-- que este teste seja revisitado).
+	local hasReplicatedStorage = false
+	local hasWorkspace = false
+	for _, name in first do
+		if name == "ReplicatedStorage" then
+			hasReplicatedStorage = true
+		elseif name == "Workspace" then
+			hasWorkspace = true
+		end
+	end
+	assert(hasReplicatedStorage, "GetSimulatedServiceClasses deveria incluir 'ReplicatedStorage'")
+	assert(hasWorkspace, "GetSimulatedServiceClasses deveria incluir 'Workspace'")
+end)
+
 test("Register() é idempotente -- chamar duas vezes não erra", function()
 	local ok = pcall(function()
 		Services.Register()
@@ -417,6 +481,38 @@ test(
 		assert((child :: Runtime.Instance).ClassName == "Folder", "o filho parenteado deveria ser da classe 'Folder'")
 	end
 )
+
+--------------------------------------------------------------------------------------------------
+-- task-services-009: o outro lado do contrato -- depois de Services.Bootstrap, cada nome devolvido
+-- por GetSimulatedServiceClasses() funciona de verdade com game:GetService(...). É exatamente o
+-- passo 8 do pipeline documentado no cabeçalho de init.luau (`cli` faz isso para TODO Service
+-- simulado, declarado ou não no .project.json do usuário).
+--------------------------------------------------------------------------------------------------
+
+test("cada classe de GetSimulatedServiceClasses() funciona com game:GetService(...) depois de Services.Bootstrap", function()
+	local scheduler = Runtime.Scheduler.new()
+	local game = Runtime.DataModel.new()
+
+	-- Bootstrap idempotente (guarda local em Services.Register) -- seguro mesmo já tendo rodado
+	-- antes neste processo, nos testes acima.
+	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+	for _, className in Services.GetSimulatedServiceClasses() do
+		local service = game:GetService(className)
+		assert(service ~= nil, `game:GetService("{className}") não deveria devolver nil depois de Services.Bootstrap`)
+		assert(
+			service.ClassName == className,
+			`game:GetService("{className}") deveria devolver uma Instance de ClassName == "{className}", recebeu "{service.ClassName}"`
+		)
+		-- Segunda chamada devolve o MESMO singleton (semântica real de DataModel:GetService,
+		-- src/runtime/DataModel.luau) -- não é esta função que garante isso, mas confirma que a
+		-- lista devolvida por GetSimulatedServiceClasses não atrapalha essa semântica.
+		assert(
+			game:GetService(className) == service,
+			`game:GetService("{className}") deveria devolver o mesmo singleton em chamadas repetidas`
+		)
+	end
+end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

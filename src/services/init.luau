@@ -143,7 +143,9 @@
 	nome da classe de antemão, registro central, não `if ClassName == "Workspace" then"`): se `cli`
 	um dia precisasse abrir `generated/Index.luau` para descobrir uma classe, o registro central
 	deixaria de ser central. A ÚNICA superfície que `cli` enxerga de `services` é a exportada por
-	`Services` abaixo (`Bootstrap`/`new`/`IsKnownClass`/`IsSimulatedClass`/`GetDumpVersion`).
+	`Services` abaixo (`Bootstrap`/`new`/`IsKnownClass`/`IsSimulatedClass`/`GetDumpVersion`/
+	`IsServiceClass`/`GetSimulatedServiceClasses` -- as duas últimas, task-services-009, leitura pura
+	do manifesto, seguras de chamar ANTES de `Bootstrap`, ver comentário de cada uma abaixo).
 ]]
 
 local Types = require("./services/Types")
@@ -239,6 +241,67 @@ end
 -- que é só `init.luau` + specs).
 function Services.GetDumpVersion(): { Commit: string, Version: string }
 	return { Commit = Manifest.DumpCommit, Version = Manifest.DumpVersion }
+end
+
+--[[
+	task-services-009 (arquiteto-cli-2026-09-05.md, Decisão 4, "A lacuna: `cli` não tem como
+	perguntar 'isto é um Service?'"): a tag `Service` do dump, para as 916 classes do manifesto
+	(`ManifestEntry.IsService`).
+
+	PURA -- só lê `generated/Manifest.luau`, uma tabela estática já carregada no `require` do topo
+	deste arquivo. NÃO toca em `Runtime.ClassRegistry` nem em `Context`: por isso é explicitamente
+	SEGURA de chamar ANTES de `Services.Bootstrap` ter rodado. `cli` chama esta função no passo 4 do
+	pipeline (`TreePlanner.Plan`, que lê o `.project.json` e o filesystem -- NENHUMA Instance criada
+	ainda), bem ANTES do `Bootstrap` no passo 7 (arquiteto-cli-2026-09-05.md, "Pipeline do
+	`luaubench run`").
+
+	É o que permite `cli` reproduzir a inferência de Service do Rojo (filho nomeado diretamente sob
+	a raiz cujo nome bate com um Service real vira aquele Service, mesmo sem `$className` explícito)
+	sem `cli` conhecer nome de classe nenhum e sem abrir `generated/Manifest.luau` por fora (regra
+	03, "Contrato com runtime": registro central, nunca `if ClassName == "Workspace" then`).
+
+	Classe ausente do manifesto (typo do usuário, ex. "Frmae") -> `false`, nunca erro: esta função só
+	classifica: decidir se um `className` desconhecido é um erro de projeto é responsabilidade de
+	quem chama (`TreePlanner`), não desta função.
+]]
+function Services.IsServiceClass(className: string): boolean
+	local entry = Manifest.Classes[className]
+	return entry ~= nil and entry.IsService
+end
+
+--[[
+	task-services-009 (arquiteto-cli-2026-09-05.md, Decisão 4): as classes com `IsService == true`
+	E `Covered == true` no manifesto -- os Services que este build do LuauBench de fato simula,
+	ordenados por nome (ordem determinística, estável entre chamadas: nunca a ordem de iteração de
+	`pairs`, sempre `table.sort` na saída).
+
+	PURA, mesma garantia de `IsServiceClass` acima -- só lê `generated/Manifest.luau`, SEGURA de
+	chamar ANTES de `Services.Bootstrap`. `cli` usa o resultado no passo 8 do pipeline (depois do
+	`Bootstrap` no passo 7, mas o próprio cálculo da lista não depende disso), chamando
+	`game:GetService(x)` para cada nome devolvido.
+
+	Por quê isso existe: no Roblox real TODO Service existe sempre, mesmo que o `.project.json` não
+	declare nada para ele -- `game.ReplicatedStorage` funciona num lugar que nunca colocou nada
+	dentro. `Runtime.DataModel` é leniente (não cria singleton sozinho), então sem pré-criar via essa
+	lista o acesso por ponto a um Service não declarado devolveria `nil` -- divergência silenciosa
+	com o Roblox real, proibida pela regra 00. Pré-criar a partir desta lista (em vez de `cli`
+	conhecer os nomes na mão) é o que mantém zero nome de classe dentro do território de `cli`.
+
+	Cada nome do resultado só funciona com `game:GetService(...)` DEPOIS de `Services.Bootstrap` ter
+	rodado -- é `Bootstrap`/`Register` que registra a classe em `Runtime.ClassRegistry`; antes disso
+	`GetService` erra "classe não registrada" (comportamento de `Runtime.DataModel`, não desta
+	função). Ver teste "cada GetService do resultado de GetSimulatedServiceClasses funciona depois
+	do Bootstrap" em init.spec.luau.
+]]
+function Services.GetSimulatedServiceClasses(): { string }
+	local names: { string } = {}
+	for className, entry in Manifest.Classes do
+		if entry.IsService and entry.Covered then
+			table.insert(names, className)
+		end
+	end
+	table.sort(names)
+	return names
 end
 
 --[[
