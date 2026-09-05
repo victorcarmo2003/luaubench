@@ -61,6 +61,69 @@ local function makeUnsimulatedMethodStub(className: string, methodName: string):
 	end
 end
 
+--[[
+	Superfície FIXA de `Runtime.Instance` -- nomes que `src/runtime/Instance.luau` já trata
+	nativamente e que `Instance.SetClassMethods` REJEITA se aparecerem numa tabela de
+	`ClassDescriptor.Methods` (colisão pega em runtime, uma vez por classe, no primeiro `new()`).
+	Confirmado por leitura direta de `src/runtime/Instance.luau` nesta tarefa (task-services-003),
+	não por suposição (regra 00):
+
+	- `FIXED_PROPERTY_KEYS` (Instance.luau ~L544): ClassName/Name/Parent.
+	- `SIGNAL_KEYS` (Instance.luau ~L533): os 5 sinais fixos -- Changed/ChildAdded/ChildRemoved/
+	  AncestryChanged/Destroying.
+	- os 13 MÉTODOS BASE nativos da tabela `Methods` de Instance.luau (confirmado por grep de
+	  `function Methods.X` no arquivo): GetChildren/GetDescendants/FindFirstChild/
+	  FindFirstChildOfClass/FindFirstChildWhichIsA/FindFirstAncestor/IsA/IsDescendantOf/
+	  IsAncestorOf/ClearAllChildren/GetFullName/Destroy/WaitForChild.
+
+	O Roblox API Dump DECLARA vários desses nomes como membros Function reais da classe "Instance"
+	(ex.: `FindFirstChild`, `Security: None`) -- o gerador (task-services-002) os emite em
+	`GeneratedClass.MethodNames` corretamente, espelhando o dump 1:1 (regra 03: o gerador não pode
+	inventar nem omitir por conta própria). Mas isso colide com a superfície fixa que
+	`Runtime.Instance` já implementa nativamente, e `Instance.SetClassMethods` existe
+	DELIBERADAMENTE para pegar essa colisão alto e claro (ver o comentário dela em
+	`src/runtime/Instance.luau`: "Colisão é bug do gerador de `services` e tem que estourar uma vez
+	no load, nunca ser resolvida por ordem de consulta em `__index`" -- e a própria mensagem de erro
+	runtime diz "corrigir lá", ou seja, aqui, em `services`). Confirmado empiricamente nesta tarefa:
+	registrar "Instance" sem este filtro e instanciar "Folder" (que herda o `Methods` achatado de
+	"Instance") erra `Instance.SetClassMethods: a chave 'FindFirstChild' colide com a superfície
+	fixa de Instance ...`.
+
+	`ClassBuilder` é o ponto certo do filtro, não `runtime`: omitir essas chaves do
+	`ClassDescriptor.Methods` resultante é TRANSPARENTE para o script do usuário --
+	`InstanceMeta.__index` (passo 3, métodos base) já resolve essas chamadas ANTES de sequer olhar
+	`classMethods` (passo 4), então um stub `[LuauBench]` para um desses nomes seria morto por
+	construção, nunca alcançável. Nenhuma classe desta leva precisa REDEFINIR o comportamento de um
+	nome reservado (isso exigiria mudar `runtime`, fora do território de `services`) -- se algum dia
+	precisar, é decisão do arquiteto, não algo que `ClassBuilder` decide sozinho.
+]]
+local RESERVED_INSTANCE_SURFACE: { [string]: boolean } = {
+	-- FIXED_PROPERTY_KEYS
+	ClassName = true,
+	Name = true,
+	Parent = true,
+	-- SIGNAL_KEYS (os 5 sinais fixos)
+	Changed = true,
+	ChildAdded = true,
+	ChildRemoved = true,
+	AncestryChanged = true,
+	Destroying = true,
+	-- os 13 métodos base nativos
+	GetChildren = true,
+	GetDescendants = true,
+	FindFirstChild = true,
+	FindFirstChildOfClass = true,
+	FindFirstChildWhichIsA = true,
+	FindFirstAncestor = true,
+	IsA = true,
+	IsDescendantOf = true,
+	IsAncestorOf = true,
+	ClearAllChildren = true,
+	GetFullName = true,
+	Destroy = true,
+	WaitForChild = true,
+}
+
 function ClassBuilder.Build(generated: Types.GeneratedClass, behavior: Types.Behavior?): Runtime.ClassDescriptor
 	local behaviorMethods: { [string]: unknown } = if behavior ~= nil and behavior.Methods ~= nil
 		then behavior.Methods
@@ -70,13 +133,22 @@ function ClassBuilder.Build(generated: Types.GeneratedClass, behavior: Types.Beh
 	-- existir em `generated.MethodNames`. Erro alto, em português (engenharia interna de
 	-- `services`/`behavior`, nunca observável pelo script do usuário -- o load falha antes de
 	-- qualquer script rodar, então nenhum comportamento fantasma chega a ser aprovado por
-	-- descuido).
+	-- descuido). Checagem adicional (RESERVED_INSTANCE_SURFACE, ver comentário acima): nenhum
+	-- `behavior.Methods` pode tentar implementar um nome da superfície fixa de `Runtime.Instance`
+	-- -- isso nunca teria efeito (a superfície nativa sempre vence em `__index`) e hoje estouraria
+	-- de forma confusa dentro de `Instance.SetClassMethods`; aqui a mensagem é clara e em português.
 	local declaredMethodNames: { [string]: boolean } = {}
 	for _, methodName in generated.MethodNames do
 		declaredMethodNames[methodName] = true
 	end
 
 	for methodName in behaviorMethods do
+		if RESERVED_INSTANCE_SURFACE[methodName] then
+			error(
+				`método '{methodName}' de '{generated.ClassName}' é superfície fixa nativa de Runtime.Instance (propriedade/evento/método base) e não pode ser reimplementado por behavior -- mudança de comportamento nativo é decisão de runtime/arquiteto, não de services`,
+				2
+			)
+		end
 		if not declaredMethodNames[methodName] then
 			error(
 				`método '{methodName}' não existe em '{generated.ClassName}' segundo o Roblox API Dump {DUMP_VERSION}`,
@@ -89,14 +161,18 @@ function ClassBuilder.Build(generated: Types.GeneratedClass, behavior: Types.Beh
 	-- nunca nil (regra 03). Método implementado por `behavior` entra como está: `unknown` é o
 	-- tipo honesto (a mesma disciplina de `Runtime.ClassMethods` -- ver Instance.luau) --
 	-- `Instance.SetClassMethods`, chamado depois por `Runtime.ClassRegistry.new`, valida em
-	-- runtime que cada valor instalado é de fato uma função.
+	-- runtime que cada valor instalado é de fato uma função. Nomes em RESERVED_INSTANCE_SURFACE
+	-- são OMITIDOS por completo (nem stub) -- ver o comentário de RESERVED_INSTANCE_SURFACE acima
+	-- para o porquê disso ser transparente, não uma lacuna de cobertura.
 	local methods: { [string]: unknown } = {}
 	for _, methodName in generated.MethodNames do
-		local implementation = behaviorMethods[methodName]
-		if implementation ~= nil then
-			methods[methodName] = implementation
-		else
-			methods[methodName] = makeUnsimulatedMethodStub(generated.ClassName, methodName)
+		if not RESERVED_INSTANCE_SURFACE[methodName] then
+			local implementation = behaviorMethods[methodName]
+			if implementation ~= nil then
+				methods[methodName] = implementation
+			else
+				methods[methodName] = makeUnsimulatedMethodStub(generated.ClassName, methodName)
+			end
 		end
 	end
 

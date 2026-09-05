@@ -176,6 +176,70 @@ test("IsAbstract/IsService/Schema passam direto de GeneratedClass para ClassDesc
 	assert(descriptor.Schema == schema, "Schema deveria passar direto (mesma referência) de GeneratedClass")
 end)
 
+--[[
+	Testes de task-services-003: achado confirmado empiricamente durante aquela tarefa --
+	`generated/classes/Instance.luau` (task-services-002) inclui, corretamente, vários nomes que
+	o Roblox API Dump declara como Function reais de "Instance" (FindFirstChild/Destroy/IsA/etc)
+	mas que `src/runtime/Instance.luau` já implementa NATIVAMENTE (os "13 métodos base") -- e
+	`Instance.SetClassMethods` REJEITA qualquer `ClassDescriptor.Methods` que tente redeclarar essa
+	superfície fixa (mensagem: "colide com a superfície fixa de Instance ... corrigir lá [em
+	services]"). Reproduzido de verdade nesta tarefa: registrar "Instance" sem este filtro e
+	instanciar "Folder" (que herda o Methods achatado) errava exatamente essa colisão dentro de
+	`Runtime.ClassRegistry.new`. `ClassBuilder.Build` filtra isso na origem -- ver
+	`RESERVED_INSTANCE_SURFACE` em ClassBuilder.luau para a lista completa e a fonte de cada nome.
+]]
+test(
+	"Build OMITE da tabela Methods qualquer nome da superfície fixa de Instance (FindFirstChild/Destroy/IsA/Changed), mesmo que MethodNames os declare",
+	function()
+		local generated = makeGeneratedClass(
+			"TestCBReserved",
+			"Instance",
+			false,
+			false,
+			EMPTY_SCHEMA,
+			{ "FindFirstChild", "Destroy", "IsA", "Changed", "ClassName", "MinhaFuncaoNormal" }
+		)
+
+		local descriptor = ClassBuilder.Build(generated, nil)
+		local methods = descriptor.Methods :: { [string]: unknown }
+
+		assert(methods["FindFirstChild"] == nil, "FindFirstChild é método base nativo -- não deveria virar stub")
+		assert(methods["Destroy"] == nil, "Destroy é método base nativo -- não deveria virar stub")
+		assert(methods["IsA"] == nil, "IsA é método base nativo -- não deveria virar stub")
+		assert(methods["Changed"] == nil, "Changed é um dos 5 sinais fixos -- não deveria virar stub de método")
+		assert(methods["ClassName"] == nil, "ClassName é campo fixo -- não deveria virar stub de método")
+		assert(
+			typeof(methods["MinhaFuncaoNormal"]) == "function",
+			"um nome que NÃO colide com a superfície fixa deveria continuar recebendo o stub normalmente"
+		)
+	end
+)
+
+test("Build REJEITA um Behavior tentando implementar um nome da superfície fixa de Instance (ex: Destroy)", function()
+	local generated = makeGeneratedClass("TestCBReservedBehavior", "Instance", false, false, EMPTY_SCHEMA, { "Destroy" })
+	local methods: { [string]: unknown } = {
+		Destroy = function(): () end,
+	}
+	local behavior: Types.Behavior = {
+		Methods = methods,
+	}
+
+	local ok, err = pcall(function()
+		return ClassBuilder.Build(generated, behavior)
+	end)
+
+	assert(not ok, "Build deveria erro alto quando behavior.Methods tenta reimplementar um nome da superfície fixa")
+	local message = tostring(err)
+	assert(
+		string.find(message, "'Destroy'", 1, true) ~= nil,
+		`mensagem deveria citar o nome reservado 'Destroy', recebeu: {message}`
+	)
+	assert(
+		string.find(message, "superfície fixa nativa de Runtime.Instance", 1, true) ~= nil,
+		`mensagem deveria explicar que é superfície fixa nativa (português, erro de engenharia interna), recebeu: {message}`
+	)
+end)
+
 test("Initialize vem de Behavior.Initialize; nil quando Behavior é nil", function()
 	local generated = makeGeneratedClass("TestCBInitialize", "Instance", false, false, EMPTY_SCHEMA, {})
 
