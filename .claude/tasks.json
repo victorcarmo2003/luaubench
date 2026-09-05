@@ -1747,7 +1747,7 @@
       "id": "task-valuetypes-007",
       "title": "Decode.luau (gramatica de $properties do Rojo) + init.luau (superficie publica do territorio)",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Decode.FromRojoJson(valueTypeName, valueCategory, raw) resolve a forma AMBIGUA do $properties: a pesquisa do Rojo (.claude/agents-memory/pesquisa-formato-projeto-rojo-2026-09-05.md, secao Formato de $properties) confirma que o Rojo resolve [1,2,3] contra o banco de reflection POR CLASSE+PROPRIEDADE -- o mesmo array e Vector3 em Part.Position e Color3 em Lighting.Ambient. Sem o ValueType alvo, decidir e adivinhar. NUNCA lanca: devolve DecodeFailure com a frase e quem chama (cli) decide se vira warning ou erro. init.luau expoe a superficie unica do territorio (construtores por tipo, BuildGlobals(), TypeNameOf(), Decode, Catalog) -- services/cli fazem require(../valuetypes) e NUNCA require de um modulo interno, mesmo contrato que runtime/services ja tem. Ler a nota de tipagem da secao 3.1 antes de escrever os export type: o valor em runtime e userdata, o Luau nao deixa declarar campo em userdata, entao os tipos sao NOMINAIS OPACOS e a checagem e so em runtime (divergencia D4, declarar no cabecalho).",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 41,
@@ -1762,7 +1762,8 @@
         "task-valuetypes-003",
         "task-valuetypes-005",
         "task-valuetypes-006"
-      ]
+      ],
+      "reviewResult": "APROVADO. 325/325 na suite completa (296 baseline + 19 Decode + 10 init). Ambiguidade Vector3/Color3 confirmada (mesmo array [1,2,3] produz TypeName diferente conforme alvo). Array de 12 -> CFrame real, string valida -> EnumItem, item inexistente -> DecodeFailure sem crash. 5 formas invalidas testadas SEM pcall, todas devolvem DecodeFailure, nenhum erro lancado (confirmado que pcall nem seria necessario). BuildGlobals() tabela nova a cada chamada, chaves batem exatamente com Catalog.SimulatedNames(). Guarda de sincronizacao confirmada como codigo VIVO (revisor removeu UDim2 do registro e o error() disparou de fato). TypeNameOf delega de verdade pra Userdata.TypeNameOf. --strict, zero any real. Territorio limpo, grafo aciclico intacto. Achado de tooling (require ambiguo de init.luau em diretorio) reproduzido de fato, nao e desculpa. Decisao de Color3 em 0-1 endossada pelo revisor com evidencia adicional (rbx_dom_weak armazena Color3 nativamente em [0,1]). 2 achados BAIXO nao bloqueantes: asNumberArray nao checa contiguidade de chaves numericas (so alcancavel com tabela montada a mao, sempre falha corretamente mesmo assim); cabecalho cita dependencia de Catalog.luau que o codigo nao usa de fato (doc desalinhada, sem impacto). Relatorio: .claude/agents-memory/revisor-valuetypes-task-007-decode-init-2026-09-05.md"
     },
     {
       "id": "task-runtime-032",
