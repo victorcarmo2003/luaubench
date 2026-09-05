@@ -106,7 +106,11 @@ local CATALOG: { CatalogEntry } = {
 	{ Name = "Color3", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "ColorSequence", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "DateTime", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "Enum", Simulated = false, HasGlobalConstructor = true },
+	-- Simulated = true a partir de task-valuetypes-003: src/valuetypes/types/Enum.luau existe e
+	-- implementa os três datatypes reais (Enums/Enum/EnumItem) por trás do global `Enum` -- ver
+	-- cabeçalho deste arquivo, "Todo Simulated desta leva é false ... task-valuetypes-003 em
+	-- diante vão editar ESTE arquivo, virando Simulated = true nome a nome".
+	{ Name = "Enum", Simulated = true, HasGlobalConstructor = true },
 	{ Name = "Faces", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "Font", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "NumberRange", Simulated = false, HasGlobalConstructor = true },

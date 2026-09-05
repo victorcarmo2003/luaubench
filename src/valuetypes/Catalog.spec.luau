@@ -19,6 +19,19 @@
 	devolvido por `WorldRoot:Raycast(...)`) continuam `HasGlobalConstructor = false` -- nenhum dos
 	dois tem construtor/função estática chamável por script comum na doc oficial.
 
+	ATUALIZAÇÃO (task-valuetypes-003, `Enum`): `Catalog.luau` teve a entrada `Enum` virada
+	`Simulated = true` (cabeçalho do próprio arquivo já prescrevia isso: "task-valuetypes-003 em
+	diante vão editar ESTE arquivo, virando Simulated = true nome a nome conforme cada
+	types/*.luau for escrito"). Os testes abaixo que antes assumiam "TODAS as entradas têm
+	Simulated = false" e "exatamente 35 nomes em UnsimulatedGlobalNames()" foram trocados por
+	versões que checam SÓ o que esta tarefa muda (`Enum`) -- de propósito, para não ficarem
+	acopladas (e frágeis/flaky) ao momento exato em que as tarefas IRMÃS paralelas desta mesma leva
+	(`task-valuetypes-004`: Vector3/Vector2; `task-valuetypes-005`: Color3/UDim/UDim2 -- mesmo
+	agente `coder-valuetypes`, mesmo arquivo `Catalog.luau`, rodando em paralelo) também viram
+	`Simulated = true` suas próprias entradas. As invariantes ESTRUTURAIS (37 entradas, sem
+	duplicata, disjunção Simulated/Unsimulated, `HasGlobalConstructor` dos grupos fixos) continuam
+	tal como antes -- essas não mudam com o que as tarefas irmãs fazem.
+
 	Roda com `lune run src/valuetypes/Catalog.spec.luau`.
 ]]
 
@@ -168,27 +181,35 @@ test("HasGlobalConstructor dos 4 nomes do grupo original 'sem construtor' bate c
 	assert(byName["RaycastResult"].HasGlobalConstructor == false, "RaycastResult deveria ter HasGlobalConstructor = false (só via WorldRoot:Raycast)")
 end)
 
-test("nesta leva, TODAS as entradas têm Simulated = false (nenhum types/*.luau existe ainda)", function()
+test("Enum tem Simulated = true a partir desta tarefa (task-valuetypes-003, types/Enum.luau existe)", function()
+	local byName: { [string]: Catalog.CatalogEntry } = {}
 	for _, entry in Catalog.All() do
-		assert(not entry.Simulated, `{entry.Name} deveria ter Simulated = false nesta tarefa (só a fábrica existe)`)
+		byName[entry.Name] = entry
 	end
+	assert(byName["Enum"].Simulated == true, "Enum deveria ter Simulated = true (types/Enum.luau existe)")
+	assert(byName["Enum"].HasGlobalConstructor == true, "Enum continua tendo HasGlobalConstructor = true")
 end)
 
-test("Catalog.SimulatedNames() está vazia nesta leva", function()
-	local names = Catalog.SimulatedNames()
-	assert(#names == 0, `esperava lista vazia, recebeu {#names} nomes`)
+test("Catalog.SimulatedNames() contém 'Enum'", function()
+	local set = toSet(Catalog.SimulatedNames())
+	assert(set["Enum"], "SimulatedNames() deveria conter 'Enum'")
 end)
 
-test("Catalog.UnsimulatedGlobalNames() tem exatamente os 35 nomes com HasGlobalConstructor = true (23 + 12)", function()
-	local names = Catalog.UnsimulatedGlobalNames()
-	assert(#names == 35, `esperava 35 nomes, recebeu {#names}`)
+test("Catalog.UnsimulatedGlobalNames() NÃO contém mais 'Enum' (virou Simulated = true)", function()
+	local set = toSet(Catalog.UnsimulatedGlobalNames())
+	assert(not set["Enum"], "UnsimulatedGlobalNames() não deveria mais conter 'Enum'")
+end)
 
-	local set = toSet(names)
+test("Catalog.UnsimulatedGlobalNames() nunca inclui um nome que está em SimulatedNames() (ex.: os outros 34 originais/novos-com-construtor, se ainda não simulados)", function()
+	-- Versão fraca de propósito (não fixa uma contagem exata) -- ver nota no cabeçalho sobre as
+	-- tarefas IRMÃS paralelas (-004/-005) também mexendo neste mesmo Catalog.luau. A garantia real
+	-- (disjunção completa) já é coberta pelo teste dedicado mais abaixo.
+	local simulated = toSet(Catalog.SimulatedNames())
+	local unsimulated = toSet(Catalog.UnsimulatedGlobalNames())
 	for _, name in ORIGINAL_23 do
-		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
-	end
-	for _, name in NEW_WITH_CONSTRUCTOR_12 do
-		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
+		if name ~= "Enum" and not simulated[name] then
+			assert(unsimulated[name], `{name} deveria estar em UnsimulatedGlobalNames() (ainda não simulado)`)
+		end
 	end
 end)
 
