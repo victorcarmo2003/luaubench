@@ -1280,3 +1280,195 @@ o `Source` (todo o dano medido) não tem ambiguidade nenhuma.
   SO (`os error 123`) em `TreePlanner.luau:633`, em vez de diagnóstico. O Rojo documenta `$path`
   como relativo, então não é o mesmo bug — fica registrado aqui como pendência separada, **não**
   entra em `task-cli-018`.
+
+---
+
+# Decisão 16 — escopo da exceção `plan/class-name-conflict` na raiz (`task-cli-019`)
+
+Responde ao achado MÉDIO de `.claude/agents-memory/revisor-cli-rootsource-2026-09-05.md` (seção 7.2):
+a exceção que a `task-cli-018` abriu em `resolveCore` (`TreePlanner.luau:968`) está condicionada a
+`isRoot`, mas `isRoot = true` vale para a raiz de **qualquer** projeto — inclusive a raiz de cada
+projeto aninhado (todo pacote Wally com `default.project.json` próprio) —, não só para a raiz do
+plano inteiro, que é o único caso que a Decisão 15 (Parte 2) desenhou.
+
+## Resposta curta
+
+**Opção (b): restringir a exceção à raiz do projeto mais externo.** Mas **não** pela variante que o
+revisor sugeriu (um parâmetro `isOutermostRoot` propagado por `planProjectTree`/`resolveCore`) — e
+sim por **um campo aditivo em `PlanContext`**. Mesmo resultado observável, custo menor, e sem o
+risco que a variante do parâmetro introduz. Detalhe abaixo.
+
+## Por que (b) e não (a)
+
+Três razões, em ordem de peso.
+
+**1. O sintoma real não é "diagnóstico menos específico" — é diagnóstico ZERO na fase certa e
+mensagem enganosa na fase errada.** O probe do revisor mostra o `Plan` devolvendo **zero
+diagnósticos** para um `.project.json` objetivamente mal configurado, e o problema só aparecendo
+depois como `materialize/invalid-class`: *"DataModel exists in the Roblox API Dump but is not
+simulated by LuauBench yet"*. Essa mensagem aponta o dedo para uma **limitação do LuauBench** quando
+a causa é o arquivo de projeto do usuário. Um erro que descreve a causa errada custa mais tempo de
+debug do que um erro genérico, e a regra 01 ("mensagem inclui contexto suficiente para debugar sem
+re-rodar com print") mais a regra 00 ("nunca silencioso") pesam contra deixar assim. Se o efeito
+colateral fosse apenas trocar `plan/class-name-conflict` por outro diagnóstico igualmente correto,
+(a) seria defensável; não é o caso.
+
+**2. `isRoot` já tem um significado legítimo, e ele é diferente do que a exceção precisa.** Em
+`:681` (`$path` opcional ausente → `plan/missing-class-name` em vez do `info`
+`plan/optional-path-omitted`) o raciocínio do comentário é *"a raiz não pode ser omitida — não
+existiria projeto nenhum"*, e isso vale **igualmente** para a raiz de um projeto aninhado. Ou seja,
+`isRoot` = "sou o nó raiz do arquivo de projeto que estou lendo" está correto e é usado corretamente
+hoje. A exceção da Decisão 15 precisa de outro conceito — "sou o nó raiz do plano inteiro". Deixar
+os dois colados no mesmo nome dentro de uma recursão mútua de quatro funções não custa caro nesta
+exceção; custa na próxima regra que alguém pendurar em `isRoot` lendo este precedente. Separar dois
+conceitos que já divergiram é trabalho de arquitetura, não polimento.
+
+**3. O custo de (b), na variante escolhida, é menor que o custo de escrever a divergência.**
+São ~6 linhas em dois pontos do mesmo arquivo, zero mudança de assinatura, zero tipo público tocado,
+um fixture novo. Documentar (a) direito — no código, no relatório e como divergência declarada
+permanente — dá quase o mesmo trabalho e deixa a guarda mais fraca para sempre.
+
+## Por que **não** a variante do parâmetro (`isOutermostRoot` threaded)
+
+A sugestão do revisor está conceitualmente certa e tecnicamente viável, mas tem dois problemas
+concretos que a variante escolhida não tem:
+
+- **`resolveCore` já recebe 12 parâmetros posicionais.** O 13º seria um `boolean` **imediatamente
+  adjacente** a outro `boolean` (`isRoot`), em call sites que passam literais (`true` em
+  `planProjectTree:1218`, `false` em `planChildNode:1185`). Dois booleanos posicionais adjacentes
+  passados como literais é transposição silenciosa esperando acontecer: o Luau não pega (mesmo
+  tipo), e o teste só pega se existir fixture exatamente para o caso invertido. Trocar um risco
+  hipotético por outro risco hipotético não é ganho.
+- **"Qual é o projeto mais externo" é invariante do plano inteiro** — é literalmente a definição de
+  `PlanContext`, cujo próprio comentário (`:115-116`) diz: *"Agrupa o que NÃO muda entre chamadas
+  recursivas (ao contrário de `cycleGuard`/`cycleChain`, que mudam ao entrar num projeto
+  aninhado)"*. O fato pertence ao `ctx`; propagá-lo por parâmetro seria colocá-lo no lugar reservado
+  ao que **muda** por frame. A variante certa é a que não precisa que nenhum frame acerte o repasse.
+
+## Desenho exato do delta (vira `task-cli-020`, território `cli`, arquivo único)
+
+Tudo em `src/cli/TreePlanner.luau`. Nenhum outro arquivo de produção muda — em particular,
+`Messages.luau` **não** ganha mensagem nova (o diagnóstico que volta a valer já existe).
+
+**1) `PlanContext` (`:117-120`) ganha um campo:**
+
+```luau
+type PlanContext = {
+	Options: PlanOptions,
+	Bag: Diagnostics.Bag,
+	-- Caminho NORMALIZADO do arquivo de projeto MAIS EXTERNO (o que `TreePlanner.Plan` recebeu).
+	-- Invariante do plano inteiro -- não muda ao entrar num projeto aninhado, por isso mora aqui e
+	-- não num parâmetro. É o que distingue "raiz do plano" de "raiz de um projeto qualquer"
+	-- (`isRoot`), dois conceitos que a task-cli-018 tinha colapsado no mesmo nome (Decisão 16).
+	OutermostProjectFilePath: string,
+}
+```
+
+**2) `TreePlanner.Plan` (`:1252-1259`) preenche o campo** — a linha
+`local normalizedProjectFilePath = normalizePath(project.FilePath)` (`:1258`) **sobe** para antes da
+construção do `ctx` (é a única reordenação; `normalizePath` é função pura, sem efeito colateral):
+
+```luau
+local normalizedProjectFilePath = normalizePath(project.FilePath)
+local ctx: PlanContext = {
+	Options = options,
+	Bag = bag,
+	OutermostProjectFilePath = normalizedProjectFilePath,
+}
+```
+
+**3) A exceção em `resolveCore` (`:968`) troca de condição:**
+
+```luau
+-- "Raiz do plano inteiro", não "raiz de qualquer projeto": `isRoot` também é `true` para a raiz de
+-- todo projeto ANINHADO (`planProjectTree` é chamado recursivamente pelo ramo de projeto aninhado),
+-- e um `DataModel` só é uma classe legal na raiz do projeto MAIS EXTERNO -- em qualquer outra
+-- posição ele continua caindo em `plan/class-name-conflict`, como antes da task-cli-018.
+local isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath
+local rootDataModelSourceException = isOutermostRoot and explicitClassName == "DataModel"
+if pathClassName ~= nil and pathClassName ~= "Folder" and not rootDataModelSourceException then
+```
+
+**4) O comentário existente (`:956-967`) é ajustado**, não reescrito: onde hoje se lê
+`Só na RAIZ (`isRoot`)`, passa a ler `Só na raiz do projeto MAIS EXTERNO (`isOutermostRoot`)`, e
+some a frase "Reportado no relatório desta task para revisão do arquiteto" (a revisão aconteceu —
+esta decisão), substituída por uma referência a `Decisão 16`.
+
+**Onde o threading começa e onde some:** começa e termina em `TreePlanner.Plan` — o campo é escrito
+uma vez, na construção do `ctx`, e lido num único ponto (`resolveCore`, a exceção). Nenhuma
+assinatura de `resolveCore`/`planChildrenOf`/`planChildNode`/`planProjectTree` muda; `isRoot`
+mantém exatamente o significado e o uso atuais (inclusive `:681`, que está correto como está);
+`PlanNode`, `RootResolution`, `InstancePlan` e `PlanOptions` ficam idênticos — nenhum consumidor
+(`TreeMaterializer`, `RunCommand`) é tocado.
+
+### Por que a comparação de caminho é exata, não heurística
+
+Duas propriedades já garantidas pelo código, que precisam continuar valendo (e ganham teste):
+
+- **`normalizePath` é idempotente** (`:211-244`): a saída não tem `\`, `.` nem `..`, e o prefixo de
+  raiz é preservado — normalizar duas vezes o mesmo caminho dá a mesma string. A comparação é entre
+  formas canônicas, nunca entre `C:\a/b` e `C:/a/b`.
+- **É impossível uma chamada aninhada ter `currentProjectFilePath` igual ao do topo.** O
+  `cycleGuard` é semeado em `Plan` (`:1259`) com o caminho normalizado do projeto de topo, e o ramo
+  de projeto aninhado checa o guard (`:849-860`) **antes** de chamar `planProjectTree` — um `$path`
+  que aponte de volta para o projeto de topo morre em `plan/nested-project-cycle`. Não existe falso
+  positivo possível; o caminho identifica o arquivo, e o arquivo de topo só pode ser visitado uma
+  vez.
+
+### Comportamento resultante
+
+| Cenário | Antes de `task-cli-018` | Hoje (com a exceção larga) | Depois da Decisão 16 |
+|---|---|---|---|
+| Raiz de **topo**: `{"$className":"DataModel","$path":"algo.lua"}` | `error plan/class-name-conflict` | `warning plan/root-source-ignored` | `warning plan/root-source-ignored` (mantém — é o desenho da Decisão 15) |
+| Raiz de projeto **aninhado**: idem | `error plan/class-name-conflict` | **zero diagnóstico no Plan** → `materialize/invalid-class` | `error plan/class-name-conflict` (volta ao correto) |
+| Qualquer nó **não-raiz** com `$className` + `$path` não-Folder | `error plan/class-name-conflict` | idem | idem (nunca foi tocado) |
+| Raiz (qualquer) `DataModel` + `$path` de pasta sem `init.*` | passa (`pathClassName == "Folder"`) | passa | passa — ver lacuna conhecida abaixo |
+
+### Lacuna conhecida que a Decisão 16 **não** fecha (e por quê)
+
+`{"$className":"DataModel","$path":"pasta-sem-init"}` na raiz de um projeto **aninhado** continua
+passando o `Plan` sem diagnóstico e falhando só no `Materialize` (`materialize/invalid-class`).
+Isso é **pré-existente à `task-cli-018`** — a guarda `plan/class-name-conflict` nunca cobriu
+`pathClassName == "Folder"`, por desenho: `Folder` é justamente a forma legítima da raiz de topo.
+Fechar isso exigiria um diagnóstico novo ("`DataModel` só é válido na raiz do projeto mais externo"),
+o que depende de confirmar com o `pesquisador` o que o Rojo real faz com um projeto aninhado cuja
+raiz é `DataModel` (erro nomeado? aceita e quebra depois?). **Fica fora do escopo agora**: o
+`Materialize` já barra sem crash e sem instância fantasma, e a Decisão 16 é uma correção de escopo,
+não uma feature nova. Registrado aqui para não ser redescoberto como bug novo.
+
+## Riscos
+
+- **Blast radius:** um arquivo, um tipo interno não exportado, uma condição. As 447 specs verdes
+  (contagem do revisor) cobrem o caminho; a única mudança de comportamento esperada é a linha 2 da
+  tabela acima, que hoje não tem fixture — por isso o fixture novo é parte da mesma task (regra 01:
+  teste na mesma tarefa da lógica).
+- **Reordenação da linha `normalizedProjectFilePath`:** `normalizePath` é pura; o único consumidor
+  seguinte (`cycleGuard`/`cycleChain`) continua recebendo o mesmo valor.
+- **Regressão no warning da Decisão 15:** coberta pelo fixture `root-source-ignored`, que já existe
+  e precisa continuar verde exatamente como está.
+
+## Acceptance da `task-cli-020`
+
+- Fixture novo em `src/cli/fixtures/tree-planner/` (nome sugerido:
+  `nested-project-root-datamodel-conflict/`) reproduzindo o cenário do revisor: projeto externo com
+  um nó cujo `$path` aponta para uma pasta com `default.project.json` próprio, e esse projeto
+  aninhado com `{"$className":"DataModel","$path":"algo.lua"}` na raiz. Teste espera
+  **`error plan/class-name-conflict`** com `NodePath` do nó raiz do projeto aninhado, e
+  `TreePlanner.Plan` devolvendo `nil` (contrato "nil ⟺ `bag:HasErrors()`").
+- Teste garantindo que o fixture `root-source-ignored` (raiz de **topo**) continua emitindo
+  `warning plan/root-source-ignored` e **nenhum** `plan/class-name-conflict` — é o caso que a
+  exceção existe para permitir.
+- Teste de que a comparação sobrevive a caminho não-canônico: `Plan` chamado com um `project.FilePath`
+  contendo `./` ou `\` ainda reconhece a raiz de topo como mais externa (pode ser feito construindo o
+  `ProjectFile.Project` com o caminho na forma "suja" que `ProjectFile.Read` produziria).
+- Suítes de `src/cli`, `src/runtime` e `src/services` seguem 100% verdes; `luau-lsp analyze` limpo;
+  `--!strict`, sem `any`; nada fora de `src/cli/` tocado.
+
+## O que deliberadamente NÃO fazer agora
+
+- **Não** criar diagnóstico novo para "`DataModel` em posição não-raiz" (lacuna conhecida acima) —
+  precisa de confirmação do `pesquisador` sobre o Rojo real primeiro.
+- **Não** renomear `isRoot` nem mexer no uso dele em `:681` — está correto.
+- **Não** transformar `PlanContext` em objeto com métodos; continua registro de dados puro.
+- **Não** reabrir a Parte 1 da `task-cli-018` (propagação de `Source`/`SourcePath`/`Properties` da
+  raiz aninhada): aprovada sem ressalva pelo revisor, verificada contra os pacotes Wally reais.
