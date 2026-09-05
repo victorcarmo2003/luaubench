@@ -1916,7 +1916,7 @@
       "id": "task-services-016",
       "title": "AsyncCall.luau (unico ponto de yield de services) + InstanceState.luau (estado privado por instancia)",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secoes L2.0.1 e L2.0.2. Dois modulos folha novos, pre-requisito de TODA a leva 2. (1) src/services/AsyncCall.luau -- `AsyncCall.Yield(label: string): ()`: chama Context.GetScheduler():Wait(0) (um passo de scheduler, latencia simulada ZERO -- Scheduler.Run avanca por os.clock() real, injetar latencia custaria tempo de parede e tornaria teste instavel); se a thread corrente NAO e gerida pelo Scheduler, captura o erro em portugues do runtime (Scheduler.Wait, mensagem de engenharia interna) e o retraduz para uma mensagem [LuauBench] em ingles, em nivel 3 (culpa o call site do script), NUNCA deixando a string em portugues vazar para o Output. Todo metodo com a tag `Yields` no dump passa por aqui. DOCUMENTAR a divergencia de latencia zero e registrar --async-latency como extensao futura FORA do namespace de classe simulada (regra 00). (2) src/services/InstanceState.luau -- estado privado tipado por instancia, sobre Runtime.Instance.Get/SetPropertyRaw com chave FORA do schema (invisivel ao script: InstanceMeta.__index passo 5 exige classSchema[key] ~= nil). REGRA DURA: toda chave comeca com `_LuauBench` para colisao zero com membro futuro do dump. API sugerida: `InstanceState.new<T>(key: string)` devolvendo { Get: (inst) -> T?, Set: (inst, T) -> () }. Consumidores previstos: DataStore/OrderedDataStore, Pages, DataStoreKeyInfo, WorldRoot, Tween.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 44,
@@ -2101,7 +2101,7 @@
       "id": "task-services-024",
       "title": "behavior/Lighting: ClockTime/TimeOfDay/minutos acoplados + LightingChanged + GetMoonPhase",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.5.2. Lighting JA esta coberta desde a leva 1 (20 propriedades no schema, sem Behavior) -- falta o unico acoplamento real da classe, hoje divergente EM SILENCIO: escrever Lighting.ClockTime = 6 deixa TimeOfDay valendo '14:00:00'. Confirmado por doc oficial que ClockTime, TimeOfDay e Get/SetMinutesAfterMidnight sao TRES VISTAS DO MESMO ESTADO. Os defaults do dump ja sao coerentes entre si (ClockTime = 14, TimeOfDay = '14:00:00', verificado), entao a semeadura de ClassRegistry.new ja nasce certa -- so as escritas divergem. Implementar behavior/Lighting.luau mantendo as tres vistas sincronizadas a partir de uma unica fonte interna em minutos. TimeOfDay aceita escrita curta ('11:00') e SetMinutesAfterMidnight faz WRAP acima de 24h (os dois confirmados); zero-padding na leitura e wrap na escrita direta de ClockTime NAO confirmados -> adotar HH:MM:SS com zero-padding e wrap, comentado como aproximacao de boa-fe. LightingChanged(skyChanged: bool) passa a disparar nas mudancas de propriedade EXCETO GlobalShadows, FogColor, FogStart e FogEnd -- exclusao DOCUMENTADA OFICIALMENTE, pegadinha real que so um LuauBench fiel reproduz. GetMoonPhase() devolve 0.75 SEMPRE (valor real do motor hoje, confirmado -- fidelidade de graca). GetSunDirection/GetMoonDirection devolvem Vector3 e NAO tem formula publica: permanecem com o stub [LuauBench] MESMO DEPOIS de Vector3 existir -- divergencia declarada, nao divida que a leva de tipos de valor quita. Todo o resto de Lighting continua dado que guarda e devolve, sem render nenhum.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 48,
@@ -2259,7 +2259,7 @@
       "id": "task-valuetypes-005-fix",
       "title": "Corrigir Color3.fromHex (validacao insuficiente) + consolidar Catalog.luau Simulated=true (Vector3/Vector2/Color3/UDim/UDim2)",
       "description": "Dois achados reais das revisoes de task-valuetypes-004 e task-valuetypes-005, combinados numa so correcao porque tocam os mesmos arquivos (Catalog.luau e Color3.luau). (1) BUG REAL em Color3.fromHex (achado MEDIO do revisor-valuetypes, .claude/agents-memory/revisor-valuetypes-color-udim-udim2-2026-09-05.md): a validacao usa so tonumber(x,16)==nil, que NAO rejeita strings com sinal embutido -- Color3.fromHex('-10000') nao erra, devolve R=72340177116200960 (wraparound de tonumber('-1',16) sem sinal). Corrigir validando o FORMATO antes de converter (regex tipo ^%x%x%x%x%x%x$ ou ^%x%x%x$ pros 2 formatos aceitos, apos remover o # opcional), rejeitando qualquer caractere fora de [0-9a-fA-F] incluindo sinal. (2) CONSOLIDACAO: Catalog.luau e efetivamente um arquivo COMPARTILHADO entre as 3 tarefas paralelas desta wave (o proprio coder do Enum, task-valuetypes-003, avisou isso no relatorio) -- so a entrada 'Enum' foi virada Simulated=true; Vector3/Vector2/Color3/UDim/UDim2, todos totalmente implementados e aprovados (com ressalva), continuam Simulated=false. Virar as 5 entradas pra Simulated=true. NAO mexer nas entradas que ainda nao tem types/*.luau (CFrame e o resto).",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 41,
@@ -2276,7 +2276,8 @@
         "task-valuetypes-005"
       ],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "APROVADO. Bug original reproduzido (tonumber(\"-1\",16)==18446744073709552000 no Lune) e fix confirmado: fromHex(\"-10000\")/(\"+00ff00\")/espaco/simbolo/sinal na forma abreviada todos erram citando a entrada. Regressao confirmada (case misto \"Ec008C\"/\"AbC\" batem com a formula). Teste de coerencia do Catalog e varredura real via fs.readDir (nao lista disfarcada). Grep confirma Vector3/Vector2/Color3/UDim/UDim2/Enum=true, resto=false. Suite completa 9/9 specs, todos os numeros batem: Float32 10/10, Userdata 33/33, Catalog 15/15, Enum 30/30, Vector3 42/42, Vector2 38/38, Color3 24/24, UDim 17/17, UDim2 24/24. --strict, zero any, luau-lsp limpo, territorio limpo. 2 achados BAIXO nao bloqueantes: comentario do teste de coerencia promete ignorar helper interno futuro mas o codigo faz falhar (comentario desalinhado); fromHex(nil)/fromHex(true) erram com mensagem nativa do Luau em vez da mensagem custom (fora do escopo desta task). Relatorio: .claude/agents-memory/revisor-valuetypes-task-005-fix-2026-09-05.md"
     }
   ]
 }

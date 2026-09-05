@@ -36,6 +36,7 @@
 ]]
 
 local process = require("@lune/process")
+local fs = require("@lune/fs")
 local Catalog = require("./Catalog")
 
 local passedCount = 0
@@ -253,6 +254,47 @@ test("cada CatalogEntry devolvida está congelada (defesa em profundidade)", fun
 	for _, entry in Catalog.All() do
 		assert(table.isfrozen(entry), `entrada de {entry.Name} deveria estar congelada`)
 	end
+end)
+
+-- Teste de coerência da task-valuetypes-005-fix: Catalog.luau é um arquivo efetivamente
+-- COMPARTILHADO entre as tarefas paralelas da leva 40 (Enum/Vector3+Vector2/Color3+UDim+UDim2) --
+-- só a entrada "Enum" tinha virado `Simulated = true` quando as outras 5 (Vector3/Vector2/Color3/
+-- UDim/UDim2) já tinham `types/*.luau` implementado e aprovado. Este teste varre o diretório
+-- `types/` de verdade (via `fs.readDir`, não uma lista à mão que poderia ficar desatualizada do
+-- mesmo jeito que o drift original) e falha se QUALQUER `types/<Nome>.luau` existir sem a
+-- respectiva entrada do Catalog em `Simulated = true` -- evita repetir esse drift no futuro
+-- conforme `task-valuetypes-006` (CFrame) e as demais forem implementadas.
+test("toda entrada com um types/*.luau real no território tem Simulated = true (evita drift entre coders paralelos)", function()
+	local typesDir = process.cwd .. "src/valuetypes/types"
+	local entries = fs.readDir(typesDir)
+
+	local byName: { [string]: Catalog.CatalogEntry } = {}
+	for _, entry in Catalog.All() do
+		byName[entry.Name] = entry
+	end
+
+	local checkedCount = 0
+	for _, fileName in entries do
+		-- Só módulo de tipo propriamente dito: ignora "*.spec.luau" (teste) e qualquer arquivo que
+		-- não seja um `.luau` 1:1 com o nome de uma entrada do catálogo (ex.: futuro helper interno
+		-- do território que não corresponda a um datatype global).
+		local isSpec = string.match(fileName, "%.spec%.luau$") ~= nil
+		local typeName = if isSpec then nil else string.match(fileName, "^(.*)%.luau$")
+
+		if typeName ~= nil then
+			local entry = byName[typeName]
+			assert(entry ~= nil, `types/{fileName} não corresponde a nenhuma entrada de Catalog (nome esperado "{typeName}")`)
+			assert(
+				entry.Simulated,
+				`{typeName} tem types/{fileName} implementado mas Catalog.luau ainda diz Simulated = false -- drift entre coders paralelos`
+			)
+			checkedCount += 1
+		end
+	end
+
+	-- Sanity check: garante que o teste examinou algo de verdade -- passaria vazio (falso
+	-- positivo) se `fs.readDir` apontasse pra um diretório errado ou viesse vazio.
+	assert(checkedCount > 0, "nenhum types/*.luau encontrado -- teste de coerência não verificou nada")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

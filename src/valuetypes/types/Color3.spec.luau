@@ -135,6 +135,53 @@ test("Color3.fromHex: formato inválido erra", function()
 	assert(not ok2, "fromHex com dígitos não-hexadecimais deveria errar")
 end)
 
+-- Regressão do bug real (task-valuetypes-005-fix, achado MEDIO do revisor): a validação antiga
+-- usava só `tonumber(x, 16) == nil`, que NÃO rejeita sinal embutido -- `tonumber("-1", 16)` no
+-- Lune/Luau devolve 18446744073709552000 (interpretado como inteiro de 64 bits sem sinal) em vez
+-- de `nil`, então `Color3.fromHex("-10000")` não errava: devolvia um Color3 "HDR" com
+-- R = 72340177116200960 (wraparound), lixo silencioso. O fix valida o FORMATO inteiro (regex
+-- `^%x%x%x%x%x%x$`/`^%x%x%x$`, que só casa `[0-9a-fA-F]`) antes de converter qualquer dígito.
+test("Color3.fromHex: sinal embutido ou caractere fora de [0-9a-fA-F] erra citando a entrada, nunca devolve valor-lixo", function()
+	local invalidInputs = {
+		"-10000", -- sinal de menos embutido -- o bug original relatado pelo revisor.
+		"+00ff00", -- sinal de mais embutido.
+		"12345!", -- símbolo fora do alfabeto hex, 6 caracteres no total.
+		"12 456", -- espaço fora do alfabeto hex.
+		"#-fff", -- sinal embutido na forma abreviada, com "#".
+	}
+
+	for _, input in invalidInputs do
+		local ok, err = pcall(function()
+			return Color3.fromHex(input)
+		end)
+		assert(not ok, `fromHex("{input}") deveria errar, nunca devolver um Color3`)
+		local message = tostring(err)
+		assert(
+			string.find(message, input, 1, true) ~= nil,
+			`mensagem de erro deveria citar a entrada inválida "{input}", recebeu: {message}`
+		)
+	end
+end)
+
+-- Confirma que o fix NÃO afetou nenhuma entrada válida (regressão): 3 e 6 dígitos, com/sem "#",
+-- case misto (maiúsculo/minúsculo dentro da MESMA string, não só uma string toda maiúscula ou
+-- toda minúscula) continuam produzindo exatamente o mesmo resultado de antes do fix.
+test("Color3.fromHex: entradas válidas continuam idênticas após o fix (3/6 dígitos, com/sem '#', case misto)", function()
+	local mixedCase = Color3.fromHex("Ec008C")
+	local allLower = Color3.fromHex("#ec008c")
+	assert(
+		mixedCase.R == allLower.R and mixedCase.G == allLower.G and mixedCase.B == allLower.B,
+		"fromHex com case misto deveria produzir o mesmo resultado que tudo minúsculo"
+	)
+
+	local shortMixed = Color3.fromHex("AbC")
+	local shortExpanded = Color3.fromHex("AABBCC")
+	assert(
+		shortMixed.R == shortExpanded.R and shortMixed.G == shortExpanded.G and shortMixed.B == shortExpanded.B,
+		"fromHex abreviado com case misto deveria expandir cada dígito igual a antes"
+	)
+end)
+
 -- ================================================================================================
 -- Propriedades
 -- ================================================================================================

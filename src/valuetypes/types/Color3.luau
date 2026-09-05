@@ -175,22 +175,33 @@ Color3Module.fromHex = function(hex: string): Color3
 		body = string.sub(body, 2)
 	end
 
+	-- FIX (task-valuetypes-005-fix, achado MEDIO do revisor): valida o FORMATO inteiro antes de
+	-- converter qualquer dígito. `tonumber(x, 16)` sozinho NÃO é suficiente -- ele aceita sinal
+	-- embutido ("-1"/"+1") e o interpreta como inteiro de 64 bits, devolvendo um valor gigante em
+	-- vez de errar (confirmado: `tonumber("-1", 16)` == 18446744073709552000 no Lune/Luau). Antes
+	-- deste fix, `Color3.fromHex("-10000")` não errava -- devolvia um Color3 "HDR" com
+	-- R = 72340177116200960 (wraparound), em vez de rejeitar a entrada. `%x` só casa
+	-- `[0-9a-fA-F]` -- nunca sinal, nunca espaço, nunca qualquer outro caractere -- então validar
+	-- o corpo inteiro contra os dois formatos aceitos ANTES de fatiar em pares rejeita qualquer
+	-- entrada malformada de uma vez, com uma mensagem que cita a entrada original.
+	if string.match(body, "^%x%x%x%x%x%x$") == nil and string.match(body, "^%x%x%x$") == nil then
+		error(
+			`Color3.fromHex: "{hex}" não é um formato hexadecimal válido (esperado "RRGGBB" ou "RGB", com "#" opcional)`,
+			2
+		)
+	end
+
 	if #body == 3 then
 		local r = parseHexChannel(string.rep(string.sub(body, 1, 1), 2))
 		local g = parseHexChannel(string.rep(string.sub(body, 2, 2), 2))
 		local b = parseHexChannel(string.rep(string.sub(body, 3, 3), 2))
 		return fromFields(r, g, b)
-	elseif #body == 6 then
+	else
 		local r = parseHexChannel(string.sub(body, 1, 2))
 		local g = parseHexChannel(string.sub(body, 3, 4))
 		local b = parseHexChannel(string.sub(body, 5, 6))
 		return fromFields(r, g, b)
 	end
-
-	error(
-		`Color3.fromHex: "{hex}" não é um formato hexadecimal válido (esperado "RRGGBB" ou "RGB", com "#" opcional)`,
-		2
-	)
 end
 
 local methods: { [string]: unknown } = {

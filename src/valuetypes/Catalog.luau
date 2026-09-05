@@ -103,7 +103,12 @@ local CATALOG: { CatalogEntry } = {
 	{ Name = "Axes", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "BrickColor", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "CFrame", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "Color3", Simulated = false, HasGlobalConstructor = true },
+	-- Simulated = true a partir de task-valuetypes-005-fix (consolidação): src/valuetypes/types/
+	-- Color3.luau existe e foi aprovado (com ressalva de fromHex, corrigida na mesma tarefa) desde
+	-- task-valuetypes-005, mas a entrada ficou `false` porque Catalog.luau é compartilhado entre as
+	-- 3 tarefas paralelas da leva 40 (Enum/Vector3+Vector2/Color3+UDim+UDim2) e só o coder do Enum
+	-- tinha virado a própria entrada -- ver cabeçalho deste arquivo.
+	{ Name = "Color3", Simulated = true, HasGlobalConstructor = true },
 	{ Name = "ColorSequence", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "DateTime", Simulated = false, HasGlobalConstructor = true },
 	-- Simulated = true a partir de task-valuetypes-003: src/valuetypes/types/Enum.luau existe e
@@ -123,10 +128,17 @@ local CATALOG: { CatalogEntry } = {
 	{ Name = "Rect", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "Region3", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "TweenInfo", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "UDim", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "UDim2", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "Vector2", Simulated = false, HasGlobalConstructor = true },
-	{ Name = "Vector3", Simulated = false, HasGlobalConstructor = true },
+	-- Simulated = true a partir de task-valuetypes-005-fix (consolidação, mesmo motivo de Color3
+	-- acima): src/valuetypes/types/UDim.luau existe e foi aprovado desde task-valuetypes-005.
+	{ Name = "UDim", Simulated = true, HasGlobalConstructor = true },
+	-- Idem UDim.
+	{ Name = "UDim2", Simulated = true, HasGlobalConstructor = true },
+	-- Simulated = true a partir de task-valuetypes-005-fix (consolidação): src/valuetypes/types/
+	-- Vector2.luau existe e foi aprovado desde task-valuetypes-004, mesmo motivo de Color3 acima
+	-- (Catalog.luau compartilhado entre as 3 tarefas paralelas da leva 40).
+	{ Name = "Vector2", Simulated = true, HasGlobalConstructor = true },
+	-- Idem Vector2 (src/valuetypes/types/Vector3.luau, task-valuetypes-004).
+	{ Name = "Vector3", Simulated = true, HasGlobalConstructor = true },
 
 	-- 14 nomes novos que a lista original esquecia (ver cabeçalho, fonte: seção 0.8 do desenho
 	-- arquitetural desta leva). 12 COM construtor global (SharedTable e Content corrigidos em
