@@ -1184,20 +1184,22 @@
     },
     {
       "id": "task-runtime-029",
-      "title": "GetService com classe nao registrada vaza mensagem interna em portugues pro stderr do usuario",
-      "description": "Achado incidental do revisor-cli na revisao de task-cli-014, fora do territorio cli. Quando um script do usuario chama game:GetService('X') pra uma classe nao registrada em ClassRegistry (ex: HttpService, ainda nao coberta pela wave 1 de services), o erro que chega ao stderr e uma mensagem INTERNA em portugues (\"GetService: classe 'HttpService' nao registrada em ClassRegistry\") -- viola a regra 00 (codigo/mensagens em ingles pro usuario final, portugues so em comentario de codigo) e e um caminho DIFERENTE do que TreeMaterializer ja trata em ingles (materialize/service-not-simulated, family Roblox). Precisa de correcao: ou DataModel.GetService devolve mensagem em ingles fiel a familia Roblox (\"X is not a valid member of DataModel\" ou equivalente -- confirmar comportamento real, nao adivinhar), ou o caminho de chamada em runtime de script do usuario precisa de tratamento equivalente ao que TreeMaterializer ja tem pra Service nao simulado.",
+      "title": "ARQUITETURA: GetService de classe nao registrada precisa distinguir 'nome invalido' de 'Service real ainda nao coberto', sem runtime depender de services",
+      "description": "Achado incidental do revisor-cli na revisao de task-cli-014 (mensagem interna em portugues vazando pro stderr) + pesquisa de confirmacao (pesquisador, 2026-09-05) que revelou o problema real e verdadeiro escopo. Pesquisa confirmou 3 casos reais do Roblox: (1) nome que nao corresponde a NENHUMA classe do Roblox -> erro real 'X' is not a valid Service name (fonte: DevForum 2018 e 2023, Maximum_ADHD); (2) classe real SEM tag Service -> retorna nil silenciosamente (nao erra); (3) nao existe no Roblox real -- e o caso especifico do LuauBench: classe real do dump COM tag Service mas Covered=false (nao implementada nesta leva). Pra (3), recomendacao do pesquisador e usar familia [LuauBench] ... not simulated by LuauBench yet (mesmo padrao ja usado em TreeMaterializer/materialize/service-not-simulated), NUNCA a mensagem real do Roblox (seria factualmente enganosa -- diria 'nome invalido' pra um Service que de fato existe). PROBLEMA ARQUITETURAL: DataModel.GetService (runtime/DataModel.luau:66-97) so consulta Runtime.ClassRegistry.Get(className), que so tem entradas pra classes Covered=true (24 registradas). ClassRegistry.Get==nil hoje CONFUNDE os casos (1) e (3) -- runtime nao pode distinguir 'nome que nao existe em lugar nenhum do dump' de 'Service real do dump ainda nao implementado' porque runtime NUNCA le o API Dump diretamente (regra 02, invariante deliberada pra evitar dependencia circular services->runtime->services). So services tem acesso ao manifesto completo (916 classes) via Services.IsServiceClass/GetSimulatedServiceClasses (task-services-009). Decisao de arquiteto necessaria: como o runtime consegue produzir as 3 mensagens certas SEM importar services (regra 02 e absoluta -- services depende de runtime, nunca o contrario). Candidatos a avaliar: (a) Services.Register() passa a registrar em ClassRegistry TODA classe com tag Service do manifesto (nao so Covered=true), com um novo campo tipo ClassDescriptor.IsSimulated=false pras nao cobertas -- ClassRegistry.Get deixa de ser nil pra Service real, GetService distingue IsSimulated antes de tentar NewEngineInstance; (b) DataModel.GetService aceita um callback/predicado opcional injetado por services no Bootstrap (ex: Context.SetUnknownServiceHandler) pra formatar a mensagem certa sem runtime conhecer o manifesto; (c) outra solucao que preserve a invariante da regra 02. NAO decidir sozinho qual -- e o arquiteto quem pesa as opcoes.",
       "column": "todo",
-      "agent": "coder-runtime",
+      "agent": "arquiteto",
       "reviewer": "revisor-runtime",
       "wave": 26,
       "tags": [
+        "arquitetura",
         "runtime",
+        "services",
         "erro",
         "correcao-de-revisao",
         "i18n"
       ],
       "priority": "medium",
-      "acceptance": "game:GetService('X') pra classe nao registrada, chamado de dentro de um script do usuario, produz mensagem em ingles (nunca portugues) chegando ao stderr formatado; se o comportamento real do Roblox for confirmavel (pesquisador se houver duvida), a mensagem bate com a familia real; regressao total intacta; --!strict sem any.",
+      "acceptance": "Decisao registrada em .claude/agents-memory/arquiteto-runtime-2026-09-04.md (nova secao) escolhendo o mecanismo (a/b/c ou outro), preservando a regra 02 (runtime nunca le API Dump nem depende de services); vira tarefa(s) nova(s) de implementacao pro(s) territorio(s) certo(s) (provavelmente services + runtime, serie obrigatoria se cruzar), com acceptance proprio garantindo: (1) nome que nao existe em nenhuma classe do dump erra com familia real do Roblox ('X' is not a valid Service name); (2) Service real do dump, tag Service, Covered=false, erra com familia [LuauBench] ... not simulated by LuauBench yet; (3) classe real sem tag Service continua retornando nil (comportamento ja correto hoje, nao regredir); nenhuma mensagem em portugues chega ao script do usuario; regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     },
