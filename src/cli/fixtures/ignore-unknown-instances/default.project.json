@@ -1,0 +1,10 @@
+{
+  "name": "IgnoreUnknownInstances",
+  "tree": {
+    "$className": "DataModel",
+    "Flagged": {
+      "$className": "Folder",
+      "$ignoreUnknownInstances": true
+    }
+  }
+}

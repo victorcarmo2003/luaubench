@@ -147,4 +147,78 @@ function Messages.DiagnosticLine(severityLabel: string, code: string, message: s
 	return `{severityLabel}: [{code}] {message}{locationSuffix}`
 end
 
+--------------------------------------------------------------------------------------------------
+-- JSON (JsonValue.luau) -- task-cli-002
+--------------------------------------------------------------------------------------------------
+
+-- `parserError` já vem LIMPO de stack traceback (JsonValue.Decode corta na primeira quebra de
+-- linha antes de chamar isto -- regra 04: nunca stack trace cru do parser) -- este wrapper só
+-- garante que a mensagem final sempre cita o arquivo de origem.
+function Messages.MalformedJson(sourcePath: string, parserError: string): string
+	return `Failed to parse "{sourcePath}" as JSON: {parserError}`
+end
+
+-- Formato único para as cinco funções As*/AsArray de `JsonValue`. `expectedKind`/`actualKind`
+-- são um dos seis rótulos que `JsonValue.luau` decide via `typeof` ("null"/"boolean"/"number"/
+-- "string"/"array"/"object") -- a decisão de QUAL rótulo mora lá, nunca aqui.
+function Messages.JsonTypeMismatch(path: string, expectedKind: string, actualKind: string): string
+	return `Expected {expectedKind} at "{path}", found {actualKind}.`
+end
+
+--------------------------------------------------------------------------------------------------
+-- Projeto Rojo (.project.json) -- ProjectFile.luau, task-cli-002
+--------------------------------------------------------------------------------------------------
+
+function Messages.ProjectPathNotFound(path: string): string
+	return `The path "{path}" does not exist.`
+end
+
+function Messages.ProjectFileNotFound(searchedDirectory: string): string
+	return `Could not find a Rojo project file ("default.project.json" or "default.project.jsonc") in "{searchedDirectory}".`
+end
+
+function Messages.ProjectFileNotReadable(filePath: string, ioError: string): string
+	return `Could not read the project file "{filePath}": {ioError}`
+end
+
+function Messages.ProjectInvalidRoot(): string
+	return "The root of a Rojo project file must be a JSON object."
+end
+
+-- Decisão 14 do desenho: espelha o `deny_unknown_fields` do Rojo no nível raiz -- a mensagem
+-- nomeia a chave inválida E lista as chaves válidas (é o que garante, na prática, que "tre" em
+-- vez de "tree" não passe silenciosamente como projeto vazio).
+function Messages.ProjectUnknownField(fieldName: string, validFields: { string }): string
+	return `Unknown field "{fieldName}" at the project root. Expected one of: {table.concat(validFields, ", ")}.`
+end
+
+function Messages.ProjectMissingField(fieldName: string): string
+	return `The project is missing the required field "{fieldName}".`
+end
+
+function Messages.ProjectEmitLegacyScriptsFalse(): string
+	return '"emitLegacyScripts": false is not modeled by LuauBench (it does not simulate RunContext yet) -- '
+		.. "the .server.lua/.client.lua -> Script/LocalScript mapping will not change, and behavior may diverge."
+end
+
+function Messages.ProjectGlobIgnorePathsUnsupported(globs: { string }): string
+	return `"globIgnorePaths" is not applied yet -- LuauBench will still load files matching: {table.concat(globs, ", ")}.`
+end
+
+function Messages.ProjectSyncRulesUnsupported(count: number): string
+	return `"syncRules" ({count} rule(s)) is not applied yet -- LuauBench uses its built-in file-to-class conventions only.`
+end
+
+function Messages.ProjectNodeIdUnsupported(): string
+	return '"$id" is not supported yet (Ref/attribute-reference semantics depend on value types, a future wave).'
+end
+
+function Messages.ProjectUnknownDollarKey(key: string): string
+	return `Unrecognized reserved key "{key}" (keys starting with "$" are reserved by Rojo) -- ignored.`
+end
+
+function Messages.ProjectInvalidPathValue(): string
+	return '"$path" must be a string, or an object of the form { "optional": "<path>" }.'
+end
+
 return Messages

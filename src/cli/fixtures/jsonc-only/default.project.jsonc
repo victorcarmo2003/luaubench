@@ -1,0 +1,8 @@
+// só existe a variante ".jsonc" nesta pasta -- testa o fallback de ProjectFile.Locate depois de
+// "default.project.json" não ser encontrado.
+{
+  "name": "JsoncOnly",
+  "tree": {
+    "$className": "DataModel"
+  }
+}

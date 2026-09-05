@@ -1,0 +1,15 @@
+{
+  "name": "Warnings",
+  "emitLegacyScripts": false,
+  "globIgnorePaths": ["**/*.spec.lua", "_Index/**"],
+  "syncRules": [
+    { "pattern": "*.spec.lua", "type": "ignore" }
+  ],
+  "tree": {
+    "$className": "DataModel",
+    "Flagged": {
+      "$className": "Folder",
+      "$id": "node-1"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "InvalidNodeValue",
+  "tree": {
+    "$className": "DataModel",
+    "BadChild": "not-an-object"
+  }
+}

@@ -1,0 +1,3 @@
+Pasta de propósito vazia -- usada pelo spec de ProjectFile.Locate para confirmar o erro
+"project/file-not-found" quando nem default.project.json nem default.project.jsonc existem.
+Este arquivo só existe pra manter o diretório rastreado pelo git (git não versiona pasta vazia).

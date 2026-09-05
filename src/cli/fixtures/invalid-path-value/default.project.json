@@ -1,0 +1,9 @@
+{
+  "name": "InvalidPathValue",
+  "tree": {
+    "$className": "DataModel",
+    "Bad": {
+      "$path": 123
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  // comentário de linha -- este arquivo termina em ".project.json" (não ".jsonc") de propósito:
+  // testa que o LuauBench decodifica sempre com "jsonc" (Decisão 2), nunca ramificando por
+  // extensão como o próprio Rojo real também não ramifica.
+  "name": "JsoncComments",
+  "tree": {
+    "$className": "DataModel",
+    "Trailing": {
+      "$className": "Folder", // comentário no meio da linha, com vírgula sobrando logo abaixo
+    },
+  },
+}

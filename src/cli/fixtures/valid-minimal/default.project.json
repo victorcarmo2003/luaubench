@@ -1,0 +1,24 @@
+{
+  "name": "ValidMinimal",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "shared"
+    },
+    "ServerScriptService": {
+      "$path": { "optional": "server" }
+    },
+    "Nested": {
+      "$className": "Folder",
+      "$properties": {
+        "Foo": true
+      },
+      "$attributes": {
+        "Bar": 1
+      },
+      "Child": {
+        "$className": "Folder"
+      }
+    }
+  }
+}
