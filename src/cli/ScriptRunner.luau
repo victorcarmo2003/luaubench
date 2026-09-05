@@ -129,6 +129,26 @@ end
 -- "Script"` já checado antes, que `instance` É de fato um `Script`/`BaseScript` de verdade -- o
 -- cast só amplia o que o COMPILADOR enxerga, a leitura real continua passando pelo `__index` do
 -- runtime (que resolve contra o `ClassSchema` de verdade).
+-- task-cli-012 (avaliação de defesa em profundidade, achado BAIXO de revisor-cli na revisão de
+-- task-cli-011): esta leitura NÃO está em `pcall`, ao contrário de
+-- `TreeMaterializer.applyProperties` -- avaliado explicitamente se o `__index` real de
+-- `Runtime.Instance` (`src/runtime/Instance.luau`) poderia erguer "X is not a valid member of ..."
+-- aqui. Reconfirmado (2026-09-05): `isScriptDisabled` só é chamada em `ScriptRunner.Run` dentro do
+-- laço sobre `orderedEligible`, uma lista povoada exclusivamente com entradas onde
+-- `entry.Node.ClassName == "Script"` (ver o `if` que monta `orderedEligible`, mais abaixo) -- nunca
+-- `LocalScript`/`ModuleScript`. `Script` (`src/services/generated/classes/Script.luau`, gerado do
+-- Roblox API Dump) tem `Superclass = "BaseScript"`, que declara `Enabled` no próprio `Schema`
+-- (`Kind = "Property"`, `Default = nil`) -- e `Runtime.ClassRegistry.resolveClassSchema` ACHATA a
+-- cadeia de herança inteira antes de instalar o schema de uma Instance concreta (não só o `Schema`
+-- da classe folha), então toda Instance de `ClassName == "Script"` tem "Enabled" como membro válido
+-- do seu `classSchema` por construção -- `__index` (passo 5, "MODO ESTRITO: key é membro do
+-- schema") devolve `data.properties["Enabled"]` (possivelmente `nil`, nunca erro) para este `key`
+-- especificamente, nunca cai no passo 8 (erro "not a valid member of"). Nenhuma tarefa que tocou
+-- `services`/`runtime` depois do achado mudou essa cadeia (`BaseScript`/`Script` continuam gerados
+-- do mesmo dump fixado). Decisão: NÃO envolver em `pcall` -- proteger uma leitura que só pode
+-- alcançar `Script` de verdade seria complexidade sem nenhum caminho de erro real para cobrir. Se um
+-- dia esta função passar a ser chamada para outra classe além de `Script` (ex.: extensão futura que
+-- também rode `LocalScript`), esta análise precisa ser refeita.
 local function isScriptDisabled(instance: Runtime.Instance): boolean
 	local readable = (instance :: unknown) :: { Enabled: unknown }
 	return readable.Enabled == false

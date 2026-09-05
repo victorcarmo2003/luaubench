@@ -1108,7 +1108,7 @@
       "id": "task-cli-012",
       "title": "Defesa em profundidade: proteger .Parent=parent e leitura de Enabled contra vazamento futuro de path interno",
       "description": "Achado BAIXO do revisor-cli na revisao de task-cli-011. Ao mapear os 8 pcall reais de src/cli/*.luau caçando um terceiro caso da mesma classe de vazamento de path/linha interna, o revisor achou dois pontos SEM pcall que teoricamente poderiam vazar do mesmo jeito se algum invariante mudar no futuro: TreeMaterializer.luau:289 (instance.Parent = parent, sem protecao) e ScriptRunner.luau:132-134 (leitura de node.Properties.Enabled). Hoje sao estruturalmente inalcancaveis (criacao de Instance sempre nova sem ciclo possivel; TreePlanner ja previne ciclo de projeto aninhado; Enabled sempre presente no schema real de qualquer classe de Script) -- nao e um bug ativo, e defesa em profundidade preventiva. Nao bloqueante, baixa prioridade.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 24,
@@ -1120,7 +1120,9 @@
       "priority": "low",
       "acceptance": "Avaliar se vale envolver os dois pontos em pcall+stripEngineErrorLocation por simetria com applyProperties/createInstance, ou documentar explicitamente por que sao inalcancaveis e deixar como estao (decisao aceitavel se justificada); se proteger, regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "Reavaliados os dois pontos com as linhas atuais (nao as da descricao, que ficaram desatualizadas): TreeMaterializer.luau createInstance (Parent=parent, ramo 3) e ScriptRunner.luau isScriptDisabled (leitura de instance.Enabled). Confirmado por leitura de codigo, nao suposicao: (1) setParent (runtime/Instance.luau) so erra em 4 condicoes (destroyed/newParent invalido/self-parenting/ciclo), todas inalcancaveis porque a Instance vem sempre fresca de Services.new->ClassRegistry.new (nunca reaproveitada, sem filhos, nunca destruida) e parent e sempre uma Instance ja materializada; task-cli-016 acrescentou um ramo 2 que RETORNA antes de chegar aqui (nao afeta), task-cli-018/020 so tocaram TreePlanner (nao tocam createInstance). (2) isScriptDisabled so e chamada para entradas com Node.ClassName=='Script' (estrutural, pelo loop que monta orderedEligible); Script herda BaseScript, que declara Enabled no Schema, e ClassRegistry.resolveClassSchema achata a cadeia inteira antes de instalar o schema -- __index (passo 5) sempre resolve Enabled como membro valido, nunca cai no erro 'not a valid member'. Ambos continuam estruturalmente inalcancaveis apos as mudancas de hoje. Decisao: documentar em comentario extenso em cada ponto (citando task-cli-012 e a cadeia de razao exata) em vez de adicionar pcall+stripEngineErrorLocation sem nenhum caminho de erro real pra cobrir -- comportamento 100% inalterado. Rodei eu mesmo lune run em todos os 33 *.spec.luau de src/cli+runtime+services (451 testes): 100% verde, zero falha, nenhum tocado alem dos dois comentarios.",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu tudo: 451/451 rodado por ele (33 arquivos, confirmando e corrigindo a contagem do coder que dizia 31), leu setParent confirmando as 4 condicoes exaustivas, leu os 4 ramos de Services.new confirmando que nenhum devolve instancia pre-existente, leu a cadeia Script->BaseScript->resolveClassSchema confirmando Enabled sempre no schema achatado, cacou ativamente 3 cenarios adversariais (reuso de instancia, subclasse futura sem Enabled, ClassName que engana o filtro) sem achar nenhum caminho vivo, confirmou diff de codigo zero (so comentario) nos dois arquivos, verificou contra os commits reais que as citacoes de task-cli-016/018/020 nos comentarios sao precisas. Achado BAIXO nao bloqueante ja corrigido nesta edicao (contagem de arquivos)."
     },
     {
       "id": "task-cli-013",

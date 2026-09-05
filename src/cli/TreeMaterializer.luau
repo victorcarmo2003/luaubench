@@ -381,6 +381,29 @@ local function createInstance(node: TreePlanner.PlanNode, parent: Runtime.Instan
 	end
 
 	local instance = resultOrError :: Runtime.Instance
+
+	-- task-cli-012 (avaliação de defesa em profundidade, achado BAIXO de revisor-cli na revisão de
+	-- task-cli-011): esta atribuição NÃO está em `pcall`, ao contrário de `applyProperties`/do
+	-- `pcall(Services.new(...))` logo acima -- avaliado explicitamente se `setParent`
+	-- (`src/runtime/Instance.luau`) poderia lançar aqui e vazar path/linha interna do mesmo jeito.
+	-- Reconfirmado (2026-09-05) contra o `setParent` real: as quatro condições de erro lá
+	-- (`data.destroyed`; `newParent` fora de `internals` do runtime; `newParent == self`;
+	-- `isSelfOrDescendant(self, newParent)`) são TODAS inalcançáveis aqui por construção, não por
+	-- sorte de dado de entrada: `instance` acabou de sair de `Services.new` (linha acima) --
+	-- SEMPRE uma Instance nova via `Runtime.ClassRegistry.new` (confirmado lendo
+	-- `src/services/init.luau`, `Services.new`: os 4 ramos de erro nunca devolvem uma Instance
+	-- existente, só criam ou erram) -- nunca destruída, sem filhos, e distinta de `parent`; `parent`
+	-- é sempre uma `Runtime.Instance` já materializada por uma chamada anterior de
+	-- `materializeNode`/`Materialize` (nunca um valor arbitrário do `.project.json`), logo sempre
+	-- presente em `internals`. Nenhuma das tarefas que tocaram este arquivo depois do achado
+	-- (task-cli-016: novo ramo 2, retorna ANTES de chegar aqui; task-cli-018/020: só
+	-- `TreePlanner`/resolução de raiz, não tocam `createInstance`) alterou essa garantia. Decisão:
+	-- NÃO envolver em `pcall` -- proteção sem nenhum caminho de erro real para cobrir seria
+	-- complexidade sem benefício (mesmo princípio já usado para os dois "defesa em profundidade #1/#2"
+	-- de `IsServiceRoot`, acima, que também não usam `pcall`+`stripEngineErrorLocation` por não
+	-- envolverem chamada a `runtime`/`services` capaz de errar de forma imprevisível). Se um dia
+	-- `createInstance` passar a reparentar uma Instance JÁ EXISTENTE (não recém-criada) -- não é o
+	-- caso hoje -- esta análise precisa ser refeita.
 	instance.Parent = parent
 	return instance
 end
