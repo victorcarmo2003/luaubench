@@ -1083,6 +1083,35 @@
       "acceptance": "Avaliar se vale envolver os dois pontos em pcall+stripEngineErrorLocation por simetria com applyProperties/createInstance, ou documentar explicitamente por que sao inalcancaveis e deixar como estao (decisao aceitavel se justificada); se proteger, regressao total intacta; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-013",
+      "title": "Pesquisa URGENTE: como Rojo real infere ClassName de filhos fixos conhecidos sem $className (StarterPlayerScripts/StarterCharacterScripts)",
+      "description": "Achado GRAVE do testador (.claude/agents-memory/testador-roblox-games-2026-09-05.md) na primeira rodada de teste contra jogos reais: 3/3 projetos testados (e 17/17 dos .project.json reais do usuario, via grep) batem parede em TreePlanner.Plan com [plan/missing-class-name] no no StarterPlayer.StarterPlayerScripts, ANTES de qualquer script do usuario rodar -- bloqueia o pipeline INTEIRO pra praticamente qualquer jogo Roblox real com estrutura padrao (o que o proprio `rojo init` gera). Causa raiz: TreePlanner.luau:596 e :921 so ativam inferencia de 'known service' quando parentClassName=='DataModel' E options.IsServiceClass(name) -- StarterPlayerScripts tem IsService=false no manifest real (fiel ao dump, nao e GetService()-avel), entao mesmo relaxando o parentClassName a checagem de IsServiceClass ainda falharia. O testador confirmou com o BINARIO REAL (rojo 7.7.0, rojo sourcemap contra o projeto Tiktok) que o Rojo resolve StarterPlayerScripts sem $className com sucesso -- isso CONTRADIZ a leitura registrada em pesquisa-formato-projeto-rojo-2026-09-05.md (linha 90-91, que dizia que infer_class_name so ativa se parent==DataModel). Duas hipoteses do testador, nenhuma confirmada: (1) a pesquisa original estava incompleta pra esse caso especifico -- Rojo pode ter uma segunda via de inferencia pra filhos FIXOS e conhecidos de uma classe (StarterPlayerScripts/StarterCharacterScripts sao os dois unicos filhos fixos de StarterPlayer no Roblox real); (2) comportamento mudou entre a versao do codigo-fonte pesquisada e o binario 7.7.0 testado. Pesquisador precisa ler o codigo-fonte REAL do Rojo (repositorio rojo-rbx/rojo, a mesma fonte ja usada em pesquisa-formato-projeto-rojo-2026-09-05.md) e confirmar o algoritmo EXATO: e uma tabela fixa de (classe pai -> {nome do filho -> ClassName}) hardcoded no Rojo? Existem outros casos alem de StarterPlayer (ex: Workspace->Terrain, Teams->Team, etc)? A ordem de precedencia desse mecanismo em relacao a $path/$className explicito/deteccao por nome de Service?",
+      "column": "in-progress",
+      "agent": "pesquisador",
+      "reviewer": "revisor-cli",
+      "wave": 25,
+      "tags": ["pesquisa", "rojo", "urgente", "correcao-de-revisao"],
+      "priority": "high",
+      "acceptance": "Algoritmo real confirmado com fonte verificavel (codigo-fonte do Rojo, linha/arquivo citado); lista completa (ou confirmadamente exaustiva na versao pesquisada) de pares pai->filho fixo inferidos sem $className; ordem de precedencia frente a $path/$className/deteccao de Service documentada; pesquisa-formato-projeto-rojo-2026-09-05.md corrigido (nao um novo arquivo) citando a correcao explicitamente; resposta suficiente pra coder-cli implementar sem re-pesquisar.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-014",
+      "title": "Corrigir TreePlanner para inferir ClassName de filhos fixos conhecidos (StarterPlayerScripts/StarterCharacterScripts e demais confirmados por task-cli-013)",
+      "description": "Depende do algoritmo confirmado em task-cli-013. TreePlanner.luau precisa de um segundo mecanismo de inferencia de ClassName, alem do existente 'parentClassName==DataModel e IsServiceClass(name)' -- provavelmente uma tabela de filhos fixos conhecidos por classe-pai (SyncRules.luau ou TreePlanner.luau, conforme o desenho ja estabelecido em task-cli-003 -- SyncRules e dados puros de classificacao, TreePlanner e a logica que usa). NAO adivinhar a tabela -- usar exatamente o que task-cli-013 confirmar contra o codigo-fonte real do Rojo. Bug bloqueia o pipeline inteiro pra quase todo projeto Roblox real (17/17 dos .project.json do usuario) -- prioridade maxima, e o unico motivo de nenhum dos 3 projetos testados pelo testador ter chegado a rodar um script sequer.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 25,
+      "tags": ["cli", "correcao-de-revisao", "urgente", "rojo"],
+      "priority": "high",
+      "acceptance": "Os 3 projetos reais que o testador usou (Tiktok, Panic - CHESSS, TheGame) passam de TreePlanner.Plan sem [plan/missing-class-name] em StarterPlayerScripts (rodar de verdade contra os caminhos reais, read-only); cenario tests/scenarios/real-roblox-games-pipeline-smoke.scenario.luau atualizado refletindo o novo comportamento; teste unitario novo em TreePlanner.spec.luau cobrindo o(s) par(es) pai->filho fixo confirmado(s); regressao total intacta (406+ testes); --!strict sem any; SyncRules.spec/TreePlanner.spec sem quebrar nenhum teste de precedencia existente (ClassifyFile/ClassifyDir).",
+      "depends": ["task-cli-013"],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
     }
   ]
 }
