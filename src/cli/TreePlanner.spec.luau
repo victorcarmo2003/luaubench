@@ -584,6 +584,67 @@ test("Plan: raiz explícita \"DataModel\" cujo \"$path\" também produz Source -
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-cli-020 (Decisão 16, achado MÉDIO de revisor-cli-rootsource-2026-09-05.md, seção 7.2): a
+-- exceção "plan/root-source-ignored" (task-cli-018) estava condicionada só a `isRoot`, que TAMBÉM
+-- vale pra raiz de QUALQUER projeto aninhado -- não só pra raiz do PLANO INTEIRO, o único caso que
+-- a Decisão 15 (Parte 2) desenhou. Um "$className": "DataModel" só é uma classe legal na raiz do
+-- projeto MAIS EXTERNO; na raiz de um projeto aninhado continua sendo "plan/class-name-conflict",
+-- como era antes da task-cli-018 abrir a exceção larga demais.
+--------------------------------------------------------------------------------------------------
+
+test("Plan: raiz explícita \"DataModel\" + \"$path\" com Source NA RAIZ DE UM PROJETO ANINHADO continua 'plan/class-name-conflict' (task-cli-020, Decisão 16)", function()
+	local plan, bag = planFixture("nested-project-root-datamodel-conflict")
+	assert(plan == nil, "raiz de projeto aninhado com DataModel + $path de Source deveria impedir Plan de devolver um InstancePlan -- a exceção da task-cli-018 NÃO se aplica aqui")
+
+	local diagnostic = findByCode(bag, "plan/class-name-conflict")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/class-name-conflict' na raiz do projeto ANINHADO -- a exceção de 'root-source-ignored' é exclusiva da raiz do plano inteiro (Decisão 16)")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "conflito na raiz do projeto aninhado deveria continuar Severity 'error'")
+		assert(diagnostic.NodePath == "tree", "Diagnostic deveria nomear a raiz DO PROJETO ANINHADO ('tree' -- NodePath da raiz de qualquer arquivo de projeto lido isoladamente, ver teste 'root-missing-class-name')")
+	end
+
+	assert(findByCode(bag, "plan/root-source-ignored") == nil, "NÃO deveria haver 'plan/root-source-ignored' aqui -- essa exceção é exclusiva da raiz do plano INTEIRO, nunca de uma raiz de projeto aninhado qualquer")
+end)
+
+test("Plan: raiz de TOPO ainda é reconhecida como 'outermost' mesmo com project.FilePath não-canônico (\"./\"/\"\\\") (task-cli-020, Decisão 16)", function()
+	local bag = Diagnostics.newBag()
+	local project = ProjectFile.Read(fixturePath("root-source-ignored") .. "/default.project.json", bag)
+	assert(project ~= nil, "fixture 'root-source-ignored' deveria ler normalmente")
+	if project == nil then
+		return
+	end
+
+	-- Constrói a MESMA `Project` só com um `FilePath` "sujo" -- separador "\" e um segmento "."
+	-- redundante injetado antes do nome do arquivo -- pra provar que `resolveCore` RE-normaliza
+	-- `currentProjectFilePath` antes de comparar contra `ctx.OutermostProjectFilePath` (que já
+	-- chega pré-normalizado). Comparar a string CRUA contra a já normalizada quebraria exatamente
+	-- neste caso -- é a regressão que este teste impede.
+	local dirtyFilePath = (string.gsub(project.FilePath, "/", "\\"))
+	dirtyFilePath = (string.gsub(dirtyFilePath, "\\([^\\]+)$", "\\.\\%1"))
+	assert(string.find(dirtyFilePath, "\\.\\", 1, true) ~= nil, "sanity: o FilePath sujo construído pelo teste deveria conter um segmento './' (aqui como '\\.\\')")
+
+	local dirtyProject: ProjectFile.Project = {
+		Name = project.Name,
+		Tree = project.Tree,
+		FilePath = dirtyFilePath,
+		FolderPath = project.FolderPath,
+		EmitLegacyScripts = project.EmitLegacyScripts,
+		GlobIgnorePaths = project.GlobIgnorePaths,
+		HasSyncRules = project.HasSyncRules,
+	}
+
+	local dirtyBag = Diagnostics.newBag()
+	local plan = TreePlanner.Plan(dirtyProject, FAKE_OPTIONS, dirtyBag)
+	assert(plan ~= nil, `Plan deveria continuar funcionando com um FilePath não-canônico (bag: {#dirtyBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+	assert(not dirtyBag:HasErrors(), "Source perdido na raiz é warning, nunca erro -- mesmo com FilePath sujo")
+	assert(findByCode(dirtyBag, "plan/class-name-conflict") == nil, "raiz de topo com FilePath sujo AINDA deveria ser reconhecida como 'outermost' -- não deveria cair em class-name-conflict")
+	assert(findByCode(dirtyBag, "plan/root-source-ignored") ~= nil, "deveria continuar emitindo 'plan/root-source-ignored' -- prova de que a exceção da raiz de topo funcionou mesmo com FilePath sujo")
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Meta files: <nome>.meta.json adjacente aplica properties; init.meta.json aplica properties E
 -- className (só quando a pasta é Folder puro)
 --------------------------------------------------------------------------------------------------

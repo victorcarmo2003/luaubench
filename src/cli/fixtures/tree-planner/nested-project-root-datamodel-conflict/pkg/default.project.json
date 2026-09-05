@@ -1,0 +1,7 @@
+{
+  "name": "NestedDataModelConflict",
+  "tree": {
+    "$className": "DataModel",
+    "$path": "algo.lua"
+  }
+}

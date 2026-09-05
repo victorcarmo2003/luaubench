@@ -117,6 +117,11 @@ local TreePlanner = {}
 type PlanContext = {
 	Options: PlanOptions,
 	Bag: Diagnostics.Bag,
+	-- Caminho NORMALIZADO do arquivo de projeto MAIS EXTERNO (o que `TreePlanner.Plan` recebeu).
+	-- Invariante do plano inteiro -- não muda ao entrar num projeto aninhado, por isso mora aqui e
+	-- não num parâmetro. É o que distingue "raiz do plano" de "raiz de um projeto qualquer"
+	-- (`isRoot`), dois conceitos que a task-cli-018 tinha colapsado no mesmo nome (Decisão 16).
+	OutermostProjectFilePath: string,
 }
 
 -- Resultado de resolver UM nó (raiz de projeto OU filho nomeado) até o ponto de saber sua classe
@@ -957,15 +962,16 @@ resolveCore = function(
 		-- descoberto ao implementar o warning de `TreePlanner.Plan`, mais abaixo, que ele seria
 		-- CÓDIGO MORTO sem esta exceção. A regra geral ("só é legal se $path resolver pra Folder")
 		-- fica INTACTA pra qualquer outro nó -- `class-name-conflict.spec` continua cobrindo isso.
-		-- Só na RAIZ (`isRoot`) com `"$className": "DataModel"` explícito -- a ÚNICA classe que só
-		-- é legal bem na raiz -- "a classe explícita vence" (texto literal da Decisão 15): em vez
-		-- de `plan/class-name-conflict`, o `Source`/`SourcePath` que o `$path` produziu (que
-		-- `DataModel` não tem onde receber -- não existe no dump) fica sem destino, e
-		-- `TreePlanner.Plan` avisa com `plan/root-source-ignored` em vez de descartar em silêncio
-		-- ou barrar com um erro de conflito que a Decisão 15 não previa pra este canto. Reportado
-		-- no relatório desta task para revisão do arquiteto -- é uma leitura de comportamento, não
-		-- uma mudança de contrato de tipo (`PlanNode`/`InstancePlan` continuam os mesmos).
-		local rootDataModelSourceException = isRoot and explicitClassName == "DataModel"
+		-- Só na raiz do projeto MAIS EXTERNO (`isOutermostRoot`) com `"$className": "DataModel"`
+		-- explícito -- a ÚNICA classe que só é legal bem na raiz -- "a classe explícita vence"
+		-- (texto literal da Decisão 15): em vez de `plan/class-name-conflict`, o `Source`/
+		-- `SourcePath` que o `$path` produziu (que `DataModel` não tem onde receber -- não existe
+		-- no dump) fica sem destino, e `TreePlanner.Plan` avisa com `plan/root-source-ignored` em
+		-- vez de descartar em silêncio ou barrar com um erro de conflito que a Decisão 15 não
+		-- previa pra este canto. Ver Decisão 16 (task-cli-020): a exceção NÃO vale pra raiz de um
+		-- projeto aninhado qualquer (`isRoot` também é `true` ali) -- só pra raiz do plano inteiro.
+		local isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath
+		local rootDataModelSourceException = isOutermostRoot and explicitClassName == "DataModel"
 		if pathClassName ~= nil and pathClassName ~= "Folder" and not rootDataModelSourceException then
 			bag:Add({
 				Severity = "error",
@@ -1249,13 +1255,15 @@ end
 -- `ProjectFile.Read` -- consistência entre os dois módulos do território que já fazem
 -- "acumula tudo, falha no final" em vez de abortar no primeiro problema, Decisão 3).
 function TreePlanner.Plan(project: ProjectFile.Project, options: PlanOptions, bag: Diagnostics.Bag): InstancePlan?
-	local ctx: PlanContext = { Options = options, Bag = bag }
 	-- Semeado com a forma NORMALIZADA de `project.FilePath` -- um projeto aninhado, em algum
 	-- lugar da árvore, pode acabar resolvendo de volta pro PRÓPRIO arquivo raiz (não só entre
 	-- dois projetos aninhados); a semente precisa estar na mesma forma canônica que
 	-- `nestedProjectFilePath` (normalizado no ponto em que "$path" vira caminho absoluto,
-	-- acima) pra essa comparação de string funcionar em qualquer caso.
+	-- acima) pra essa comparação de string funcionar em qualquer caso. Calculado ANTES do `ctx`
+	-- (função pura, sem efeito colateral) porque também preenche `ctx.OutermostProjectFilePath`
+	-- (Decisão 16).
 	local normalizedProjectFilePath = normalizePath(project.FilePath)
+	local ctx: PlanContext = { Options = options, Bag = bag, OutermostProjectFilePath = normalizedProjectFilePath }
 	local cycleGuard: { [string]: boolean } = { [normalizedProjectFilePath] = true }
 	local cycleChain: { string } = { normalizedProjectFilePath }
 

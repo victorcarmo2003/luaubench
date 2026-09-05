@@ -1,0 +1,9 @@
+{
+  "name": "NestedRootDataModelConflictOuter",
+  "tree": {
+    "$className": "DataModel",
+    "Something": {
+      "$path": "pkg"
+    }
+  }
+}
