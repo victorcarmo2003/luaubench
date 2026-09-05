@@ -47,6 +47,44 @@
 
 	Depende de: Scheduler.luau (tipos), @lune/luau.
 	Usado por: `cli` (uma chamada por Script/LocalScript/ModuleScript do projeto).
+
+	-- task-runtime-026: whitelist completada -- fica registrado aqui, no cabeçalho, porque
+	-- afeta a leitura do módulo inteiro (não só um trecho isolado).
+
+	Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 12. Adições:
+	`setmetatable`/`getmetatable`/`rawget`/`rawset`/`rawequal`/`rawlen`/`newproxy` (Luau puro),
+	`buffer` (biblioteca padrão do Luau), `os.date`/`os.difftime` somando ao `os` já restrito,
+	os globais depreciados mas onipresentes `wait`/`spawn`/`delay`/`tick`/`time`, e `unpack`.
+	Cada adição tem seu comentário pontual mais abaixo, no ponto exato onde é montada em
+	`buildEnvironment`. `unpack` estava condicionado, na descrição original desta tarefa, a
+	`task-cli-007` confirmar que o Roblox real mantém o global (a Decisão 12 do arquiteto listava
+	como incerto se seria só um alias depreciado ou removido) — `task-cli-007`, rodando em
+	paralelo, confirmou contra fonte primária que `unpack` existe no Roblox real e NÃO é
+	depreciado (diferente do Lua 5.2+ vanilla, onde `unpack` vira `table.unpack`), então entra
+	aqui como global de primeira classe, não como alias marcado "legado". `debug` fica
+	DELIBERADAMENTE fora (precisa de análise própria do que `debug.info`/`traceback` revelam do
+	host de dentro de um chunk sandboxed). `_G`/`shared` também ficam fora: são estado por
+	execução, injetados por `cli` via `extraGlobals`, nunca constantes da whitelist fixa deste
+	módulo.
+
+	RISCO RESIDUAL DECLARADO (regra 00 -- toda divergência é documentada, nunca silenciosa),
+	descoberto ao completar esta whitelist, fora do território desta tarefa para corrigir:
+	`Instance` (Instance.luau) é uma tabela Luau comum com metatable
+	(`setmetatable({}, InstanceMeta)`), cujo `__index`/`__newindex` fazem toda a validação de
+	schema/hierarquia/eventos, e `InstanceMeta` NÃO define `__metatable` (não está travada). Um
+	script agora pode chamar `getmetatable(alvo)` sobre qualquer Instance que já tenha referência
+	(lê o `InstanceMeta` real, incluindo os fechamentos internos de `__index`/`__newindex`) e
+	`setmetatable(alvo, {})` (troca a metatable de uma Instance JÁ EXISTENTE E COMPARTILHADA,
+	quebrando a simulação para TODO script que segure a mesma referência dali em diante -- não é
+	um efeito isolado ao script que chamou). No Roblox real isso é IMPOSSÍVEL: Instance é
+	userdata, não tabela -- `setmetatable(workspace, {})` erra "table expected, got Instance" e
+	`getmetatable(workspace)` devolve `nil`. É uma divergência de FIDELIDADE (não uma concessão
+	de acesso ao host -- por isso não bloqueia esta tarefa, cujo critério declarado é exatamente
+	"não concede acesso ao host"), mas séria o bastante para precisar de mitigação futura em
+	`Instance.luau` (fora do escopo desta tarefa, que é só Sandbox.luau/Sandbox.spec.luau):
+	caminho óbvio é travar `InstanceMeta.__metatable`, espelhando o comportamento real de
+	userdata. Reportado como pendência de acompanhamento na mesma seção do relatório desta
+	tarefa, não corrigido aqui.
 ]]
 
 local luau = require("@lune/luau")
@@ -89,11 +127,22 @@ type TaskGlobal = {
 	cancel: (handle: thread) -> (),
 }
 
--- Restrito a só `.clock`/`.time` -- nunca o `os` inteiro do Lune (sem `os.date`/`os.getenv`/
--- `os.exit`, que vazariam informação do processo host ou permitiriam derrubá-lo).
+-- Restrito a `.clock`/`.time`/`.date`/`.difftime` -- nunca o `os` inteiro do Lune. `date`/
+-- `difftime` somam nesta tarefa (task-runtime-026, Decisão 12): existem no Roblox real
+-- (`os.date`/`os.difftime` fazem parte da biblioteca `os` documentada da Roblox) e não
+-- concedem acesso ao host -- só formatam/comparam o relógio que `os.time`/`os.clock` já
+-- expunham. `os.getenv`/`os.exit`/`os.remove`/`os.rename`/`os.tmpname` continuam FORA de
+-- propósito: vazariam variável de ambiente, encerrariam o processo host ou tocariam o
+-- filesystem do host por fora do que o Roblox real permitiria (regra 00, execução de código
+-- arbitrário). `date`/`difftime` tipados via `typeof(...)` (em vez de reescrever a assinatura
+-- na mão) porque a sobrecarga real de `os.date` (formato `"*t"` devolve tabela, outro formato
+-- devolve string) já vem corretamente resolvida pelos globals embutidos do Luau -- reescrever
+-- arriscaria divergir do tipo real ou precisar de `any` para cobrir as duas formas.
 type RestrictedOs = {
 	clock: () -> number,
 	time: () -> number,
+	date: typeof(os.date),
+	difftime: typeof(os.difftime),
 }
 
 -- Monta o `task.spawn/wait/delay/defer/cancel` que o script do usuário enxerga. Cada função
@@ -212,12 +261,13 @@ end
 local function buildEnvironment(options: SandboxOptions, ownThreads: { [thread]: boolean }): SandboxGlobals
 	local env: SandboxGlobals = {}
 
-	env.task = buildTaskGlobal(options.scheduler, ownThreads)
+	local taskGlobal = buildTaskGlobal(options.scheduler, ownThreads)
+	env.task = taskGlobal
 	env.coroutine = coroutine
 	env.math = math
 	env.string = string
 	env.table = table
-	env.os = ({ clock = os.clock, time = os.time } :: RestrictedOs)
+	env.os = ({ clock = os.clock, time = os.time, date = os.date, difftime = os.difftime } :: RestrictedOs)
 	env.bit32 = bit32
 	env.utf8 = utf8
 	env.typeof = typeof
@@ -237,6 +287,78 @@ local function buildEnvironment(options: SandboxOptions, ownThreads: { [thread]:
 	-- dentro do script do usuário pararia de funcionar (regra 01: erro nunca é engolido). O
 	-- "redirecionamento pra onOutput" acontece depois, via ThreadError, não aqui.
 	env.error = error
+
+	-- task-runtime-026, Decisão 12: `setmetatable`/`getmetatable`/`rawget`/`rawset`/
+	-- `rawequal`/`rawlen`/`newproxy` são Luau puro -- operam só sobre valores que o PRÓPRIO
+	-- script já tem referência (o que ele criou, ou o que `extraGlobals`/`cli` decidiu expor).
+	-- Não abrem nenhum caminho novo até `fs`/`net`/`process`/`serde`/`io`/`require` do host, que
+	-- continuam ausentes por construção (nunca copiados para `env`). Ausência anterior quebrava
+	-- o caso de uso central do projeto: todo módulo OOP do ecossistema Roblox (ProfileStore,
+	-- state managers, proxytable) depende de `setmetatable`/`__index`.
+	--
+	-- Ver RISCO RESIDUAL DECLARADO no cabeçalho do módulo: como `Instance` (Instance.luau) é
+	-- implementado como tabela Luau comum com `InstanceMeta` destravada (sem `__metatable`),
+	-- estas funções permitem a um script ler (`getmetatable`) ou substituir
+	-- (`setmetatable(instancia, {})`) a metatable real de uma Instance JÁ existente e
+	-- compartilhada -- algo impossível no Roblox real (Instance é userdata, não tabela). Não é
+	-- concessão de acesso ao host (critério desta tarefa), é divergência de fidelidade
+	-- registrada para acompanhamento em Instance.luau, fora deste território.
+	env.setmetatable = setmetatable
+	env.getmetatable = getmetatable
+	env.rawget = rawget
+	env.rawset = rawset
+	env.rawequal = rawequal
+	env.rawlen = rawlen
+	env.newproxy = newproxy
+
+	-- `unpack`: existe no Roblox real como global de primeira classe (não depreciado -- ver
+	-- comentário do cabeçalho do módulo, confirmado por task-cli-007 contra fonte primária) e é
+	-- Luau puro (mesma função-base de `table.unpack`, capturada por upvalue) -- não abre nenhum
+	-- caminho novo ao host.
+	env.unpack = unpack
+
+	-- `buffer`: biblioteca padrão do Luau (presente no Roblox moderno) para bytes crus em
+	-- memória do PRÓPRIO processo do script -- não é I/O, não toca disco/rede/processo do host,
+	-- então não concede acesso a nada que a whitelist já bloqueia.
+	env.buffer = buffer
+
+	-- Globais depreciados mas onipresentes em código real do ecossistema Roblox (tutoriais,
+	-- addons antigos, ProfileStore em versões mais velhas). `wait`/`spawn`/`delay` reaproveitam
+	-- LITERALMENTE as mesmas funções que `task.wait`/`task.spawn`/`task.delay` (mesma closure
+	-- fechada sobre `options.scheduler`/`ownThreads`, ver `buildTaskGlobal` acima) -- nunca uma
+	-- segunda implementação, nunca `@lune/task` cru. Isso também garante que um erro dentro de
+	-- um `spawn(...)` legado seja atribuído a este script exatamente como um `task.spawn` seria
+	-- (mesmo registro em `ownThreads`).
+	--
+	-- Divergência documentada, não escondida (regra 00): no Roblox real, o `spawn` legado NÃO
+	-- roda a função imediatamente -- ela só é retomada no próximo resumption cycle, diferente de
+	-- `task.spawn` (síncrono até o primeiro yield). Essa nuance de timing exata não foi
+	-- confirmada por pesquisador nesta tarefa (fora do escopo desta task, que pede
+	-- explicitamente "rotear pelo options.scheduler exatamente como task.* já faz hoje") -- por
+	-- isso `spawn`/`wait`/`delay` aqui são, de propósito, aliases 1:1 dos equivalentes `task.*`,
+	-- e não uma reimplementação com timing diferente adivinhado.
+	env.wait = taskGlobal.wait
+	env.spawn = taskGlobal.spawn
+	env.delay = taskGlobal.delay
+
+	-- `tick`/`time` não pertencem à família `task.*` (não cedem/retomam coroutine -- são só
+	-- leituras de relógio) e o `Scheduler` não expõe um relógio simulado publicamente (só
+	-- Spawn/Defer/Delay/Wait/Cancel/Heartbeat/Stepped/ThreadError/Run/StepOnce/IsAlive) --
+	-- então usam o mesmo relógio do processo host que `Scheduler.Run` já usa para medir `dt`
+	-- entre tiques (`os.clock()`, ver Scheduler.luau), em vez de inventar acesso novo.
+	--
+	-- Divergências documentadas (regra 00): no Roblox real, `time()` é o tempo decorrido desde
+	-- que o jogo começou a rodar (relógio do motor, não exposto aqui) -- `os.clock()` do
+	-- processo host aproxima (monotônico, crescente desde o início do processo) sem ser
+	-- literalmente o mesmo relógio. `tick()` no Roblox real é a época Unix com fração de
+	-- segundo -- `os.time()` do Lune só dá segundos inteiros (perde a fração, mantém a base de
+	-- época correta, diferente de `os.clock()`, que não é relativo à época).
+	env.time = function(): number
+		return os.clock()
+	end
+	env.tick = function(): number
+		return os.time()
+	end
 
 	if options.extraGlobals ~= nil then
 		local extra = options.extraGlobals :: SandboxGlobals

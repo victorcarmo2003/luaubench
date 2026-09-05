@@ -766,7 +766,7 @@
       "id": "task-runtime-026",
       "title": "Completar a whitelist de globals do Sandbox (setmetatable e família raw*, wait/spawn/delay, buffer, os.date)",
       "description": "A whitelist atual de src/runtime/Sandbox.luau NÃO tem `setmetatable` -- nem `getmetatable`, `rawget`, `rawset`, `rawequal`, `rawlen`, `newproxy`, `buffer`, `wait`, `spawn`, `delay`, `tick`, `time`. Isso invalida o caso de uso central declarado no CLAUDE.md: todo módulo OOP do ecossistema Roblox (ProfileStore, state managers, proxytable, metatable/OOP) usa `setmetatable`. Adicionar, cada um com comentário justificando 'existe no ambiente Roblox real E não concede acesso ao host': setmetatable/getmetatable/rawget/rawset/rawequal/rawlen/newproxy (Luau puro), `buffer` (biblioteca padrão do Luau, presente no Roblox moderno), `os.date`/`os.difftime` somando ao `os` restrito atual (mantendo getenv/exit/remove/rename/tmpname FORA -- esses vazam o host), e os globais depreciados mas onipresentes `wait`/`spawn`/`delay`/`tick`/`time`, que DEVEM rotear pelo `options.scheduler` exatamente como `task.*` já faz (nunca @lune/task cru) e ser comentados como depreciados. `unpack` só entra se task-cli-007 confirmar que o Luau mantém o alias global. `debug` fica DELIBERADAMENTE fora desta tarefa (precisa de análise própria do que debug.info/traceback revelam do host dentro de um chunk sandboxed). `_G`/`shared` NÃO entram aqui: são estado por execução, criados e injetados por `cli` via extraGlobals. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 12.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 15,
@@ -779,7 +779,9 @@
       "priority": "high",
       "acceptance": "Um fixture que define uma classe com setmetatable/__index roda dentro do Sandbox; getmetatable/rawget/rawset/rawequal/rawlen/newproxy/buffer disponíveis; os.date e os.difftime disponíveis e os.getenv/os.exit/os.remove ausentes (teste explícito); wait/spawn/delay/tick/time disponíveis e roteando pelo Scheduler (teste: `wait(0.05)` avança pelo passo do scheduler, não por sleep de SO); `fs`/`net`/`process`/`serde`/`io`/`require` continuam ausentes (teste de regressão do isolamento); cada adição tem comentário justificando; --!strict sem any.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "Whitelist completa: setmetatable/getmetatable/rawget/rawset/rawequal/rawlen/newproxy, buffer, os.date/os.difftime, wait/spawn/delay/tick/time roteando pelo Scheduler, unpack (confirmado por cli-007). 13/13 testes (7+6 novos). Regressao 149 runtime + 73 services. ACHADO DE SEGURANCA/ISOLAMENTO: com setmetatable/getmetatable liberados, script pode ler e TROCAR a metatable de qualquer Instance compartilhada (InstanceMeta sem __metatable travado), corrompendo a simulacao para qualquer outro script segurando a mesma referencia -- impossivel no Roblox real (Instance e userdata). Virou task-runtime-027, alta prioridade.",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor confirmou tudo (13/13, 149 runtime + 73 services, wait/spawn/delay/tick/time roteando pelo Scheduler de verdade — 0.319s de execucao total, sem sleep de SO). ACHADO GRAVE NOVO (sexto vetor, independente do de getmetatable/setmetatable ja documentado): rawset/rawget ignoram __index/__newindex completamente -- script consegue reescrever qualquer propriedade ou neutralizar metodos (Destroy) de forma que vaza pra OUTROS scripts segurando a mesma Instance. Provado com exploit real. Expandido task-runtime-027 para cobrir os dois fixes (metatable + table.freeze)."
     },
     {
       "id": "task-services-009",
@@ -806,7 +808,7 @@
       "id": "task-cli-001",
       "title": "Esqueleto do território cli: main.luau, init.luau, Args, Messages, Diagnostics",
       "description": "Criar src/cli/ com os cinco módulos de base. `main.luau`: executável fino -- lê `process.args`, chama `Cli.Main`, chama `process.exit(code)`, nada mais; requer `./` (estilo diretório). `init.luau`: API pública programática (`Cli.Main(argv: { string }): MainResult` com `MainResult = { ExitCode: number, ErrorCount: number, WarningCount: number }`), existe para que tests/scenarios/ (território do testador) rode um projeto de ponta a ponta sem disparar processo. ATENÇÃO ao gotcha de require já documentado nos cabeçalhos de src/runtime/init.luau e src/services/init.luau: carregado estilo diretório, o chunk é identificado por `src/cli` e a base dos require relativos escritos DENTRO do init desloca um nível -- aqui dentro usa-se `./cli/Args`, `./runtime`, `./services`; de fora de src/cli/ (módulo de nome normal) usa-se `require('../runtime')`. `Args.luau`: argv -> `Command` (union de `run`/`version`/`help`/`error`), flags `--timeout <s>`, `--no-color`, `--verbose`; reconhece `--watch` e devolve o motivo real (Lune 0.10.5 não expõe observador de filesystem e o LuauBench não faz polling -- regra 04), nunca 'flag desconhecida'. `Messages.luau`: TODAS as strings voltadas ao usuário num lugar só (ver 'Decisão que precisa do usuário' no desenho: o idioma dos diagnósticos do CLI ainda pode ser revertido pelo usuário, e isolar aqui faz disso a edição de um arquivo). `Diagnostics.luau`: `Diagnostic{Severity, Code, Message, ProjectPath?, NodePath?, FilePath?, Field?}`, `Bag` acumuladora e `Render`. `Code` é identificador estável (ex: 'project/unknown-field') para o teste asserir sem casar texto. `luaubench --version` imprime a versão do LuauBench mais `Services.GetDumpVersion()`. Desenho completo em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisões 9, 13 e 14 e seção 'Módulos'.",
-      "column": "in-progress",
+      "column": "review",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 15,
@@ -819,7 +821,8 @@
       "priority": "high",
       "acceptance": "`lune run src/cli/main.luau --help` e `--version` funcionam e o --version cita commit/versão do dump vindos de Services.GetDumpVersion(); Args.Parse cobre run/version/help, as três flags, argumento faltando em --timeout, flag desconhecida e --watch (com o motivo técnico, não 'desconhecida'); Diagnostics.Bag acumula e conta por severidade; Render produz linha legível com e sem cor; nenhuma string voltada ao usuário fora de Messages.luau; --!strict sem any em todos os cinco módulos; specs na mesma tarefa.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "main.luau/init.luau/Args/Messages/Diagnostics criados. --help/--version funcionam de ponta a ponta (version cita commit/versao do dump via Services.GetDumpVersion). --watch sempre devolve motivo tecnico real, nunca flag desconhecida. run reconhecido mas ainda devolve ExitCode=2 com mensagem clara de pipeline nao implementado (nao finge sucesso). 34/34 testes. Regressao dos 16 specs existentes intacta."
     },
     {
       "id": "task-cli-002",
@@ -949,6 +952,29 @@
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
       "result": "lune build NAO embute require (confirmado no codigo-fonte real, crates/lune/src/cli/build/mod.rs) -- precisa de bundle darklua antes de release, bloqueia tarefa futura de Rokit, nao esta leva. Watcher confirmado ausente em 0.10.5 e main, issue oficial lune-org/lune#63 aberto desde 2023 sem previsao -- resposta definitiva pro usuario decidir watch mode. Containers de Script confirmados corretos (Workspace+ServerScriptService, fonte oficial). unpack confirmado presente e nao depreciado. Achado corrigido no desenho: _G e shared sao tabelas SEPARADAS no Roblox real (design antigo propunha mesma tabela) -- corrigido diretamente em arquiteto-cli-2026-09-05.md. tick/time confirmados NAO depreciados (contra crenca comum)."
+    },
+    {
+      "id": "task-runtime-027",
+      "title": "Travar Instance contra getmetatable/setmetatable E rawset/rawget (dois vetores de corrupcao cross-script)",
+      "description": "Achado de isolamento entre scripts na revisao de task-runtime-026 (Sandbox agora expoe setmetatable/getmetatable de proposito, para suportar padroes OOP reais como ProfileStore). Problema: Instance.luau implementa Instance como tabela Luau comum com InstanceMeta destravada (sem campo __metatable). Um script comum, com getmetatable/setmetatable agora disponiveis, consegue: (1) ler a metatable real de qualquer Instance via getmetatable(instance) -- vaza detalhe de implementacao interna do LuauBench que nenhum script real do Roblox jamais consegue ver (Instance e userdata, getmetatable(workspace) devolve nil no Roblox real); (2) TROCAR a metatable de uma Instance ja existente e compartilhada via setmetatable(instancia, {}), quebrando __index/__newindex para QUALQUER outro script que segure a mesma referencia dali em diante -- corrupcao de estado cross-script, nao so self-inflicted. Fix: adicionar campo __metatable a InstanceMeta (convencao padrao de Lua/Luau para travar getmetatable/setmetatable contra uma tabela especifica -- getmetatable devolve o valor de __metatable em vez da tabela real, e setmetatable erra \"cannot change a protected metatable\"). Confirmar que isso nao quebra nenhum uso legitimo interno do runtime (ClassRegistry/SetClassMethods/SetClassSchema nao devem depender de setmetatable direto sobre uma Instance ja criada -- confirmar lendo o codigo, nao supor). ACHADO ADICIONAL GRAVE do revisor-runtime na revisao de task-runtime-026 (independente do de getmetatable/setmetatable): rawset(instancia, chave, valor)/rawget(instancia, chave) IGNORAM __index/__newindex completamente, porque a tabela crua da Instance (criada vazia via setmetatable({}, InstanceMeta)) fica exposta a esses dois globais agora liberados no Sandbox. Provado com exploit real pelo revisor: rawset(target, \"Name\", \"HIJACKED\") corrompeu target.Name visivel ATE FORA da thread atacante; rawset(target, \"Destroy\", function() end) neutralizou o destroy real silenciosamente. Impossivel no Roblox real (rawset(workspace, ...) erra \"table expected, got Instance\", Instance e userdata). MITIGACAO ADICIONAL OBRIGATORIA: table.freeze(self) no ponto de criacao da Instance (Instance.luau, mesmo ponto onde setmetatable({}, InstanceMeta) roda) -- mesma disciplina ja usada para as tabelas compartilhadas de SetClassMethods/SetClassSchema. Confirmar que table.freeze numa tabela vazia nao quebra nada (a tabela crua da Instance e e sempre sera vazia -- todo estado real fica em internals[instance], por fora da tabela do proprio objeto). O fix de __metatable sozinho NAO fecha este vetor -- os dois sao necessarios e independentes.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 16,
+      "tags": [
+        "runtime",
+        "security",
+        "sandbox",
+        "instance",
+        "correcao-de-revisao"
+      ],
+      "priority": "high",
+      "acceptance": "getmetatable(instance) para uma Instance real devolve algo que NAO e a InstanceMeta real (nil, ou uma string/tabela sentinela, igual ao comportamento userdata do Roblox onde getmetatable(workspace)==nil); setmetatable(instance, {}) erra (\"cannot change a protected metatable\" ou equivalente) em vez de suceder silenciosamente; teste confirmando que uma segunda Instance/script nao e afetado pela tentativa; toda funcionalidade existente de Instance (__index/__newindex/metodos/eventos/schema) continua funcionando identica (regressao total: 149 runtime + 73 services); --!strict sem any. ADICIONAL: rawset(instance, \"Name\", \"qualquer\") erra (tabela congelada) em vez de suceder silenciosamente; rawset(instance, \"Destroy\", function() end) idem; rawget(instance, \"Name\") nao devolve o valor real da propriedade (a tabela crua esta vazia, o valor real fica em internals) -- confirmar que isso nao quebra nenhum uso legitimo interno (GetPropertyRaw/SetPropertyRaw nao devem usar rawset/rawget sobre a Instance, ja usam internals -- confirmar lendo o codigo).",
+      "depends": [
+        "task-runtime-026"
+      ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
     }
   ]
 }

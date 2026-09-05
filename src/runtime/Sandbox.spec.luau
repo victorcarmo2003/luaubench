@@ -218,5 +218,313 @@ test("erro dentro de dois scripts rodando no mesmo Scheduler não vaza scriptNam
 	assert(#recordsB == 1 and recordsB[1].scriptName == "Workspace.ScriptB", "onOutput de B só deveria ver o erro de B")
 end)
 
+--[[
+	Testes da task-runtime-026 (completar a whitelist de globals do Sandbox). Desenho em
+	.claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 12.
+]]
+
+test("fixture com setmetatable/__index (padrão OOP real do ecossistema Roblox, ex.: ProfileStore) roda dentro do Sandbox", function()
+	local scheduler = Scheduler.new()
+	local captured: { count: number, name: string }? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(count: number, name: string)
+			captured = { count = count, name = name }
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.OopFixture",
+		source = [[
+			-- Mesmo padrão de classe usado por ProfileStore/state managers reais: setmetatable
+			-- + __index simulando herança de métodos -- exatamente o caso de uso central citado
+			-- no CLAUDE.md que a whitelist antiga (sem setmetatable) bloqueava por completo.
+			local Counter = {}
+			Counter.__index = Counter
+
+			function Counter.new(name)
+				return setmetatable({ name = name, count = 0 }, Counter)
+			end
+
+			function Counter:increment()
+				self.count += 1
+				return self.count
+			end
+
+			local counter = Counter.new("Combat")
+			counter:increment()
+			counter:increment()
+			local finalCount = counter:increment()
+
+			report(finalCount, counter.name)
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(captured ~= nil, "o script deveria ter completado o fixture OOP e chamado report()")
+	local result = captured :: { count: number, name: string }
+	assert(result.count == 3, `increment() via metatable deveria acumular estado real, recebeu {result.count}`)
+	assert(result.name == "Combat", "self.name deveria estar acessível através de __index")
+end)
+
+test("getmetatable/rawget/rawset/rawequal/rawlen/newproxy/buffer disponíveis e funcionalmente corretos", function()
+	local scheduler = Scheduler.new()
+	local captured: { [string]: unknown }? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(fields: { [string]: unknown })
+			captured = fields
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.RawFamily",
+		source = [[
+			local target = setmetatable({}, { __index = function() return "via-metamethod" end })
+
+			-- getmetatable devolve a metatable real (não travada nesta task -- ver RISCO
+			-- RESIDUAL DECLARADO no cabeçalho de Sandbox.luau).
+			local mt = getmetatable(target)
+
+			-- rawset grava direto; rawget deveria IGNORAR __index (diferente de indexar
+			-- `target.missing` normalmente, que passa pelo metamétodo).
+			rawset(target, "direct", "raw-value")
+
+			local b = buffer.create(4)
+			buffer.writeu8(b, 0, 65)
+
+			report({
+				metatableType = typeof(mt),
+				metatableIsPresent = mt ~= nil,
+				indexedViaMetamethod = target.missing,
+				rawGetBypassesMetamethod = rawget(target, "missing"),
+				rawGetSeesDirectWrite = rawget(target, "direct"),
+				rawEqualSelf = rawequal(target, target),
+				rawEqualOther = rawequal(target, {}),
+				rawLenOfArray = rawlen({ 1, 2, 3 }),
+				proxyType = typeof(newproxy(true)),
+				bufferReadback = buffer.readu8(b, 0),
+			})
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(captured ~= nil, "o script deveria ter completado e chamado report()")
+	local fields = captured :: { [string]: unknown }
+	assert(fields.metatableType == "table", "getmetatable deveria devolver a metatable real (table)")
+	assert(fields.metatableIsPresent == true, "getmetatable não deveria devolver nil para uma tabela com metatable")
+	assert(fields.indexedViaMetamethod == "via-metamethod", "indexação normal deveria passar pelo __index")
+	assert(fields.rawGetBypassesMetamethod == nil, "rawget deveria ignorar __index e devolver nil de verdade")
+	assert(fields.rawGetSeesDirectWrite == "raw-value", "rawget deveria enxergar o valor gravado por rawset")
+	assert(fields.rawEqualSelf == true, "rawequal(x, x) deveria ser true")
+	assert(fields.rawEqualOther == false, "rawequal(x, y) para tabelas distintas deveria ser false")
+	assert(fields.rawLenOfArray == 3, "rawlen de um array de 3 elementos deveria ser 3")
+	assert(fields.proxyType == "userdata", "newproxy(true) deveria devolver userdata")
+	assert(fields.bufferReadback == 65, "buffer.readu8 deveria ler de volta o byte escrito por buffer.writeu8")
+end)
+
+test("os.date/os.difftime disponíveis; os.getenv/os.exit/os.remove/os.rename/os.tmpname ausentes", function()
+	local scheduler = Scheduler.new()
+	local captured: { [string]: unknown }? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(fields: { [string]: unknown })
+			captured = fields
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.OsFamily",
+		source = [[
+			report({
+				dateType = typeof(os.date),
+				difftimeType = typeof(os.difftime),
+				dateResultType = typeof(os.date("*t", os.time())),
+				difftimeResult = os.difftime(100, 40),
+				getenvType = typeof(os.getenv),
+				exitType = typeof(os.exit),
+				removeType = typeof(os.remove),
+				renameType = typeof(os.rename),
+				tmpnameType = typeof(os.tmpname),
+			})
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(captured ~= nil, "o script deveria ter completado e chamado report()")
+	local fields = captured :: { [string]: unknown }
+	assert(fields.dateType == "function", "os.date deveria estar disponível")
+	assert(fields.difftimeType == "function", "os.difftime deveria estar disponível")
+	assert(fields.dateResultType == "table", "os.date('*t', ...) deveria devolver uma tabela de campos de data")
+	assert(fields.difftimeResult == 60, `os.difftime(100, 40) deveria devolver 60, recebeu {fields.difftimeResult}`)
+	assert(fields.getenvType == "nil", "os.getenv NÃO deveria estar disponível (vazaria variável de ambiente do host)")
+	assert(fields.exitType == "nil", "os.exit NÃO deveria estar disponível (derrubaria o processo host)")
+	assert(fields.removeType == "nil", "os.remove NÃO deveria estar disponível (tocaria filesystem do host)")
+	assert(fields.renameType == "nil", "os.rename NÃO deveria estar disponível (tocaria filesystem do host)")
+	assert(fields.tmpnameType == "nil", "os.tmpname NÃO deveria estar disponível (tocaria filesystem do host)")
+end)
+
+test("wait/spawn/delay/tick/time disponíveis e roteiam pelo Scheduler (StepOnce determinístico, nunca sleep de SO)", function()
+	local scheduler = Scheduler.new()
+	local types: { [string]: unknown }? = nil
+	local clocks: { tick: unknown, time: unknown }? = nil
+	local spawnRan = false
+	local delayRan = false
+	local waitCompleted = false
+	local waitElapsed: number? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		reportTypes = function(fields: { [string]: unknown })
+			types = fields
+		end,
+		reportClocks = function(tickValue: number, timeValue: number)
+			clocks = { tick = tickValue, time = timeValue }
+		end,
+		onSpawnRan = function()
+			spawnRan = true
+		end,
+		onDelayRan = function()
+			delayRan = true
+		end,
+		reportWaitElapsed = function(elapsed: number)
+			waitCompleted = true
+			waitElapsed = elapsed
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.LegacyGlobals",
+		source = [[
+			reportTypes({
+				wait = typeof(wait),
+				spawn = typeof(spawn),
+				delay = typeof(delay),
+				tick = typeof(tick),
+				time = typeof(time),
+			})
+
+			reportClocks(tick(), time())
+
+			-- spawn/delay precisam rotear pelo MESMO Scheduler que task.spawn/task.delay usam
+			-- (nunca @lune/task cru) -- ver comentário em Sandbox.luau: são aliases 1:1.
+			spawn(function()
+				onSpawnRan()
+			end)
+
+			delay(0.03, function()
+				onDelayRan()
+			end)
+
+			local elapsed = wait(0.05)
+			reportWaitElapsed(elapsed)
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(types ~= nil, "o script deveria ter reportado os typeof antes de chegar no wait")
+	local fields = types :: { [string]: unknown }
+	assert(fields.wait == "function", "wait deveria estar disponível")
+	assert(fields.spawn == "function", "spawn deveria estar disponível")
+	assert(fields.delay == "function", "delay deveria estar disponível")
+	assert(fields.tick == "function", "tick deveria estar disponível")
+	assert(fields.time == "function", "time deveria estar disponível")
+
+	assert(clocks ~= nil, "tick()/time() deveriam ter sido chamados com sucesso")
+	local clockFields = clocks :: { tick: unknown, time: unknown }
+	assert(typeof(clockFields.tick) == "number", "tick() deveria devolver um number")
+	assert(typeof(clockFields.time) == "number", "time() deveria devolver um number")
+
+	-- `spawn` (alias 1:1 de task.spawn) roda de forma síncrona até o primeiro yield -- já
+	-- deveria ter rodado antes mesmo do primeiro StepOnce.
+	assert(spawnRan, "spawn(...) deveria rodar de forma síncrona, igual a task.spawn")
+
+	assert(not delayRan, "delay(0.03, ...) não deveria ter rodado antes de nenhum StepOnce")
+	assert(not waitCompleted, "wait(0.05) não deveria ter resolvido antes de nenhum StepOnce (nunca sleep de SO)")
+
+	scheduler:StepOnce(0.02)
+	assert(not delayRan, "0.02s acumulados ainda não deveria ser suficiente para delay(0.03, ...)")
+	assert(not waitCompleted, "0.02s acumulados ainda não deveria ser suficiente para wait(0.05)")
+
+	scheduler:StepOnce(0.02)
+	assert(delayRan, "0.04s acumulados deveria ter disparado delay(0.03, ...) via StepOnce do Scheduler")
+	assert(not waitCompleted, "0.04s acumulados ainda não deveria ser suficiente para wait(0.05)")
+
+	scheduler:StepOnce(0.02)
+	assert(waitCompleted, "0.06s acumulados deveria ter resolvido wait(0.05) via StepOnce do Scheduler, não sleep de SO")
+	assert(waitElapsed ~= nil and (waitElapsed :: number) > 0, "wait(0.05) deveria devolver o tempo decorrido (roteado por Scheduler:Wait)")
+end)
+
+test("regressão de isolamento: fs/net/process/serde/io/require continuam ausentes mesmo com a whitelist expandida", function()
+	local scheduler = Scheduler.new()
+	local captured: { [string]: string }? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(fields: { [string]: string })
+			captured = fields
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.RegressaoIsolamento",
+		source = [[
+			report({
+				fs = typeof(fs),
+				net = typeof(net),
+				process = typeof(process),
+				serde = typeof(serde),
+				io = typeof(io),
+				require = typeof(require),
+				debug = typeof(debug),
+			})
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(captured ~= nil, "o script deveria ter completado e chamado report()")
+	local fields = captured :: { [string]: string }
+	assert(fields.fs == "nil", "fs continua inalcançável")
+	assert(fields.net == "nil", "net continua inalcançável")
+	assert(fields.process == "nil", "process continua inalcançável")
+	assert(fields.serde == "nil", "serde continua inalcançável")
+	assert(fields.io == "nil", "io continua inalcançável")
+	assert(fields.require == "nil", "require continua inalcançável")
+	assert(fields.debug == "nil", "debug fica deliberadamente fora desta tarefa (Decisão 12)")
+end)
+
+test("unpack disponível e funcionalmente correto (confirmado por task-cli-007: global de primeira classe no Roblox real, não depreciado)", function()
+	local scheduler = Scheduler.new()
+	local captured: { a: unknown, b: unknown, c: unknown }? = nil
+
+	local extra: Sandbox.SandboxGlobals = {
+		report = function(a: unknown, b: unknown, c: unknown)
+			captured = { a = a, b = b, c = c }
+		end,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.Unpack",
+		source = [[
+			report(unpack({ "x", "y", "z" }))
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(_record) end,
+	})
+
+	assert(captured ~= nil, "o script deveria ter completado e chamado report()")
+	local fields = captured :: { a: unknown, b: unknown, c: unknown }
+	assert(fields.a == "x" and fields.b == "y" and fields.c == "z", "unpack deveria expandir os três elementos do array na ordem certa")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)
