@@ -41,17 +41,30 @@
 	    `Animator` moderno), construtíveis via `.new(...)`.
 	  - `Path2DControlPoint`: ponto de controle de `Path2D` (Roblox 2D UI paths), construtível via
 	    `.new(...)`.
-	  - `SharedTable`, `Secret`, `Content`, `RaycastResult`: EXISTEM como valor no Roblox real, mas
-	    **não têm construtor global** -- `SharedTable` só nasce de `SharedTable.new(uma tabela
-	    Lua)` (tem construtor, mas é um caso à parte de mutabilidade -- fora do escopo desta leva
-	    de qualquer forma), `Secret`/`Content` só chegam via API do Engine (ex.: `HttpService`
-	    devolvendo um `Secret`, uma propriedade de textura devolvendo `Content`), e `RaycastResult`
-	    só é devolvido por `WorldRoot:Raycast(...)` -- nenhum deles tem um global `X.new(...)` que
-	    um script comum possa chamar. `HasGlobalConstructor = false` nestes quatro: não viram
-	    NENHUM global no LuauBench (nem valor real, nem sentinela de "não simulado") -- uma
-	    sentinela pra um nome que o Roblox real também não expõe como global seria uma mensagem
-	    MENTIROSA (diria "LuauBench não simula X" quando o certo, igual ao Roblox, é `X` nem
-	    existir como variável global nenhuma).
+	  - `SharedTable`: CORRIGIDO em task-valuetypes-002-fix (achado ALTO de
+	    `.claude/agents-memory/revisor-valuetypes-userdata-2026-09-05.md`) -- tem sim construtor
+	    global real, confirmado contra a doc oficial (`create.roblox.com/docs/reference/engine/datatypes/SharedTable`):
+	    `SharedTable.new()`/`SharedTable.new(t: table)`, chamável por script comum.
+	    `HasGlobalConstructor = true`. Mutabilidade de `SharedTable` continua fora do escopo desta
+	    leva (nenhum `types/SharedTable.luau` existe ainda), mas isso é questão de PRIORIZAÇÃO
+	    (`Simulated = false`), não do que `HasGlobalConstructor` responde (o Roblox real expõe um
+	    construtor chamável?).
+	  - `Content`: CORRIGIDO em task-valuetypes-002-fix (mesmo achado ALTO) -- tem construtores
+	    estáticos globais reais, confirmados contra a doc oficial
+	    (`create.roblox.com/docs/reference/engine/datatypes/Content`): `Content.fromUri(uri)`,
+	    `Content.fromAssetId(id)`, `Content.fromObject(obj)` e a constante `Content.none`, todos
+	    chamáveis por script comum. `HasGlobalConstructor = true` -- mesmo padrão de namespace com
+	    função estática em vez de `.new()` que `DateTime` (`DateTime.now()`) já recebe neste
+	    catálogo.
+	  - `Secret`, `RaycastResult`: EXISTEM como valor no Roblox real, mas **não têm construtor
+	    global** -- `Secret` só chega via API do Engine (ex.: `HttpService:GetSecret(...)`
+	    devolvendo um `Secret`), e `RaycastResult` só é devolvido por `WorldRoot:Raycast(...)` --
+	    nenhum dos dois tem um global `X.new(...)`/função estática que um script comum possa
+	    chamar. `HasGlobalConstructor = false` nestes dois: não viram NENHUM global no LuauBench
+	    (nem valor real, nem sentinela de "não simulado") -- uma sentinela pra um nome que o
+	    Roblox real também não expõe como global seria uma mensagem MENTIROSA (diria "LuauBench
+	    não simula X" quando o certo, igual ao Roblox, é `X` nem existir como variável global
+	    nenhuma).
 
 	Todo `Simulated` desta leva é `false` -- task-valuetypes-002 é só a FÁBRICA (`Userdata.luau`) e
 	esta lista; nenhum tipo concreto (`Vector3`, `Enum`, ...) foi implementado ainda. Tarefas
@@ -73,10 +86,10 @@ export type CatalogEntry = {
 	-- LuauBench. `false` = ainda vira sentinela nomeada em `cli/UnsimulatedGlobals.luau` (se
 	-- `HasGlobalConstructor` também for `true`) -- nunca um stub silencioso (regra 03).
 	Simulated: boolean,
-	-- `false` para os quatro nomes que existem como VALOR no Roblox mas não têm um `X.new(...)`
-	-- (ou equivalente) que um script comum possa chamar como global -- ver cabeçalho. Esses
-	-- nomes NUNCA viram global nenhum no LuauBench, nem real nem sentinela: uma sentinela pra
-	-- algo que o Roblox real também não expõe seria uma mensagem mentirosa.
+	-- `false` para os dois nomes (`Secret`, `RaycastResult`) que existem como VALOR no Roblox mas
+	-- não têm um `X.new(...)` (ou equivalente) que um script comum possa chamar como global --
+	-- ver cabeçalho. Esses nomes NUNCA viram global nenhum no LuauBench, nem real nem sentinela:
+	-- uma sentinela pra algo que o Roblox real também não expõe seria uma mensagem mentirosa.
 	HasGlobalConstructor: boolean,
 }
 
@@ -112,7 +125,8 @@ local CATALOG: { CatalogEntry } = {
 	{ Name = "Vector3", Simulated = false, HasGlobalConstructor = true },
 
 	-- 14 nomes novos que a lista original esquecia (ver cabeçalho, fonte: seção 0.8 do desenho
-	-- arquitetural desta leva). 10 COM construtor global:
+	-- arquitetural desta leva). 12 COM construtor global (SharedTable e Content corrigidos em
+	-- task-valuetypes-002-fix -- ver cabeçalho, achado ALTO do revisor):
 	{ Name = "NumberSequenceKeypoint", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "ColorSequenceKeypoint", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "Vector3int16", Simulated = false, HasGlobalConstructor = true },
@@ -123,13 +137,13 @@ local CATALOG: { CatalogEntry } = {
 	{ Name = "FloatCurveKey", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "RotationCurveKey", Simulated = false, HasGlobalConstructor = true },
 	{ Name = "Path2DControlPoint", Simulated = false, HasGlobalConstructor = true },
+	{ Name = "SharedTable", Simulated = false, HasGlobalConstructor = true },
+	{ Name = "Content", Simulated = false, HasGlobalConstructor = true },
 
-	-- 4 SEM construtor global -- nunca viram global nenhum, nem real nem sentinela (ver
+	-- 2 SEM construtor global -- nunca viram global nenhum, nem real nem sentinela (ver
 	-- cabeçalho). Presentes no catálogo só pra registrar que EXISTEM como valor no Roblox real
 	-- e foram considerados deliberadamente, nunca esquecidos por omissão.
-	{ Name = "SharedTable", Simulated = false, HasGlobalConstructor = false },
 	{ Name = "Secret", Simulated = false, HasGlobalConstructor = false },
-	{ Name = "Content", Simulated = false, HasGlobalConstructor = false },
 	{ Name = "RaycastResult", Simulated = false, HasGlobalConstructor = false },
 }
 
@@ -184,9 +198,9 @@ function Catalog.SimulatedNames(): { string }
 end
 
 -- Nomes que `cli/UnsimulatedGlobals.luau` deve transformar em sentinela nomeada: ainda não
--- simulados MAS o Roblox real os expõe como global construtível (`HasGlobalConstructor`). Os 4
--- nomes sem construtor global (`SharedTable`/`Secret`/`Content`/`RaycastResult`) NUNCA aparecem
--- aqui -- ver cabeçalho, "nem valor real, nem sentinela".
+-- simulados MAS o Roblox real os expõe como global construtível (`HasGlobalConstructor`). Os 2
+-- nomes sem construtor global (`Secret`/`RaycastResult`) NUNCA aparecem aqui -- ver cabeçalho,
+-- "nem valor real, nem sentinela".
 function Catalog.UnsimulatedGlobalNames(): { string }
 	local result: { string } = {}
 	for _, entry in CATALOG do

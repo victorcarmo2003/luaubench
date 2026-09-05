@@ -3,9 +3,21 @@
 --[[
 	Teste da task-valuetypes-002 (Catalog.luau -- lista fechada de todo global de valor do
 	Roblox). Cobre: os 37 nomes esperados (23 originais + 14 da seção 0.8 do desenho), a flag
-	`HasGlobalConstructor = false` nos quatro sem construtor global, e a garantia de disjunção
-	entre `SimulatedNames()`/`UnsimulatedGlobalNames()` pedida pelo acceptance da task
+	`HasGlobalConstructor` correta nos quatro nomes do grupo "sem construtor original" (dois
+	realmente sem, dois com), e a garantia de disjunção entre
+	`SimulatedNames()`/`UnsimulatedGlobalNames()` pedida pelo acceptance da task
 	("Catalog.UnsimulatedGlobalNames() não intersecta Catalog.SimulatedNames()").
+
+	task-valuetypes-002-fix (achado ALTO de
+	.claude/agents-memory/revisor-valuetypes-userdata-2026-09-05.md): `SharedTable` e `Content`
+	estavam marcados `HasGlobalConstructor = false` por engano -- corrigido para `true` em
+	Catalog.luau e neste spec. Fonte da correção, doc oficial da Roblox
+	(create.roblox.com/docs/reference/engine/datatypes/SharedTable e .../Content):
+	`SharedTable.new()`/`SharedTable.new(t: table)`; `Content.fromUri(uri)`,
+	`Content.fromAssetId(id)`, `Content.fromObject(obj)`, `Content.none` -- todos chamáveis por um
+	script comum. `Secret` (só chega via `HttpService:GetSecret(...)`) e `RaycastResult` (só
+	devolvido por `WorldRoot:Raycast(...)`) continuam `HasGlobalConstructor = false` -- nenhum dos
+	dois tem construtor/função estática chamável por script comum na doc oficial.
 
 	Roda com `lune run src/valuetypes/Catalog.spec.luau`.
 ]]
@@ -58,8 +70,9 @@ local ORIGINAL_23: { string } = {
 	"Vector3",
 }
 
--- Os 14 nomes novos da seção 0.8 do desenho, 10 com construtor global.
-local NEW_WITH_CONSTRUCTOR_10: { string } = {
+-- Os 14 nomes novos da seção 0.8 do desenho, 12 com construtor global (SharedTable e Content
+-- corrigidos em task-valuetypes-002-fix -- ver cabeçalho deste spec).
+local NEW_WITH_CONSTRUCTOR_12: { string } = {
 	"NumberSequenceKeypoint",
 	"ColorSequenceKeypoint",
 	"Vector3int16",
@@ -70,13 +83,13 @@ local NEW_WITH_CONSTRUCTOR_10: { string } = {
 	"FloatCurveKey",
 	"RotationCurveKey",
 	"Path2DControlPoint",
+	"SharedTable",
+	"Content",
 }
 
--- Os 4 nomes novos SEM construtor global.
-local NEW_WITHOUT_CONSTRUCTOR_4: { string } = {
-	"SharedTable",
+-- Os 2 nomes novos SEM construtor global (confirmado contra a doc oficial -- ver cabeçalho).
+local NEW_WITHOUT_CONSTRUCTOR_2: { string } = {
 	"Secret",
-	"Content",
 	"RaycastResult",
 }
 
@@ -106,30 +119,53 @@ test("todos os 23 nomes originais estão presentes com HasGlobalConstructor = tr
 	end
 end)
 
-test("os 10 nomes novos COM construtor global estão presentes e marcados corretamente", function()
+test("os 12 nomes novos COM construtor global estão presentes e marcados corretamente", function()
 	local byName: { [string]: Catalog.CatalogEntry } = {}
 	for _, entry in Catalog.All() do
 		byName[entry.Name] = entry
 	end
 
-	for _, name in NEW_WITH_CONSTRUCTOR_10 do
+	for _, name in NEW_WITH_CONSTRUCTOR_12 do
 		local entry = byName[name]
 		assert(entry ~= nil, `nome novo (com construtor) ausente do catálogo: {name}`)
 		assert(entry.HasGlobalConstructor, `{name} deveria ter HasGlobalConstructor = true`)
 	end
 end)
 
-test("os 4 nomes novos SEM construtor global estão presentes e marcados corretamente", function()
+test("os 2 nomes novos SEM construtor global estão presentes e marcados corretamente", function()
 	local byName: { [string]: Catalog.CatalogEntry } = {}
 	for _, entry in Catalog.All() do
 		byName[entry.Name] = entry
 	end
 
-	for _, name in NEW_WITHOUT_CONSTRUCTOR_4 do
+	for _, name in NEW_WITHOUT_CONSTRUCTOR_2 do
 		local entry = byName[name]
 		assert(entry ~= nil, `nome novo (sem construtor) ausente do catálogo: {name}`)
 		assert(not entry.HasGlobalConstructor, `{name} deveria ter HasGlobalConstructor = false`)
 	end
+end)
+
+-- Teste dedicado da task-valuetypes-002-fix (acceptance: "teste novo em Catalog.spec.luau
+-- confirmando os 4 valores (2 true, 2 false) e citando a fonte (doc oficial) no comentário").
+-- Fonte: create.roblox.com/docs/reference/engine/datatypes/SharedTable,
+-- create.roblox.com/docs/reference/engine/datatypes/Content,
+-- create.roblox.com/docs/reference/engine/datatypes/Secret,
+-- create.roblox.com/docs/reference/engine/datatypes/RaycastResult (doc oficial da Roblox,
+-- confirmada pelo revisor-valuetypes em .claude/agents-memory/revisor-valuetypes-userdata-2026-09-05.md).
+test("HasGlobalConstructor dos 4 nomes do grupo original 'sem construtor' bate com a doc oficial", function()
+	local byName: { [string]: Catalog.CatalogEntry } = {}
+	for _, entry in Catalog.All() do
+		byName[entry.Name] = entry
+	end
+
+	-- SharedTable.new() / SharedTable.new(t: table) -- chamável por script comum.
+	assert(byName["SharedTable"].HasGlobalConstructor == true, "SharedTable deveria ter HasGlobalConstructor = true (SharedTable.new)")
+	-- Content.fromUri(uri) / Content.fromAssetId(id) / Content.fromObject(obj) / Content.none.
+	assert(byName["Content"].HasGlobalConstructor == true, "Content deveria ter HasGlobalConstructor = true (Content.fromUri/fromAssetId/fromObject/none)")
+	-- Secret só chega via HttpService:GetSecret(...) -- sem construtor/função estática global.
+	assert(byName["Secret"].HasGlobalConstructor == false, "Secret deveria ter HasGlobalConstructor = false (só via HttpService:GetSecret)")
+	-- RaycastResult só é devolvido por WorldRoot:Raycast(...) -- sem construtor/função estática global.
+	assert(byName["RaycastResult"].HasGlobalConstructor == false, "RaycastResult deveria ter HasGlobalConstructor = false (só via WorldRoot:Raycast)")
 end)
 
 test("nesta leva, TODAS as entradas têm Simulated = false (nenhum types/*.luau existe ainda)", function()
@@ -143,22 +179,22 @@ test("Catalog.SimulatedNames() está vazia nesta leva", function()
 	assert(#names == 0, `esperava lista vazia, recebeu {#names} nomes`)
 end)
 
-test("Catalog.UnsimulatedGlobalNames() tem exatamente os 33 nomes com HasGlobalConstructor = true (23 + 10)", function()
+test("Catalog.UnsimulatedGlobalNames() tem exatamente os 35 nomes com HasGlobalConstructor = true (23 + 12)", function()
 	local names = Catalog.UnsimulatedGlobalNames()
-	assert(#names == 33, `esperava 33 nomes, recebeu {#names}`)
+	assert(#names == 35, `esperava 35 nomes, recebeu {#names}`)
 
 	local set = toSet(names)
 	for _, name in ORIGINAL_23 do
 		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
 	end
-	for _, name in NEW_WITH_CONSTRUCTOR_10 do
+	for _, name in NEW_WITH_CONSTRUCTOR_12 do
 		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
 	end
 end)
 
-test("Catalog.UnsimulatedGlobalNames() NUNCA contém os 4 nomes sem construtor global", function()
+test("Catalog.UnsimulatedGlobalNames() NUNCA contém os 2 nomes sem construtor global", function()
 	local set = toSet(Catalog.UnsimulatedGlobalNames())
-	for _, name in NEW_WITHOUT_CONSTRUCTOR_4 do
+	for _, name in NEW_WITHOUT_CONSTRUCTOR_2 do
 		assert(not set[name], `UnsimulatedGlobalNames() não deveria conter {name} (Roblox real não expõe como global)`)
 	end
 end)
