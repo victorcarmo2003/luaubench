@@ -71,6 +71,7 @@ local Types = require("./Types")
 local Context = require("./Context")
 local ClassBuilder = require("./ClassBuilder")
 local Manifest = require("./generated/Manifest")
+local EngineFixedChildren = require("./EngineFixedChildren")
 local Services = require("./")
 
 type ClassSchema = Runtime.ClassSchema
@@ -149,6 +150,38 @@ test("IsServiceClass/GetSimulatedServiceClasses funcionam ANTES de Services.Boot
 	end
 	assert(hasReplicatedStorage, "GetSimulatedServiceClasses deveria incluir 'ReplicatedStorage'")
 	assert(hasWorkspace, "GetSimulatedServiceClasses deveria incluir 'Workspace'")
+end)
+
+--[[
+	task-services-010 (arquiteto-cli-2026-09-05.md, "Revisão pós-implementação 2026-09-05
+	(task-cli-015)"): `Services.IsEngineFixedChild` é leitura PURA de `EngineFixedChildren.luau` --
+	não toca `Runtime.ClassRegistry` nem `Context`, mesma garantia de `IsServiceClass` acima. Este
+	teste PRECISA rodar antes de qualquer `Services.Bootstrap`/`Context.Set` deste arquivo -- por
+	isso vem logo depois do teste de `IsServiceClass` (que já prova, com `not Context.IsSet()`, que
+	nada neste arquivo chamou `Bootstrap` até aqui).
+
+	TESTE DE GUARDA (acceptance da task-services-010): os cinco trios abaixo, todos fora da lista
+	fechada declarada em `EngineFixedChildren.luau`, devolvem `false` -- cobertura detalhada e
+	comentada por trio vive em `EngineFixedChildren.spec.luau`; aqui o alvo é a SUPERFÍCIE PÚBLICA
+	(`Services.IsEngineFixedChild`, o que `cli` de fato chama), não o módulo interno.
+]]
+test("Services.IsEngineFixedChild funciona ANTES de Services.Bootstrap (leitura pura de EngineFixedChildren.luau, sem erro de Context)", function()
+	assert(
+		not Context.IsSet(),
+		"este teste precisa rodar ANTES de qualquer Services.Bootstrap neste arquivo -- se isto falhar, um teste anterior chamou Bootstrap e a ordem do arquivo foi violada"
+	)
+
+	assert(Services.IsEngineFixedChild("StarterPlayer", "StarterPlayerScripts", "StarterPlayerScripts"), "StarterPlayerScripts é filho fixo declarado de StarterPlayer")
+	assert(Services.IsEngineFixedChild("StarterPlayer", "StarterCharacterScripts", "StarterCharacterScripts"), "StarterCharacterScripts é filho fixo declarado de StarterPlayer")
+
+	assert(not Services.IsEngineFixedChild("StarterPlayer", "Terrain", "Terrain"), "Terrain não é filho fixo de StarterPlayer")
+	assert(not Services.IsEngineFixedChild("Workspace", "Terrain", "Terrain"), "Workspace não tem filhos fixos declarados (Covered=false, sem behavior/Workspace.luau) -- não pré-cria Terrain")
+	assert(not Services.IsEngineFixedChild("DataModel", "StarterPlayerScripts", "StarterPlayerScripts"), "DataModel não é uma chave declarada em EngineFixedChildren")
+	assert(not Services.IsEngineFixedChild("ReplicatedStorage", "Folder", "Folder"), "ReplicatedStorage não é uma chave declarada em EngineFixedChildren")
+	assert(
+		not Services.IsEngineFixedChild("StarterPlayer", "MyScripts", "StarterPlayerScripts"),
+		"Name e ClassName precisam bater os dois -- 'MyScripts' com $className 'StarterPlayerScripts' NÃO é adotado (cai no caminho normal de Services.new, que erra 'Unable to create an Instance of type', fiel ao Roblox real)"
+	)
 end)
 
 test("Register() é idempotente -- chamar duas vezes não erra", function()
@@ -513,6 +546,50 @@ test("cada classe de GetSimulatedServiceClasses() funciona com game:GetService(.
 		)
 	end
 end)
+
+--------------------------------------------------------------------------------------------------
+-- task-services-010: TESTE DE COERÊNCIA (acceptance do board) -- fecha o único modo de falha novo
+-- do desenho: `EngineFixedChildren` nunca pode declarar um filho fixo que `behavior/**` não cria
+-- de verdade. Para TODA entrada declarada (nesta leva, só `StarterPlayer`), depois de
+-- `Services.Bootstrap` REAL, `game:GetService(<classe do pai>):FindFirstChild(entry.Name)` existe
+-- E tem o `ClassName` esperado.
+--
+-- `KNOWN_ENGINE_FIXED_PARENTS` é a lista de classes-pai conhecidas NESTA leva -- mesma disciplina
+-- de `COVERED_CLASSES`/`SERVICES_THIS_LEVA` em `Integration.spec.luau`: hardcoded de propósito,
+-- falha alto e claro (`EngineFixedChildren.Of` some da chave) se uma tarefa futura adicionar uma
+-- entrada nova em `EngineFixedChildren.luau` sem revisitar este teste. `EngineFixedChildren.Of`
+-- não expõe a tabela completa (é módulo folha, só `Of`/`Is`) -- por isso a lista de chaves não é
+-- derivável automaticamente daqui.
+--------------------------------------------------------------------------------------------------
+
+local KNOWN_ENGINE_FIXED_PARENTS: { string } = { "StarterPlayer" }
+
+test(
+	"TESTE DE COERÊNCIA: toda entrada de EngineFixedChildren.Of(<pai>) existe de verdade sob game:GetService(<pai>) depois de Services.Bootstrap, com o ClassName esperado",
+	function()
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+
+		-- Bootstrap idempotente (guarda local em Services.Register) -- seguro mesmo já tendo rodado
+		-- antes neste processo, nos testes acima.
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+		for _, parentClassName in KNOWN_ENGINE_FIXED_PARENTS do
+			local parentService = game:GetService(parentClassName)
+			for _, entry in EngineFixedChildren.Of(parentClassName) do
+				local found = parentService:FindFirstChild(entry.Name)
+				assert(
+					found ~= nil,
+					`game:GetService("{parentClassName}"):FindFirstChild("{entry.Name}") não deveria ser nil -- EngineFixedChildren declara este filho, então behavior/{parentClassName}.luau precisa criá-lo de verdade`
+				)
+				assert(
+					(found :: Runtime.Instance).ClassName == entry.ClassName,
+					`o filho "{entry.Name}" encontrado deveria ter ClassName == "{entry.ClassName}", recebeu "{(found :: Runtime.Instance).ClassName}"`
+				)
+			end
+		end
+	end
+)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

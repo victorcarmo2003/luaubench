@@ -144,8 +144,11 @@
 	um dia precisasse abrir `generated/Index.luau` para descobrir uma classe, o registro central
 	deixaria de ser central. A ÚNICA superfície que `cli` enxerga de `services` é a exportada por
 	`Services` abaixo (`Bootstrap`/`new`/`IsKnownClass`/`IsSimulatedClass`/`GetDumpVersion`/
-	`IsServiceClass`/`GetSimulatedServiceClasses` -- as duas últimas, task-services-009, leitura pura
-	do manifesto, seguras de chamar ANTES de `Bootstrap`, ver comentário de cada uma abaixo).
+	`IsServiceClass`/`GetSimulatedServiceClasses` -- task-services-009, leitura pura do manifesto,
+	seguras de chamar ANTES de `Bootstrap`; `IsEngineFixedChild` -- task-services-010, mesma
+	garantia, leitura pura de `EngineFixedChildren.luau` -- ver comentário de cada uma abaixo).
+	`EngineFixedChildren.Of` fica INTERNO: não é reexportado por este arquivo -- `cli` não tem uso
+	legítimo para a lista completa de filhos fixos, só para o predicado.
 ]]
 
 local Types = require("./services/Types")
@@ -154,6 +157,7 @@ local ClassBuilder = require("./services/ClassBuilder")
 local GeneratedIndex = require("./services/generated/Index")
 local BehaviorIndex = require("./services/behavior/Index")
 local Manifest = require("./services/generated/Manifest")
+local EngineFixedChildren = require("./services/EngineFixedChildren")
 local Runtime = require("./runtime")
 
 export type BootstrapOptions = Types.BootstrapOptions
@@ -302,6 +306,29 @@ function Services.GetSimulatedServiceClasses(): { string }
 	end
 	table.sort(names)
 	return names
+end
+
+--[[
+	task-services-010 (arquiteto-cli-2026-09-05.md, "Revisão pós-implementação 2026-09-05
+	(task-cli-015) -- filho fixo do motor: adotar, não criar"): "este `(parentClassName, name,
+	className)` é um filho que o MOTOR do LuauBench já pré-cria dentro de `parentClassName`?" --
+	delega inteiramente a `EngineFixedChildren.Is` (módulo folha, dados puros).
+
+	PURA -- só lê `EngineFixedChildren.luau` (tabela estática, já carregada no `require` do topo
+	deste arquivo). NÃO toca `Runtime.ClassRegistry` nem `Context`: por isso é explicitamente
+	SEGURA de chamar ANTES de `Services.Bootstrap` ter rodado -- mesma garantia de `IsServiceClass`/
+	`GetSimulatedServiceClasses` acima. `cli` (`TreeMaterializer.createInstance`, task-cli-016) usa
+	este predicado para decidir entre ADOTAR a instância que `behavior/<Pai>.luau` já criou
+	(`parent:FindFirstChild(node.Name)`) e o ramo normal de criação (`Services.new`) -- nunca uma
+	API de criação nova (rejeitada explicitamente pelo desenho, ver a seção citada acima).
+
+	Exigir Name E ClassName no trio (não só ClassName) é o que mantém fiel o caso
+	`"MyScripts": { "$className": "StarterPlayerScripts" }` sob `StarterPlayer`: devolve `false`, e
+	`cli` cai no ramo normal, que erra `Unable to create an Instance of type "StarterPlayerScripts"`
+	-- exatamente o que o Roblox real faria, sem caso especial nenhum escrito para isso.
+]]
+function Services.IsEngineFixedChild(parentClassName: string, name: string, className: string): boolean
+	return EngineFixedChildren.Is(parentClassName, name, className)
 end
 
 --[[

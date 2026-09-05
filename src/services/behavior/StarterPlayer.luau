@@ -8,6 +8,13 @@
 	cabeçalho de `src/runtime/ClassRegistry.luau` (lista fechada de chamadores legítimos de
 	`NewEngineInstance` -- este módulo é o chamador #2 dessa lista).
 
+	task-services-010 (arquiteto-cli-2026-09-05.md, "Revisão pós-implementação 2026-09-05
+	(task-cli-015)", subseção "Módulos" -> "src/services/behavior/StarterPlayer.luau"): a FONTE da
+	informação de QUAIS filhos fixos existem e em que ORDEM deixou de estar escrita à mão aqui e
+	passou a ser `../EngineFixedChildren.luau` (`EngineFixedChildren.Of("StarterPlayer")`) -- este
+	módulo passou de FONTE a CONSUMIDOR dessa lista. Continua sendo o chamador #2 da lista fechada
+	de `NewEngineInstance` (nada muda no contrato com `runtime`).
+
 	`StarterPlayer` é `Service` (`IsService = true`) e `NotCreatable` (`IsAbstract = true`) no
 	dump -- alcançável só por `game:GetService("StarterPlayer")` (que constrói o singleton via
 	`Runtime.ClassRegistry.NewEngineInstance`, dentro de `src/runtime/DataModel.luau`). No Roblox
@@ -36,19 +43,22 @@
 
 local Runtime = require("../../runtime")
 local Types = require("../Types")
+local EngineFixedChildren = require("../EngineFixedChildren")
 
 local StarterPlayer: Types.Behavior = {
 	Initialize = function(instance: Runtime.Instance): ()
-		-- Ordem espelha a ordem usual do Explorer do Studio (StarterPlayerScripts antes de
-		-- StarterCharacterScripts) -- não confirmada como uma garantia formal do Roblox real
-		-- (nenhuma fonte encontrada que documente ordem de filhos fixos como parte da API), mas é
-		-- uma escolha estável e sem efeito observável: nenhum dos dois tem Schema/Behavior que
-		-- dependa de ordem de irmãos.
-		local starterPlayerScripts = Runtime.ClassRegistry.NewEngineInstance("StarterPlayerScripts", nil)
-		starterPlayerScripts.Parent = instance
-
-		local starterCharacterScripts = Runtime.ClassRegistry.NewEngineInstance("StarterCharacterScripts", nil)
-		starterCharacterScripts.Parent = instance
+		-- Ordem do array de `EngineFixedChildren.Of` É a ordem de criação (espelha a ordem usual
+		-- do Explorer do Studio -- não confirmada como uma garantia formal do Roblox real, nenhuma
+		-- fonte encontrada que documente ordem de filhos fixos como parte da API, mas é uma escolha
+		-- estável e sem efeito observável: nenhum dos dois tem Schema/Behavior que dependa de ordem
+		-- de irmãos). `child.Name` é passado EXPLICITAMENTE a `NewEngineInstance` -- sem isso, o
+		-- campo `Name` de `EngineFixedChild` viraria decorativo (o `Default` de `NewEngineInstance`
+		-- sem `name` explícito é `Name == ClassName`, que coincide com as duas entradas atuais só
+		-- por acidente).
+		for _, child in EngineFixedChildren.Of("StarterPlayer") do
+			local created = Runtime.ClassRegistry.NewEngineInstance(child.ClassName, child.Name)
+			created.Parent = instance
+		end
 	end,
 }
 
