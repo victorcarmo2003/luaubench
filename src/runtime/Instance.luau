@@ -83,10 +83,32 @@ export type ClassMethods = { [string]: unknown }
 -- membro" (task-runtime-018; substitui o `PropertyDescriptor` provisório do desenho original).
 export type MemberKind = "Property" | "Event" | "Callback"
 
+-- task-runtime-032 (ponte com o território novo de Value Types simulados, ver o desenho de
+-- arquitetura correspondente, seção 3.4 "runtime", subitem (c)):
+-- categoriza o VALOR de uma Property -- "Primitive" (number/string/boolean...), "DataType"
+-- (Vector3/CFrame/Color3/...), "Enum" (EnumItem), "Class" (referência a outra Instance) ou
+-- "Group" (agregado sem tipo único, ex.: Faces/Axes). `runtime` só declara o vocabulário --
+-- nunca lê o dump nem conhece um DataType concreto por nome (regra 02: "runtime nunca lê o API
+-- Dump diretamente"); quem preenche estes dois campos é `services`, a partir do
+-- `member.ValueType` que o gerador já parseia.
+export type MemberValueCategory = "Primitive" | "DataType" | "Enum" | "Class" | "Group"
+
 export type MemberDescriptor = {
 	Kind: MemberKind,
 	Default: unknown,
 	ReadOnly: boolean,
+	-- NOVOS, OPCIONAIS DE PROPÓSITO (task-runtime-032): `nil` para Kind ~= "Property" (Event/
+	-- Callback não têm ValueType) e para todo ClassSchema escrito antes desta tarefa -- aditivo
+	-- puro, nenhum schema existente precisa de edição para continuar válido. `ValueType` é o
+	-- nome do tipo do Roblox ("Vector3", "Material", "string", ...); `ValueCategory` diz que
+	-- FAMÍLIA de nome é essa. ESCOPO EXPLICITAMENTE FORA desta tarefa: `runtime` não usa estes
+	-- campos para VALIDAR escrita de propriedade (InstanceMeta.__newindex continua sem checagem
+	-- de tipo) -- validar exigiria responder o que o Roblox faz com coerção implícita
+	-- (`part.Size = 5`?), que não foi pesquisado; meia-validação seria pior que nenhuma (ver
+	-- desenho, seção 13, item 1). Os campos entram só como DADO disponível para `services`/`cli`
+	-- consumirem (defaults reais de DataType, decodificação de `$properties` do Rojo).
+	ValueType: string?,
+	ValueCategory: MemberValueCategory?,
 }
 
 -- Tabela ACHATADA (membros próprios + herdados) e CONGELADA de uma classe concreta, COMPARTILHADA
@@ -840,6 +862,19 @@ function Instance.NewBase(className: string, name: string?): Instance
 	local self = (proxy :: unknown) :: Instance
 	internals[self] = data
 	return self
+end
+
+-- task-runtime-032: identifica se `value` é uma Instance válida do LuauBench (userdata criado
+-- por NewBase, com estado interno registrado em `internals`). Por IDENTIDADE, nunca por forma
+-- (duck-typing classificaria errado qualquer userdata alheio que por acaso tivesse a mesma
+-- metatable) — mesmo critério de confiança que `getInternal` já usa, só que sem `error()`, já
+-- que aqui "não é uma Instance" é uma resposta válida, não uma falha de quem chamou. Alimenta o
+-- wrapper de `typeof` do Sandbox (Sandbox.luau, `resolveTypeName`): `typeof(instancia)` passa a
+-- devolver `"Instance"` em vez do `"userdata"` cru que o Luau devolve hoje para o proxy de
+-- NewBase (task-runtime-027) — ver o desenho de arquitetura de Value Types simulados,
+-- seção 3.4 "runtime", subitem (b), "Decisão 4".
+function Instance.IsInstance(value: unknown): boolean
+	return internals[value :: Instance] ~= nil
 end
 
 -- Via de engenharia abaixo do enforcement de ClassSchema — NUNCA consulta `data.classSchema`,

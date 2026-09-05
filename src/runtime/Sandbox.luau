@@ -125,10 +125,47 @@
 	assíncrono exigiria repassar/compartilhar a `ownThreads` do Script que originou a cadeia de
 	`require`, o que o desenho desta tarefa pede explicitamente para NÃO fazer aqui -- fica
 	registrado como pendência para quem desenhar `cli/ModuleLoader.luau`.
+
+	-- task-runtime-032: `env.typeof` deixa de ser o `typeof` cru do Luau (linha única histórica
+	-- `env.typeof = typeof`) e passa a ser `resolveTypeName`, definido mais abaixo -- o wrapper
+	-- de 5 passos da Decisão 4 do desenho de arquitetura de Value Types simulados (seção 3.4
+	-- "runtime", subitem (b)). CORRIGE DE QUEBRA três divergências de fidelidade que já existiam e não estavam
+	-- registradas em lugar nenhum (regra 00 -- ficam documentadas agora, no ponto exato onde o
+	-- comportamento muda):
+	--
+	--   1. `typeof(instancia)` -- confirmado empiricamente nesta tarefa (script descartável no
+	--      scratchpad, não commitado) que devolve "userdata" hoje, não "table" como uma nota de
+	--      arquitetura anterior registrou -- desde task-runtime-027, Instance é userdata via
+	--      `newproxy(true)`, não mais uma tabela com metatable. De todo jeito diverge do Roblox
+	--      real ("Instance"), e é esse o bug que este passo fecha.
+	--   2. `typeof(signal)` (ex.: `part.Touched`, `workspace.ChildAdded`) devolve "table" hoje --
+	--      Signal.luau é literalmente `{ Connect = ..., Wait = ..., ... }`. Roblox real:
+	--      "RBXScriptSignal".
+	--   3. `typeof(connection)` (o que `signal:Connect(fn)` devolve) devolve "table" hoje pelo
+	--      mesmo motivo. Roblox real: "RBXScriptConnection".
+	--
+	-- Identificação de Instance/Signal/Connection é por IDENTIDADE (via `InstanceModule.
+	-- IsInstance`/`SignalModule.IsSignal`/`SignalModule.IsConnection`, cada um consultando um
+	-- registro interno do próprio módulo dono), nunca por forma -- nenhuma tabela comum do
+	-- script (ainda que tenha campos `Connect`/`Wait` por coincidência, um padrão real do
+	-- ecossistema Roblox, ex.: um Signal de terceiros tipo GoodSignal) pode ser confundida com um
+	-- Signal nosso.
+	--
+	-- O 4º passo (`TypeNameResolverModule.Resolve`) é a ponte com o território novo de Value
+	-- Types simulados (Vector3/CFrame/Color3/Enum/...), instalada via
+	-- `Runtime.TypeNameResolver.Set` pelo composition root (`cli`) -- `nil` aqui significa tanto
+	-- "nenhum resolvedor instalado" quanto "resolvedor instalado, mas `value` não é um value type
+	-- reconhecido" (ver DIFERENÇA DELIBERADA no cabeçalho de TypeNameResolver.luau); as duas
+	-- situações caem no MESMO 5º passo (`typeof` nativo do Luau) -- é o que garante
+	-- `typeof(5) == "number"` continuar correto mesmo depois que um resolvedor de Value Types for
+	-- instalado. `Sandbox.spec.luau` cobre os 5 ramos, com e sem resolvedor instalado.
 ]]
 
 local luau = require("@lune/luau")
 local SchedulerModule = require("./Scheduler")
+local InstanceModule = require("./Instance")
+local SignalModule = require("./Signal")
+local TypeNameResolverModule = require("./TypeNameResolver")
 
 type Scheduler = SchedulerModule.Scheduler
 
@@ -303,6 +340,28 @@ local function splitErrorMessage(scriptName: string, raw: string): (string, numb
 	return message, tonumber(lineText)
 end
 
+-- task-runtime-032: os 5 passos da Decisão 4 (ver cabeçalho do módulo, bloco "task-runtime-032"
+-- logo acima de `local luau = require(...)`, para o detalhamento de cada divergência corrigida).
+-- Ordem fixa, do mais específico ao mais genérico -- Instance/Signal/Connection são consultados
+-- por identidade ANTES do resolvedor de Value Types e do fallback nativo, então um userdata/tabela
+-- nosso nunca cai por engano num dos dois últimos passos.
+local function resolveTypeName(value: unknown): string
+	if InstanceModule.IsInstance(value) then
+		return "Instance"
+	end
+	if SignalModule.IsSignal(value) then
+		return "RBXScriptSignal"
+	end
+	if SignalModule.IsConnection(value) then
+		return "RBXScriptConnection"
+	end
+	local resolvedByInjectedResolver = TypeNameResolverModule.Resolve(value)
+	if resolvedByInjectedResolver ~= nil then
+		return resolvedByInjectedResolver
+	end
+	return typeof(value)
+end
+
 -- Monta a whitelist fixa de globals (ver cabeçalho do módulo) e mescla `options.extraGlobals`
 -- por cima -- `extraGlobals` pode até sobrescrever uma entrada da whitelist (ex.: um `print`
 -- diferente), decisão de quem chama (`cli`/`services`), nunca deste módulo.
@@ -318,7 +377,10 @@ local function buildEnvironment(options: SandboxOptions, ownThreads: { [thread]:
 	env.os = ({ clock = os.clock, time = os.time, date = os.date, difftime = os.difftime } :: RestrictedOs)
 	env.bit32 = bit32
 	env.utf8 = utf8
-	env.typeof = typeof
+	-- task-runtime-032: wrapper de 5 passos (`resolveTypeName`, definido acima) no lugar do
+	-- `typeof` cru do Luau -- ver bloco "task-runtime-032" no cabeçalho do módulo para as 3
+	-- divergências de fidelidade que isso corrige de quebra.
+	env.typeof = resolveTypeName
 	env.tostring = tostring
 	env.tonumber = tonumber
 	env.pcall = pcall

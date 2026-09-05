@@ -40,8 +40,20 @@ local INT16_MAX = 32767
 -- (ex.: 1e18) deixa de tentar evitar notação científica -- ver comentário em `Format`
 -- logo abaixo do loop de dígitos significativos. Heurística própria desta tarefa (não
 -- confirmada contra o Roblox real), documentada porque `Float32.Format` é aproximação de
--- boa-fé (pendência P2, seção 9 do desenho arquitetural).
+-- boa-fé (pendência P2, seção 9 do desenho arquitetural). Na prática nunca chega a ser o
+-- fator limitante depois de `task-valuetypes-001-fix` (ver `INTEGER_EXACT_LIMIT` abaixo,
+-- que já corta o widening bem antes disso), mas mantido como cinto-de-segurança explícito.
 local MAX_FIXED_NOTATION_MAGNITUDE = 18
+
+-- CORREÇÃO (task-valuetypes-001-fix, achado MÉDIO do revisor -- ver
+-- `.claude/agents-memory/revisor-valuetypes-float32-2026-09-05.md`): todo inteiro com
+-- |n| < 2^24 é EXATAMENTE representável em float32 (mantissa de 23 bits explícitos + 1
+-- implícito = 24 bits de precisão inteira). Acima desse limite, o espaçamento entre dois
+-- float32 representáveis consecutivos (ULP) já é maior que 1, então nem todo inteiro
+-- "cabe" -- e um valor que caiu nesse intervalo pode bater no shortest-round-trip com
+-- poucos dígitos significativos sem ser um múltiplo redondo de potência de 10. Usado só
+-- pela guarda de widening em `Format`, abaixo.
+local INTEGER_EXACT_LIMIT = 2 ^ 24
 
 export type Formatter = (value: number) -> string
 
@@ -161,17 +173,28 @@ function Float32.Format(value: number): string
 	-- "1e+02" em vez de "100" -- e "100, 0, 0" é o formato bem conhecido que o Roblox usa
 	-- para `Vector3.new(100, 0, 0)`. Corrigido pedindo dígitos suficientes para cobrir a
 	-- parte inteira sem notação científica, SEM mudar a quantidade de dígitos
-	-- SIGNIFICATIVOS já encontrada -- matematicamente, se o valor já bate com menos dígitos
-	-- do que os necessários para representar a parte inteira, os dígitos extras revelados só
-	-- podem ser zeros (senão o round-trip de menor precisão não teria batido). Cap em
-	-- MAX_FIXED_NOTATION_MAGNITUDE: acima disso, mantém notação científica -- não pesquisado
-	-- onde exatamente o Roblox faria essa troca (P2), então não se estica a heurística além
-	-- do que dá pra defender.
+	-- SIGNIFICATIVOS já encontrada.
+	--
+	-- CORREÇÃO (task-valuetypes-001-fix, achado MÉDIO do revisor): a versão original deste
+	-- comentário afirmava que "os dígitos extras revelados só podem ser zeros" como fato
+	-- matemático geral -- ISSO É FALSO. Só é verdade quando `quantized` é um inteiro dentro
+	-- da faixa onde todo inteiro é exatamente representável em float32 (`INTEGER_EXACT_LIMIT`
+	-- acima, |quantized| < 2^24). Fora dessa faixa, o candidato de menor precisão pode bater
+	-- no round-trip por causa do ULP gigante nessa magnitude, não porque os dígitos extras
+	-- sejam de fato zero -- e o widening exporia os dígitos REAIS (e enganosos) da
+	-- aproximação double do float32. Reproduzido pelo revisor antes desta correção:
+	-- `Format(1e11)` dava `"99999997952"` em vez de `"100000000000"`, e `Format(1e17)` dava
+	-- `"99999998430674944"` em vez de notação científica honesta. Por isso o widening só é
+	-- tentado quando `quantized` é um inteiro exato E está dentro de `INTEGER_EXACT_LIMIT`;
+	-- fora dessa faixa, mantemos o resultado do shortest-round-trip puro (que pode ser
+	-- notação científica) -- menos legível, mas nunca numericamente errado, o que é mais
+	-- importante (regra 00: divergência declarada é aceitável, número errado não).
 	local exponentText = string.match(formatted, "e([%+%-]?%d+)$")
 	if exponentText ~= nil then
 		local exponent = tonumber(exponentText) :: number
 		local magnitude = exponent + 1
-		if magnitude > significantDigits and magnitude <= MAX_FIXED_NOTATION_MAGNITUDE then
+		local isExactInteger = quantized == math.floor(quantized) and math.abs(quantized) < INTEGER_EXACT_LIMIT
+		if isExactInteger and magnitude > significantDigits and magnitude <= MAX_FIXED_NOTATION_MAGNITUDE then
 			local widened = string.format(`%.{magnitude}g`, quantized)
 			if not string.find(widened, "[eE]") then
 				formatted = widened

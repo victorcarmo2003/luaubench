@@ -1105,5 +1105,22 @@ test("uma segunda Instance/script não é afetada por uma tentativa de ataque na
 	assert(witness.Parent == nil, "Destroy da segunda Instance deveria continuar funcionando normalmente")
 end)
 
+test("IsInstance identifica por identidade (task-runtime-032) -- nunca por forma (duck-typing)", function()
+	local instance = InstanceModule.NewBase("Folder", "Real")
+	assert(InstanceModule.IsInstance(instance), "uma Instance real (criada por NewBase) deveria ser reconhecida")
+
+	assert(not InstanceModule.IsInstance(nil), "IsInstance(nil) nunca deveria dar erro nem devolver true")
+	assert(not InstanceModule.IsInstance(5), "IsInstance(number) nunca deveria dar erro nem devolver true")
+	assert(not InstanceModule.IsInstance("Instance"), "IsInstance(string) nunca deveria dar erro nem devolver true")
+	assert(not InstanceModule.IsInstance({ ClassName = "Folder", Name = "Fake" }), "uma tabela comum com campos parecidos não é uma Instance nossa")
+
+	-- Um userdata QUALQUER (não criado por NewBase) também não pode ser confundido -- prova que
+	-- a checagem é por identidade (registro em `internals`), não só "typeof == userdata".
+	local alienUserdata = newproxy(false)
+	assert(not InstanceModule.IsInstance(alienUserdata), "um userdata alheio (newproxy solto) não é uma Instance nossa")
+
+	instance:Destroy()
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

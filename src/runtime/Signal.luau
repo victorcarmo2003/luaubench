@@ -26,6 +26,21 @@
 
 local ThreadBroker = require("./ThreadBroker")
 
+-- task-runtime-032 (ponte com o território novo de Value Types simulados — ver o desenho de
+-- arquitetura correspondente, seção 3.4 "runtime", "Decisão 4"):
+-- registros de IDENTIDADE, nunca de forma, para que o wrapper de `typeof` do Sandbox saiba
+-- responder "RBXScriptSignal"/"RBXScriptConnection" para um Signal/Connection nosso sem recorrer
+-- a duck-typing (uma tabela de script comum com campos `Connect`/`Wait` por coincidência NUNCA
+-- pode passar por um Signal legítimo). Chave fraca (`__mode = "k"`): um Signal/Connection sem
+-- mais referências externas é coletado pelo GC normalmente, sem entrada perene aqui — mesmo
+-- padrão de `internals` em Instance.luau. `{ [unknown]: boolean }` já tem precedente no
+-- território de `cli` (JsonValue.luau/TreePlanner.luau) — indexador `unknown` compila limpo em
+-- --!strict.
+local registeredSignals: { [unknown]: boolean } =
+	(setmetatable({}, { __mode = "k" }) :: unknown) :: { [unknown]: boolean }
+local registeredConnections: { [unknown]: boolean } =
+	(setmetatable({}, { __mode = "k" }) :: unknown) :: { [unknown]: boolean }
+
 export type Connection = {
 	Connected: boolean,
 	Disconnect: (self: Connection) -> (),
@@ -77,6 +92,10 @@ local function connect<T...>(listeners: { Listener<T...> }, callback: (T...) -> 
 		end,
 	}
 	table.insert(listeners, listener)
+	-- task-runtime-032: `listener` É a Connection devolvida a quem chamou Connect/Once/Wait —
+	-- registrar aqui, no único ponto de criação, cobre as três (Connect/Once diretos e o Once
+	-- interno que Signal.Wait usa abaixo).
+	registeredConnections[listener] = true
 	return listener
 end
 
@@ -201,7 +220,23 @@ function Signal.new<T...>(): FireableSignal<T...>
 		end,
 	}
 
+	-- task-runtime-032: registrado aqui, no único ponto de criação de um Signal de verdade —
+	-- ver comentário de `registeredSignals`, acima.
+	registeredSignals[self] = true
+
 	return self
+end
+
+-- task-runtime-032: `value` é um Signal criado por ESTE módulo (por identidade, ver
+-- `registeredSignals` acima) -- nunca `nil` levantando erro, "não é um Signal nosso" é resposta
+-- válida. Consumido só por Sandbox.luau.
+function Signal.IsSignal(value: unknown): boolean
+	return registeredSignals[value] == true
+end
+
+-- task-runtime-032: idem, para Connection (ver `registeredConnections` acima).
+function Signal.IsConnection(value: unknown): boolean
+	return registeredConnections[value] == true
 end
 
 return Signal

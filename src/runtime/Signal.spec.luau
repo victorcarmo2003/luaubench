@@ -197,5 +197,35 @@ test("Cancelar uma thread real parada em Signal:Wait() desconecta o listener int
 	assert(coroutine.status(handle) == "dead", "após Cancel, a coroutine deveria estar fechada (dead)")
 end)
 
+test("IsSignal/IsConnection identificam por identidade (task-runtime-032) -- nunca por forma (duck-typing)", function()
+	local signal = Signal.new()
+	local connection = signal:Connect(function() end)
+
+	assert(Signal.IsSignal(signal), "um Signal de verdade deveria ser reconhecido por IsSignal")
+	assert(Signal.IsConnection(connection), "uma Connection de verdade deveria ser reconhecida por IsConnection")
+
+	assert(not Signal.IsSignal(connection), "uma Connection não é um Signal")
+	assert(not Signal.IsConnection(signal), "um Signal não é uma Connection")
+
+	-- Tabela comum do script com os MESMOS nomes de campo de um Signal -- duck-typing
+	-- classificaria errado; identidade não. Este é exatamente o cenário que motivou o registro
+	-- por identidade em vez de checar a forma (ver cabeçalho de Signal.luau, task-runtime-032).
+	local lookalike = {
+		Connect = function() end,
+		Once = function() end,
+		Wait = function() end,
+		DisconnectAll = function() end,
+	}
+	assert(not Signal.IsSignal(lookalike), "uma tabela comum com os mesmos nomes de campo não é um Signal nosso")
+	assert(not Signal.IsConnection(lookalike), "idem para Connection")
+
+	assert(not Signal.IsSignal(nil), "IsSignal(nil) nunca deveria dar erro nem devolver true")
+	assert(not Signal.IsConnection(5), "IsConnection(number) nunca deveria dar erro nem devolver true")
+
+	-- Once() também produz uma Connection reconhecível (mesmo caminho de connect() por dentro).
+	local onceConnection = signal:Once(function() end)
+	assert(Signal.IsConnection(onceConnection), "a Connection devolvida por Once também deveria ser reconhecida")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

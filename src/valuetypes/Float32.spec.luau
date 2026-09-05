@@ -107,6 +107,45 @@ test("Format evita notação científica espúria em números redondos (achado d
 	assert(Float32.Format(0) == "0", `esperava "0", recebeu "{Float32.Format(0)}"`)
 end)
 
+test("Format acima de 2^24 nunca inventa dígitos (task-valuetypes-001-fix, achado MÉDIO do revisor)", function()
+	-- Estes quatro valores produziam saída NUMERICAMENTE ERRADA antes da correção (o
+	-- widening tratava dígitos reais da aproximação double do float32 como se fossem
+	-- zeros à direita). A guarda `INTEGER_EXACT_LIMIT` corta o widening para
+	-- |quantized| >= 2^24 -- o critério de aceite é round-trip correto e ausência de
+	-- dígitos fabricados, não uma string fixa (a representação pode ser notação
+	-- científica, que é honesta, ao contrário do bug original).
+	local problematicValues: { number } = { 1e11, 1e14, 999999999999999, 1e17 }
+
+	for _, value in problematicValues do
+		local quantized = Float32.Quantize(value)
+		local formatted = Float32.Format(value)
+
+		-- Round-trip: reconverter o texto formatado e requantizar tem que bater com o
+		-- valor quantizado original -- essa propriedade nunca quebrou (nem no bug
+		-- original), mas continua sendo o critério mínimo de correção numérica.
+		local roundTripped = tonumber(formatted)
+		assert(roundTripped ~= nil, `Format({value}) = "{formatted}" não é convertível de volta por tonumber()`)
+		assert(
+			Float32.Quantize(roundTripped :: number) == quantized,
+			`Format({value}) = "{formatted}" não sobrevive ao round-trip (esperava requantizar para {quantized})`
+		)
+
+		-- Nunca fabricar dígitos: se a saída não usa notação científica, ela tem que ser
+		-- exatamente `quantized` formatado por %.17g (a representação double completa,
+		-- sem nenhum dígito "editado" pelo widening) -- ou seja, ou é notação científica
+		-- honesta, ou é o valor exato, nunca um meio-termo com dígitos trocados.
+		if not string.find(formatted, "[eE]") then
+			local exact = string.format("%.17g", quantized)
+			local exactAsNumber = tonumber(exact)
+			assert(exactAsNumber ~= nil and (exactAsNumber :: number) == quantized, "sanity check do formatador %.17g falhou")
+			assert(
+				tonumber(formatted) == quantized,
+				`Format({value}) = "{formatted}" em notação fixa não bate com o valor quantizado exato {quantized} -- dígito fabricado`
+			)
+		end
+	end
+end)
+
 test("Format delega nan/inf/-inf para FormatSpecial (pendência P3)", function()
 	assert(Float32.Format(0 / 0) == "nan", `esperava "nan", recebeu "{Float32.Format(0 / 0)}"`)
 	assert(Float32.Format(math.huge) == "inf", `esperava "inf", recebeu "{Float32.Format(math.huge)}"`)

@@ -112,6 +112,17 @@
 	2026-09-05 (5)"). `UnknownClassResolver.Resolve` NÃO é reexportado -- mesmo precedente de
 	`NewBase`/`SetClassChain`/`SetClassMethods`/`SetClassSchema`: `services` só precisa instalar
 	o resolvedor (`Set`), nunca consultá-lo de volta; `cli` não tem uso legítimo nenhum para ele.
+
+	task-runtime-032 acrescenta `Runtime.TypeNameResolver.Set` + o tipo `TypeNameResolver`, e
+	`MemberDescriptor` ganha os campos opcionais `ValueType`/`ValueCategory` (+ o tipo novo
+	`MemberValueCategory`) -- ponte com o território novo de Value Types simulados, ver desenho
+	completo em TypeNameResolver.luau e no desenho de arquitetura correspondente, seção 3.4
+	"runtime". MESMO PRECEDENTE de `UnknownClassResolver` acima: `TypeNameResolver.Resolve`
+	NÃO é reexportado -- consumido só por `Sandbox.luau`, dentro do próprio território; `cli` (o
+	composition root que ata este território ao território de Value Types simulados, via
+	`Services.Bootstrap`) só precisa instalar (`Set`), nunca consultar de volta. Este território
+	continua sem requerer nenhum módulo do território de Value Types em lugar nenhum -- a ponte é
+	sempre este resolvedor injetado.
 ]]
 
 local SignalModule = require("./runtime/Signal")
@@ -121,6 +132,7 @@ local DataModelModule = require("./runtime/DataModel")
 local SchedulerModule = require("./runtime/Scheduler")
 local SandboxModule = require("./runtime/Sandbox")
 local UnknownClassResolverModule = require("./runtime/UnknownClassResolver")
+local TypeNameResolverModule = require("./runtime/TypeNameResolver")
 
 export type Signal<T...> = SignalModule.Signal<T...>
 export type Connection = SignalModule.Connection
@@ -129,6 +141,7 @@ export type Connection = SignalModule.Connection
 export type FireableSignal<T...> = SignalModule.FireableSignal<T...>
 export type Instance = InstanceModule.Instance
 export type MemberKind = InstanceModule.MemberKind
+export type MemberValueCategory = InstanceModule.MemberValueCategory
 export type MemberDescriptor = InstanceModule.MemberDescriptor
 export type ClassSchema = InstanceModule.ClassSchema
 export type ClassDescriptor = ClassRegistryModule.ClassDescriptor
@@ -143,6 +156,7 @@ export type OutputRecord = SandboxModule.OutputRecord
 export type OutputLevel = SandboxModule.OutputLevel
 export type UnknownClassVerdict = UnknownClassResolverModule.UnknownClassVerdict
 export type UnknownClassResolver = UnknownClassResolverModule.UnknownClassResolver
+export type TypeNameResolver = TypeNameResolverModule.TypeNameResolver
 
 local Runtime = {
 	Signal = {
@@ -186,6 +200,12 @@ local Runtime = {
 	-- task-runtime-030: só `Set` -- `Resolve` fica interno (ver cabeçalho deste arquivo).
 	UnknownClassResolver = {
 		Set = UnknownClassResolverModule.Set,
+	},
+
+	-- task-runtime-032: mesmo precedente -- só `Set` -- `Resolve` fica interno, consumido só
+	-- por Sandbox.luau (ver cabeçalho de TypeNameResolver.luau e deste arquivo).
+	TypeNameResolver = {
+		Set = TypeNameResolverModule.Set,
 	},
 }
 

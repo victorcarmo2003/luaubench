@@ -15,6 +15,9 @@
 local process = require("@lune/process")
 local Scheduler = require("./Scheduler")
 local Sandbox = require("./Sandbox")
+local InstanceModule = require("./Instance")
+local SignalModule = require("./Signal")
+local TypeNameResolverModule = require("./TypeNameResolver")
 
 local passedCount = 0
 local totalCount = 0
@@ -709,6 +712,90 @@ test("Sandbox.Run continua com o comportamento de hoje -- Sandbox.Load não intr
 	assert(#records == 1, `Sandbox.Run deveria continuar reportando exatamente 1 OutputRecord de erro, recebeu {#records}`)
 	assert(records[1].level == "error", "Sandbox.Run deveria continuar reportando nível 'error'")
 	assert(records[1].scriptName == "Workspace.RegressaoRun", "Sandbox.Run deveria continuar identificando o scriptName corretamente")
+end)
+
+-- task-runtime-032: ver bloco "task-runtime-032" no cabeçalho do módulo e Decisão 4 do desenho
+-- de arquitetura de Value Types simulados. IMPORTANTE: `TypeNameResolverModule.Set` é estado
+-- global mutável de PROCESSO (mesma invariante de UnknownClassResolver -- sem Reset/Unset) --
+-- por isso o teste "sem resolvedor instalado" abaixo roda ANTES do teste que instala um
+-- resolvedor, nesta mesma ordem, neste mesmo arquivo (cada `lune run` é um processo isolado dos
+-- outros arquivos de spec, mas não dos outros testes DESTE arquivo).
+test("typeof: Instance/Signal/Connection resolvem para os nomes reais do Roblox mesmo sem nenhum resolvedor de Value Types instalado (task-runtime-032, passos 1-3 e fallback nativo)", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	local realInstance = InstanceModule.NewBase("Folder", "Injected")
+	local realSignal = SignalModule.new()
+	local realConnection = realSignal:Connect(function() end)
+
+	-- Tipado explicitamente como `Sandbox.SandboxGlobals` ANTES de passar para `Sandbox.Run` --
+	-- mesmo padrão do teste "extraGlobals é mesclado por cima da whitelist fixa", acima: um
+	-- literal inline aqui faria o checker tentar unificar estruturalmente contra os tipos
+	-- recursivos de Signal/Connection em vez de simplesmente aceitar `unknown`.
+	local extra: Sandbox.SandboxGlobals = {
+		injectedInstance = realInstance,
+		injectedSignal = realSignal,
+		injectedConnection = realConnection,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.TypeofFidelidade",
+		source = [[
+			print(typeof(injectedInstance))
+			print(typeof(injectedSignal))
+			print(typeof(injectedConnection))
+			print(typeof(5))
+			print(typeof("oi"))
+			print(typeof(nil))
+			print(typeof({}))
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(#records == 7, `esperava 7 linhas de print, recebeu {#records}`)
+	assert(records[1].message == "Instance", `typeof(Instance) deveria ser "Instance", recebeu {records[1].message}`)
+	assert(records[2].message == "RBXScriptSignal", `typeof(Signal) deveria ser "RBXScriptSignal", recebeu {records[2].message}`)
+	assert(records[3].message == "RBXScriptConnection", `typeof(Connection) deveria ser "RBXScriptConnection", recebeu {records[3].message}`)
+	assert(records[4].message == "number", "typeof(5) deveria continuar 'number' (fallback nativo)")
+	assert(records[5].message == "string", "typeof(\"oi\") deveria continuar 'string' (fallback nativo)")
+	assert(records[6].message == "nil", "typeof(nil) deveria continuar 'nil' (fallback nativo)")
+	assert(records[7].message == "table", "typeof({}) deveria continuar 'table' (fallback nativo -- não é Instance/Signal/Connection nossa)")
+
+	realInstance:Destroy()
+end)
+
+test("typeof: resolvedor de Value Types injetado responde para o que reconhece e o resto continua caindo no nativo (task-runtime-032, passo 4 e Decisão 4)", function()
+	TypeNameResolverModule.Set(function(value: unknown): string?
+		if value == "marcador-vector3" then
+			return "Vector3"
+		end
+		return nil
+	end)
+
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	Sandbox.Run({
+		scriptName = "Workspace.TypeofResolvedorInjetado",
+		source = [[
+			print(typeof("marcador-vector3"))
+			print(typeof(5))
+			print(typeof("outra string qualquer"))
+		]],
+		scheduler = scheduler,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(#records == 3, `esperava 3 linhas de print, recebeu {#records}`)
+	assert(records[1].message == "Vector3", "typeof deveria devolver o nome que o resolvedor de Value Types injetado reconheceu")
+	assert(records[2].message == "number", "typeof(5) deveria continuar 'number' mesmo com um resolvedor instalado -- Resolve devolve nil para o que ele não reconhece, e o wrapper cai no nativo")
+	assert(records[3].message == "string", "idem para uma string que o resolvedor instalado não reconhece")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
