@@ -342,6 +342,11 @@ end
 -- Decisão 7: `$properties` grava pela via pública (o `__newindex` real do runtime), então um nome
 -- inválido ou uma propriedade somente-leitura chega aqui como o ERRO DO MOTOR (pcall), não como
 -- um diagnóstico inventado por `cli` -- este wrapper só garante a citação do nó/propriedade.
+-- `engineError` chega AQUI já sem o prefixo de localização interna (task-cli-010,
+-- `TreeMaterializer.stripEngineErrorLocation`) -- o `error(msg, 2)` real do `__newindex` aponta
+-- para o call site dentro de `TreeMaterializer.luau` (caminho absoluto em disco + número de linha
+-- do MÓDULO INTERNO do LuauBench, nunca um arquivo do usuário), e essa função nunca deveria receber
+-- esse prefixo cru -- regra 04, "nunca stack trace/detalhe de implementação vazando pro usuário".
 function Messages.MaterializePropertyAssignmentFailed(nodePath: string, propertyName: string, engineError: string): string
 	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {engineError}`
 end

@@ -276,6 +276,74 @@ test("Materialize: $properties primitivo válido é aplicado; nome inválido e p
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-cli-010 (correção de revisão): erro de $properties inválido NUNCA vaza caminho absoluto de
+-- disco nem "TreeMaterializer:NNN:" (o call site interno do pcall, via error(msg, 2) do __newindex
+-- real) -- só NodePath/Field/a mensagem real do motor. Achado MÉDIO de
+-- revisor-cli-runcommand-2026-09-05.md, reproduzido por mim (thread principal) antes da correção:
+-- sem o strip, `gravtyDiagnostic.Message` continha literalmente o caminho de instalação do
+-- LuauBench em disco (ex.: "D:\UserData\Documents\GitHub\luaubench\src\cli\TreeMaterializer:136: ").
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: erro de $properties inválido não vaza caminho absoluto de disco nem 'TreeMaterializer:NNN:' (task-cli-010)", function()
+	local plan, planBag = planFixture("properties")
+	assert(plan ~= nil, `fixture 'properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local propertyDiagnostics: { Diagnostics.Diagnostic } = {}
+	for _, diagnostic in bag:All() do
+		if diagnostic.Code == "materialize/invalid-property" then
+			table.insert(propertyDiagnostics, diagnostic)
+		end
+	end
+	assert(#propertyDiagnostics == 2, `esperava 2 diagnostics de propriedade inválida, achou {#propertyDiagnostics}`)
+
+	for _, diagnostic in propertyDiagnostics do
+		-- Padrão genérico de path absoluto do Windows ("<letra>:\") -- não hardcoda o drive da
+		-- máquina de quem roda o teste (poderia ser C:, D:, etc).
+		assert(
+			string.match(diagnostic.Message, "%a:\\") == nil,
+			`mensagem de '{diagnostic.Field}' NÃO deveria conter um caminho absoluto de disco (letra:\\), achou: {diagnostic.Message}`
+		)
+		assert(
+			string.find(diagnostic.Message, ".luau:", 1, true) == nil,
+			`mensagem de '{diagnostic.Field}' NÃO deveria conter '.luau:' (chunk interno vazando), achou: {diagnostic.Message}`
+		)
+		assert(
+			string.find(diagnostic.Message, "TreeMaterializer:", 1, true) == nil,
+			`mensagem de '{diagnostic.Field}' NÃO deveria conter 'TreeMaterializer:' (call site interno do pcall vazando), achou: {diagnostic.Message}`
+		)
+	end
+
+	-- A mensagem real do motor continua presente e acionável -- o strip só remove o PREFIXO de
+	-- localização interna, nunca o texto que ajuda o usuário a corrigir o .project.json.
+	local gravty: Diagnostics.Diagnostic? = nil
+	local classNameProp: Diagnostics.Diagnostic? = nil
+	for _, diagnostic in propertyDiagnostics do
+		if diagnostic.Field == "Gravty" then
+			gravty = diagnostic
+		elseif diagnostic.Field == "className" then
+			classNameProp = diagnostic
+		end
+	end
+
+	assert(gravty ~= nil, "deveria haver um diagnostic para o campo 'Gravty'")
+	if gravty ~= nil then
+		assert(string.find(gravty.Message, "is not a valid member of", 1, true) ~= nil, "mensagem real do motor ('is not a valid member of') deveria continuar presente")
+	end
+
+	assert(classNameProp ~= nil, "deveria haver um diagnostic para o campo 'className'")
+	if classNameProp ~= nil then
+		assert(string.find(classNameProp.Message, "read only", 1, true) ~= nil, "mensagem real do motor ('read only') deveria continuar presente")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Raiz com $className != DataModel -> erro dedicado (Decisão 14) -- InstancePlan montado à mão,
 -- porque TreePlanner nunca valida isto (ele só resolve ClassName, não decide se serve pra `game`).
 --------------------------------------------------------------------------------------------------

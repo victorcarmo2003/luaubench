@@ -107,6 +107,48 @@ local SCRIPT_CLASS_NAMES: { [string]: boolean } = {
 	ModuleScript = true,
 }
 
+-- task-cli-010 (correção de revisão, achado MÉDIO de revisor-cli-runcommand-2026-09-05.md): o
+-- `__newindex` real de `runtime` levanta o erro de `$properties` inválido com `error(msg, 2)`
+-- (`Instance.luau:662`/`688`/etc) -- nível 2 aponta para o CALL SITE de quem chamou o `__newindex`,
+-- que aqui é sempre a closure `writable[key] = value` dentro do `pcall`, logo abaixo, em
+-- `applyProperties`. Isso faz o Luau prefixar `tostring(err)` com a localização de QUEM CHAMOU
+-- (`<chunk deste módulo>:<linha>: `) em vez da localização de dentro do `__newindex` -- e o "chunk
+-- deste módulo", do jeito que o Lune nomeia um chunk `require`ido, é o CAMINHO ABSOLUTO EM DISCO de
+-- `TreeMaterializer.luau` (ex.: `D:\...\src\cli\TreeMaterializer:136: `). Diferente do erro de
+-- SCRIPT DO USUÁRIO (onde o call site É o arquivo do usuário, e citá-lo é correto/fiel ao Roblox --
+-- ver `OutputFormatter.luau`), aqui o call site é SEMPRE um módulo interno do CLI: repassar
+-- `tostring(err)` cru vazaria o caminho de instalação do LuauBench no disco de quem roda, violando
+-- a regra 04 ("nunca stack trace cru do parser" -- mesma categoria de vazamento de detalhe de
+-- implementação).
+--
+-- `stripEngineErrorLocation`, abaixo, corta esse prefixo pelo mesmo princípio que
+-- `OutputFormatter.tryReattributeModuleError` já usa para o marcador `[string "..."]:<n>: ` de erro
+-- de módulo requerido: casar o padrão `<algo>:<número>: ` e devolver só o que vem DEPOIS. A âncora
+-- `^.-:%d+: ` (início da string, `.-` não-guloso) é o que garante casar o PRIMEIRO `:<número>: `
+-- encontrado, não um `: ` qualquer em qualquer posição -- importante porque a MENSAGEM REAL do
+-- motor pode conter `: ` dela mesma (ex.: "field: Gravty" citado por outros diagnósticos deste
+-- arquivo) e até `:<dígitos>:` sem ser localização (ex.: um horário "5:00" hipotético dentro do
+-- texto) -- `.-` expande caractere a caractere até o resto do padrão casar pela primeira vez, então
+-- qualquer `:<dígitos>: ` que apareça DEPOIS do primeiro nunca é escolhido por engano. Caminho no
+-- Windows tem colchete `D:\` logo no início, mas `:` seguido de `\` (não dígito) nunca casa
+-- `%d+`, então `.-` continua expandindo até o `:136: ` de verdade -- confirmado por reprodução
+-- manual antes de escrever este código (`lune run` contra o erro real de `$properties.Gravty`).
+--
+-- Esta função vive AQUI, não em `Messages.luau` -- o cabeçalho daquele arquivo é explícito
+-- ("nenhuma lógica de ramificação além de formatação simples"; decisão sobre O QUE mostrar é de
+-- quem chama), e decidir SE um prefixo de localização deve ser cortado (via `string.match`) é uma
+-- decisão, não formatação pura -- mesmo lugar onde `OutputFormatter.tryReattributeModuleError` mora
+-- pela mesma razão. Se o padrão não casar (erro sem prefixo de localização reconhecível -- caso
+-- defensivo, não observado na prática), devolve `rawError` sem alteração: nunca esconde a mensagem
+-- real do motor por excesso de zelo.
+local function stripEngineErrorLocation(rawError: string): string
+	local rest = string.match(rawError, "^.-:%d+: (.*)$")
+	if rest == nil then
+		return rawError
+	end
+	return rest
+end
+
 -- Aplica `$properties` (já filtrado para boolean/number/string por `TreePlanner`, Decisão 7) pela
 -- via PÚBLICA de escrita -- deixa o `__newindex` real do runtime validar contra o `ClassSchema` e
 -- devolver a mensagem certa (nome inválido, propriedade somente-leitura, evento/método
@@ -140,7 +182,7 @@ local function applyProperties(instance: Runtime.Instance, node: TreePlanner.Pla
 			bag:Add({
 				Severity = "error",
 				Code = "materialize/invalid-property",
-				Message = Messages.MaterializePropertyAssignmentFailed(node.NodePath, key, tostring(err)),
+				Message = Messages.MaterializePropertyAssignmentFailed(node.NodePath, key, stripEngineErrorLocation(tostring(err))),
 				NodePath = node.NodePath,
 				Field = key,
 			})

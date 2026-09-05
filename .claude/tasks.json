@@ -1040,7 +1040,7 @@
       "id": "task-cli-010",
       "title": "TreeMaterializer.applyProperties vaza path absoluto de disco + linha interna do LuauBench em erro de $properties invalido",
       "description": "Achado MEDIO do revisor-cli na revisao de task-cli-006, so visivel agora que o pipeline real esta ligado ponta a ponta (raiz em TreeMaterializer.luau, task-cli-004 ja fechada). Cenario: usuario escreve '$properties': {'Gravty': 10} (typo) em qualquer no do .project.json. Hoje o erro chega assim: 'D:\\UserData\\Documents\\GitHub\\luaubench\\src\\cli\\TreeMaterializer:136: Gravty is not a valid member of ServerScriptService \"DataModel.ServerScriptService\" (node: tree.ServerScriptService, field: Gravty)'. Motivo tecnico: TreeMaterializer.applyProperties (linha ~136) faz pcall(function() writable[key] = value end), e o __newindex real do runtime levanta erro com error(msg, 2) -- atribuindo a posicao ao CALL SITE do pcall, que e o proprio TreeMaterializer.luau (modulo interno do LuauBench), nunca um arquivo do usuario. tostring(err) embutido cru em Messages.MaterializePropertyAssignmentFailed vaza caminho de instalacao do LuauBench no disco de quem roda -- viola regra 04 ('nunca stack trace cru do parser', mesma categoria). Correcao sugerida pelo revisor: em Messages.MaterializePropertyAssignmentFailed ou em TreeMaterializer.applyProperties, extrair so a mensagem depois do primeiro ': ' do erro (mesmo padrao de stripDataModelPrefix/tryReattributeModuleError que OutputFormatter ja usa pra esconder detalhe de implementacao), citando so NodePath/Field/o texto real do motor sem o prefixo de chunk interno.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 22,
@@ -1048,6 +1048,23 @@
       "priority": "medium",
       "acceptance": "Erro de $properties invalido (nome inexistente e propriedade somente-leitura) nunca contem caminho absoluto de disco nem 'TreeMaterializer:NNN:' na mensagem entregue ao usuario -- so NodePath/Field/mensagem real do motor (ex: 'Gravty is not a valid member of ServerScriptService'); teste novo cobrindo isso (grep na mensagem renderizada por caminho tipo 'C:\\' ou 'D:\\' ou '.luau:'); regressao total intacta (404 testes); --!strict sem any.",
       "depends": ["task-cli-006"],
+      "result": "stripEngineErrorLocation(rawError) adicionada em TreeMaterializer.luau usando string.match(rawError, \"^.-:%d+: (.*)$\") -- o .- nao-guloso casa o PRIMEIRO <chunk>:<linha>: (call site interno de error(msg,2) no __newindex real), nunca um ': ' qualquer da mensagem real. Se nao casar, devolve a string original. Vive em TreeMaterializer.luau, nao em Messages.luau (cabecalho deste proibe ramificacao). 1 teste novo em TreeMaterializer.spec (9/9). Regressao total 405/405 (162 runtime + 73 services + 170 cli).",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu tudo: 405/405 rodado por ele, testou o regex isoladamente com 7 casos adversariais, reverteu via git stash e confirmou que o teste novo falha de verdade sem o fix (reproduz o bug original), rodou o binario real end-to-end com $properties invalido (nome errado + somente-leitura) confirmando ausencia de path/linha interna preservando o texto real do motor. ACHADO ALTO NOVO (nao reportado pelo coder, achado por reproducao propria do revisor): a MESMA classe de vazamento persiste em TreeMaterializer.luau:251-262, caminho materialize/invalid-class (Messages.MaterializeInvalidClass, $className com typo) -- reproduzido com $className:'Frmae' gerando 'D:\\...\\TreeMaterializer:252: Unable to create an Instance of type Frmae'. Comentario pre-existente no cabecalho do arquivo afirma incorretamente que Services.new nao vaza -- ele tambem usa error(msg,2). Virou task-cli-011, despachada para correcao imediata.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-011",
+      "title": "Mesmo vazamento de path/linha interna em materialize/invalid-class ($className com typo)",
+      "description": "Achado ALTO do revisor-cli na revisao de task-cli-010, encontrado por reproducao propria (nao reportado pelo coder). A mesma classe de vazamento corrigida em applyProperties (stripEngineErrorLocation) persiste em TreeMaterializer.luau (por volta da linha 251-262), no caminho materialize/invalid-class: quando node.ClassName tem um typo (ex: 'Frmae' em vez de 'Frame'), Services.new(node.ClassName, node.Name) e chamado dentro de pcall, e o erro real (levantado com error(msg, 2) dentro de Services.new) tem a posicao atribuida ao CALL SITE do pcall -- o proprio TreeMaterializer.luau -- vazando caminho absoluto de disco + linha interna do LuauBench pro usuario. Reproduzido pelo revisor: $className:'Frmae' gera 'Could not create \"...\" as \"Frmae\": D:\\...\\TreeMaterializer:252: Unable to create an Instance of type \"Frmae\"'. O comentario pre-existente no cabecalho do arquivo afirma incorretamente que Services.new 'ja devolve mensagens de otima qualidade' sem vazamento -- esta errado, Services.new tambem usa error(msg, 2) internamente. Correcao: aplicar a MESMA stripEngineErrorLocation (ja existe em TreeMaterializer.luau desde task-cli-010) no ponto onde Messages.MaterializeInvalidClass e chamado com tostring(resultOrError). Corrigir tambem o comentario incorreto do cabecalho.",
+      "column": "in-progress",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 23,
+      "tags": ["cli", "correcao-de-revisao", "erro"],
+      "priority": "high",
+      "acceptance": "Erro de $className invalido/typo nunca contem caminho absoluto de disco nem 'TreeMaterializer:NNN:' na mensagem entregue ao usuario -- so o texto real do motor (ex: 'Unable to create an Instance of type \"Frmae\"'); teste novo cobrindo isso (mesmo padrao de grep usado em task-cli-010); comentario incorreto do cabecalho sobre Services.new corrigido; regressao total intacta (405 testes); --!strict sem any.",
+      "depends": ["task-cli-010"],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }
