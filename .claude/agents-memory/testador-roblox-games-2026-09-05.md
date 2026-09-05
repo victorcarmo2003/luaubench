@@ -207,3 +207,87 @@ divergência conhecida).
 (caracterizando o bug atual). Cabeçalho do arquivo documenta que os asserts precisarão ser
 atualizados quando `TreePlanner.luau` for corrigido (o comportamento esperado depois do fix é a
 pipeline avançar, não mais parar em `plan/missing-class-name`).
+
+---
+
+## Atualização 2026-09-05 (pós task-cli-016)
+
+Retestagem pedida depois que o bug GRAVE acima foi corrigido em duas tarefas: `task-cli-014`
+(inferência de `ClassName` para filhos fixos — `StarterPlayerScripts`/`StarterCharacterScripts`/
+`Terrain`) e `task-cli-016` (adotar o filho fixo já existente no `DataModel` em vez de tentar criar
+um duplicado, o que ainda batia em `materialize/invalid-class`). Ambas `done`, revisadas,
+commitadas até `bce57c6`.
+
+### Parte 1 — cenário corrigido (dois problemas, os dois resolvidos)
+
+**(a) Asserção obsoleta.** A asserção que esperava `materialize/invalid-class` citando
+`StarterPlayerScripts` (linhas ~127-130 da versão anterior) ficou obsoleta — rodei o binário real
+de novo e **`StarterPlayerScripts` não aparece mais em NENHUM diagnóstico de stderr**, nem
+`missing-class-name` (task-cli-014) nem `invalid-class` (o que a versão anterior deste cenário
+ainda esperava como "achado legítimo restante"). `task-cli-016` fechou essa parede por completo,
+não só trocou o código do erro. Prova mais forte ainda: o `LocalScript` real de
+`StarterPlayerScripts.Client` (`src/client/init.client.luau` no Tiktok) é materializado com
+sucesso e aparece corretamente no resumo como `1 LocalScript(s) not executed (LuauBench runs as a
+server)` — confirmação ponta a ponta de que o fix funciona (client script carregado, mas não
+executado, que é o comportamento correto: LuauBench roda como servidor, `LocalScript` nunca roda
+no servidor no Roblox real).
+
+**(b) Harness frágil.** Confirmado o achado do `revisor-cli`: a função `test()` não usava `pcall`,
+então um assert falho (a asserção obsoleta de `(a)`) derrubava o script inteiro com `exit 1` — zero
+`[PASS]` impresso, os testes de `Panic - CHESSS`/`TheGame` nem chegavam a rodar. Corrigido: `test()`
+agora envolve `run()` em `pcall`, reporta `[FAIL]` com a mensagem do assert sem abortar, e o script
+imprime um resumo final (`N/total passaram, K falharam`) e sai com `process.exit(1)` se algum teste
+falhou. Validado isoladamente (script descartável em scratchpad, não commitado): um teste
+propositalmente falso seguido de um teste válido confirma que o segundo teste RODA e é reportado
+`[PASS]` mesmo com o primeiro falhando — o padrão funciona como esperado.
+
+Cenário rodado de ponta a ponta depois da correção: `3/3 passaram, 0 falharam`, `exit 0`.
+
+### Parte 2 — novo mapa de paredes (retestagem contra o binário real)
+
+Comando idêntico de antes: `lune run src/cli/main.luau run "<caminho>" --no-color --timeout 5`.
+
+**Tiktok** — `exit 2`. Script real do servidor roda (`Hello world, from server!` no stdout).
+`StarterPlayerScripts`/`LocalScript` do cliente: materializados sem erro (fix confirmado). Erros
+remanescentes, todos legítimos (território `services`/`runtime`, divergência conhecida e
+documentada, não GRAVE):
+- `materialize/invalid-property` — `Lighting.Technology` não é membro válido (propriedade
+  deprecada/removida no Roblox moderno — a simulação está fiel ao estado atual do dump, não é bug).
+- `materialize/service-not-simulated` — `SoundService` ainda não simulado.
+- `materialize/invalid-property` — `Workspace.FilteringEnabled` é somente-leitura na simulação
+  (achado NOVO desde a última rodada, mas é fidelidade CORRETA: no Roblox real atual
+  `FilteringEnabled` foi deprecada, é sempre `true` e não pode mais ser setada — a simulação está
+  certa em rejeitar a escrita, não é bug).
+- `materialize/invalid-class` — `Part` (Baseplate) ainda não simulado.
+- 4 warnings `plan/non-primitive-property` (Vector3/Color3 em array — comportamento gracioso já
+  confirmado antes, mantido).
+
+**Panic - CHESSS** — `exit 2`, sem mudança em relação à rodada anterior: pipeline executa código
+real do jogo (framework Modux, `src/server/Services/MatchmakingService.luau`) e erra dentro dele —
+`GetService: classe 'HttpService' não registrada em ClassRegistry`, citando a linha real do script
+do usuário (`MatchmakingService:4`). Achado legítimo, território `services`. Nenhum stack trace cru
+nem erro Lua cru vazado.
+
+**TheGame** — `exit 2`, sem mudança: `plan/required-path-not-found` para `Packages`/
+`ServerPackages` (dependências Wally não instaladas neste checkout — achado incidental do
+ambiente, não bug do LuauBench). Nenhum Script chega a rodar (a falta de dependência é detectada
+ANTES da materialização/execução). Performance: 777ms medidos por fora do processo (`time`) para
+planejar+errar em 310 arquivos — mais rápido que a medição anterior (2.5s), sem sinal de
+degradação.
+
+### Confirmação client-side (pedido explícito do pedido original)
+
+Sim — confirmado: o `LocalScript` de `StarterPlayerScripts.Client` no Tiktok agora É carregado/
+materializado corretamente pelo pipeline (não bate mais em nenhum erro), e corretamente NÃO
+executado, porque `luaubench run` roda como servidor e `LocalScript` nunca roda no servidor no
+Roblox real. Isso é o comportamento CORRETO esperado, documentado no resumo do CLI
+(`1 LocalScript(s) not executed (LuauBench runs as a server)`) — prova de que o fix de
+`StarterPlayerScripts` funciona ponta a ponta, não só "parou de dar erro".
+
+### Nenhum bug GRAVE novo encontrado
+
+Nenhum crash do LuauBench, travamento, vazamento de sandbox ou mensagem confusa nesta retestagem.
+Todos os erros remanescentes são paredes conhecidas/esperadas (Service/value-type/classe ainda não
+simulados) ou fidelidade correta com o Roblox real atual (`FilteringEnabled`/`Technology`
+deprecados). O achado de `FilteringEnabled` somente-leitura é novo nesta rodada mas é um sinal
+POSITIVO de fidelidade, não um bug — vale nota de cobertura, não tarefa corretiva.

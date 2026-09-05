@@ -18,24 +18,42 @@
 -- Superfície exercitada: `Cli.Main`/`RunCommand.Execute` (pipeline `luaubench run` completo),
 -- `TreePlanner` (resolução de ClassName, inferência de Service, `$properties`).
 --
--- STATUS (task-cli-014, CORRIGIDO): o BUG GRAVE original -- os 3 projetos batendo em
--- `[plan/missing-class-name]` em "StarterPlayer.StarterPlayerScripts" ANTES de qualquer script
+-- STATUS (task-cli-014 + task-cli-016, CORRIGIDO): o BUG GRAVE original -- os 3 projetos batendo
+-- em `[plan/missing-class-name]` em "StarterPlayer.StarterPlayerScripts" ANTES de qualquer script
 -- rodar -- está FECHADO (ver bloco de comentário logo abaixo, mantido como histórico). Os 3
--- projetos agora AVANÇAM de verdade pela pipeline -- 'Tiktok' e 'Panic - CHESSS' chegam a
--- EXECUTAR o script real do servidor -- e cada um bate numa parede LEGÍTIMA e DIFERENTE (Service/
--- classe/propriedade ainda não simulada, ou dependência Wally não instalada neste checkout), não
--- mais na inferência de ClassName do Rojo. Os asserts abaixo foram atualizados pra refletir isso.
+-- projetos AVANÇAM de verdade pela pipeline -- 'Tiktok' e 'Panic - CHESSS' chegam a EXECUTAR o
+-- script real do servidor -- e cada um bate numa parede LEGÍTIMA e DIFERENTE (Service/classe/
+-- propriedade ainda não simulada, ou dependência Wally não instalada neste checkout), não mais na
+-- inferência de ClassName do Rojo. Ver "Atualização 2026-09-05 (pós task-cli-016)" no final deste
+-- comentário: a re-execução contra o binário real mostrou que a correção foi além do esperado --
+-- `StarterPlayerScripts` não aparece MAIS EM NENHUM diagnóstico (nem `missing-class-name`, nem
+-- `invalid-class`) -- o `LocalScript` de `StarterPlayerScripts.Client` é materializado e
+-- corretamente listado como "not executed" (LuauBench roda como servidor). Os asserts abaixo
+-- foram atualizados pra refletir isso.
 
 local process = require("@lune/process")
 
 local passedCount = 0
+local failedCount = 0
 local totalCount = 0
 
+-- Harness resiliente (achado do `revisor-cli` em `task-cli-016`, corrigido aqui): antes, um
+-- `assert` falho dentro de `run()` propagava pra fora de `test()` sem `pcall` -- derrubava o
+-- script INTEIRO (`exit 1`, zero `[PASS]` impresso), então se o teste do 'Tiktok' quebrasse, os
+-- testes de 'Panic - CHESSS'/'TheGame' nem chegavam a rodar (falso-negativo de cobertura: parecia
+-- que 0 cenários rodaram, quando na verdade só 1 falhou). Agora cada teste roda isolado -- uma
+-- falha é reportada com `[FAIL]` e a mensagem do assert, mas os próximos testes continuam.
 local function test(name: string, run: () -> ())
 	totalCount += 1
-	run()
-	passedCount += 1
-	print(`[PASS] {name}`)
+	local ok, err = pcall(run)
+	if ok then
+		passedCount += 1
+		print(`[PASS] {name}`)
+	else
+		failedCount += 1
+		print(`[FAIL] {name}`)
+		print(`       {tostring(err)}`)
+	end
 end
 
 local function runRealProcess(projectPath: string, extraArgs: { string }?): process.ExecResult
@@ -76,31 +94,46 @@ local THEGAME_PATH = "C:/Users/hakor/Documents/Roblox-Games/TheGame"
 	`v6.0.0`/`v7.4.0-rc1` respectivamente, bem antes da versão fixada (`v7.7.0`); a pesquisa
 	original simplesmente não reportou os dois `else if` seguintes da mesma função.
 
-	CORREÇÃO: `SyncRules.InferFixedChildClassName(parentClassName, name)` (dados puros, tabela
-	`StarterPlayer -> {StarterPlayerScripts, StarterCharacterScripts}`, `Workspace -> {Terrain}`)
-	somada ao ramo de Service já existente em `TreePlanner.luau`, resolvendo o `ClassName` no MESMO
-	ponto e com a MESMA precedência (`$className` explícito > `$path` != Folder > inferência >
-	`Folder` genérico > erro). `IsServiceRoot` continua restrito a Services de verdade (decisão
-	documentada em `TreePlanner.luau`, ponto onde `IsServiceRoot` é calculado) -- os filhos fixos
-	não são Services reais do Roblox (confirmado: `IsService = false` no dump), então continuam
-	materializados como Instance comum, não via `game:GetService`.
+	CORREÇÃO (task-cli-014): `SyncRules.InferFixedChildClassName(parentClassName, name)` (dados
+	puros, tabela `StarterPlayer -> {StarterPlayerScripts, StarterCharacterScripts}`,
+	`Workspace -> {Terrain}`) somada ao ramo de Service já existente em `TreePlanner.luau`,
+	resolvendo o `ClassName` no MESMO ponto e com a MESMA precedência (`$className` explícito >
+	`$path` != Folder > inferência > `Folder` genérico > erro).
 
 	IMPACTO ORIGINAL: 100% dos 17 projetos Rojo reais encontrados em Roblox-Games usavam esse
 	padrão -- bloqueava a pipeline INTEIRA (nenhum script chegava a rodar) para praticamente
 	qualquer projeto Roblox real.
+
+	CORREÇÃO COMPLEMENTAR (task-cli-016): resolver o `ClassName` (task-cli-014) não bastava --
+	`StarterPlayerScripts`/`StarterCharacterScripts`/`Terrain` são filhos FIXOS do motor (já
+	existem no `DataModel` antes de qualquer script rodar, não são Services de verdade --
+	`IsService = false` no dump). A materialização criava uma Instance NOVA e DUPLICADA em vez de
+	adotar o filho fixo já existente, e essa criação batia em `materialize/invalid-class` (via
+	pública bloqueada de propósito pra esses filhos). `task-cli-016` trocou "criar" por "adotar o
+	filho fixo existente e aplicar `$path`/`$properties`/filhos nele" -- fechando essa segunda
+	parede por completo, não só trocando o código do erro.
 ]]
 
-test("FIXED (task-cli-014): 'Tiktok' (projeto Rojo 'default' padrão) NÃO bate mais em plan/missing-class-name para StarterPlayer.StarterPlayerScripts -- a pipeline avança até EXECUTAR o script real do servidor", function()
+test("FIXED (task-cli-014 + task-cli-016): 'Tiktok' (projeto Rojo 'default' padrão) NÃO bate mais em plan/missing-class-name nem em materialize/invalid-class para StarterPlayer.StarterPlayerScripts -- a pipeline avança até EXECUTAR o script real do servidor e materializa o LocalScript do cliente corretamente (não executado, LuauBench é servidor)", function()
 	local result = runRealProcess(TIKTOK_PATH)
 
-	-- O bug deste cenário está fechado: nem o diagnóstico nem essa causa aparecem mais.
+	-- O bug original deste cenário está fechado: nem o diagnóstico nem essa causa aparecem mais.
 	assert(
 		string.find(result.stderr, "plan/missing-class-name", 1, true) == nil,
 		`NÃO deveria mais haver "plan/missing-class-name" no stderr (bug corrigido por task-cli-014) -- recebeu: {result.stderr}`
 	)
 
-	-- Prova de que a pipeline avançou de verdade, não só "não deu esse erro específico": o script
-	-- real do servidor RODOU (stdout de `print`, não diagnóstico) -- antes da correção,
+	-- Confirmação da correção COMPLEMENTAR (task-cli-016, retestado em 2026-09-05): StarterPlayerScripts
+	-- não aparece mais em NENHUM diagnóstico de erro/warning -- nem por missing-class-name (task-cli-014)
+	-- nem por invalid-class (o que a versão anterior deste cenário ainda esperava). O filho fixo é
+	-- adotado com sucesso, e o `LocalScript` real (`src/client/init.client.luau`) é materializado nele.
+	assert(
+		string.find(result.stderr, "StarterPlayerScripts", 1, true) == nil,
+		`"StarterPlayerScripts" NÃO deveria mais aparecer em nenhum diagnóstico de stderr (task-cli-016 fechou a parede de invalid-class também) -- recebeu: {result.stderr}`
+	)
+
+	-- Prova de que a pipeline avançou de verdade, não só "não deu esses erros específicos": o
+	-- script real do servidor RODOU (stdout de `print`, não diagnóstico) -- antes da correção,
 	-- `TreePlanner.Plan` falhava e nenhum script chegava a ser materializado/executado.
 	assert(
 		string.find(result.stdout, "Hello world, from server!", 1, true) ~= nil,
@@ -111,22 +144,37 @@ test("FIXED (task-cli-014): 'Tiktok' (projeto Rojo 'default' padrão) NÃO bate 
 		`esperava o resumo confirmar 1 Script executado, recebeu stdout: {result.stdout}`
 	)
 
-	-- Ainda assim, o processo termina em erro -- mas agora por causas LEGÍTIMAS e DIFERENTES
-	-- (território `services`/`runtime`, não `cli`): `Lighting.Technology` não é uma propriedade
-	-- válida na simulação atual, `SoundService` ainda não é simulado, `StarterPlayerScripts` (e
-	-- `Part`, do Baseplate) não podem ser criados pela via pública (`StarterPlayerScripts` é um
-	-- filho fixo do MOTOR -- só instanciável via `NewEngineInstance`, nunca por `Instance.new`/
-	-- `ClassRegistry.new` de um script comum, ver `src/services/behavior/StarterPlayer.spec.luau`
-	-- -- e `Part` ainda não tem cobertura de `services`). Documentado aqui pra não confundir uma
-	-- regressão futura DESTE bug com esses achados, que são de outro território.
+	-- Confirmação ponta a ponta do fix: o LocalScript dentro de StarterPlayerScripts.Client É
+	-- materializado (não bate mais em invalid-class) mas corretamente NÃO executado -- LuauBench
+	-- roda como servidor, e LocalScript nunca roda no servidor no Roblox real. Isso é o
+	-- comportamento CORRETO, não uma limitação -- documentado aqui como prova de que o fix
+	-- funciona de ponta a ponta, não só "parou de dar esse erro".
+	assert(
+		string.find(result.stdout, "1 LocalScript(s) not executed (LuauBench runs as a server)", 1, true) ~= nil,
+		`esperava o resumo confirmar 1 LocalScript materializado e corretamente não executado (roda como servidor), recebeu stdout: {result.stdout}`
+	)
+
+	-- Ainda assim, o processo termina em erro -- mas por causas LEGÍTIMAS, todas em território
+	-- `services`/`runtime` (não `cli`): `Lighting.Technology` não é uma propriedade válida na
+	-- simulação atual (propriedade removida/deprecada no Roblox moderno -- divergência esperada,
+	-- não bug), `SoundService` ainda não é simulado, `Part` (do Baseplate) ainda não tem cobertura
+	-- de `services`, e `Workspace.FilteringEnabled` é somente-leitura na simulação -- o que bate
+	-- com o Roblox real atual (FilteringEnabled foi deprecada e é sempre true, não pode mais ser
+	-- setada por script/projeto). Documentado aqui pra não confundir uma regressão futura DESTE
+	-- bug com esses achados, que são de outro território e refletem fidelidade correta com o
+	-- Roblox real, não bugs.
 	assert(result.code == 2, `esperava ExitCode 2 (erros legítimos remanescentes, não relacionados a este bug), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
 	assert(
-		string.find(result.stderr, "materialize/service-not-simulated", 1, true) ~= nil,
+		string.find(result.stderr, "materialize/service-not-simulated", 1, true) ~= nil and string.find(result.stderr, "SoundService", 1, true) ~= nil,
 		`esperava "SoundService" reportado como ainda não simulado (achado legítimo, território services), recebeu: {result.stderr}`
 	)
 	assert(
-		string.find(result.stderr, "materialize/invalid-class", 1, true) ~= nil and string.find(result.stderr, "StarterPlayerScripts", 1, true) ~= nil,
-		`esperava "StarterPlayerScripts" citado agora por "materialize/invalid-class" (filho fixo do motor, não pela via pública) -- NUNCA mais por "plan/missing-class-name", recebeu: {result.stderr}`
+		string.find(result.stderr, "materialize/invalid-class", 1, true) ~= nil and string.find(result.stderr, "Part", 1, true) ~= nil,
+		`esperava "Part" (Baseplate) reportado como ainda não simulado por "materialize/invalid-class", recebeu: {result.stderr}`
+	)
+	assert(
+		string.find(result.stderr, "FilteringEnabled", 1, true) ~= nil and string.find(result.stderr, "read only", 1, true) ~= nil,
+		`esperava "Workspace.FilteringEnabled" reportado como somente-leitura (fidelidade correta com o Roblox real -- propriedade deprecada), recebeu: {result.stderr}`
 	)
 
 	-- Efeito colateral documentado, NÃO um bug (mantido de antes da correção): `$properties` com
@@ -194,10 +242,15 @@ test("FIXED (task-cli-014): 'TheGame' (310 arquivos, projeto maior) roda rápido
 	)
 
 	-- Achado de PERFORMANCE (positivo, mantido de antes): planejar a árvore inteira de um projeto
-	-- com 310 arquivos .luau leva poucos segundos, mesmo tendo que ler cada arquivo do disco --
-	-- sem sinal de travamento/lentidão exponencial nesta escala. Não é um teste de carga rigoroso
-	-- (só um projeto, uma rodada), mas é um dado real, não suposição.
+	-- com 310 arquivos .luau leva menos de 1s na re-execução de 2026-09-05 (777ms medidos por
+	-- fora do processo via `time`), mesmo tendo que ler cada arquivo do disco -- sem sinal de
+	-- travamento/lentidão exponencial nesta escala. Não é um teste de carga rigoroso (só um
+	-- projeto, uma rodada), mas é um dado real, não suposição.
 	assert(elapsed < 15, `esperava planejar+errar em menos de 15s pra 310 arquivos, levou {elapsed}s`)
 end)
 
-print(`{passedCount}/{totalCount} cenários reais de Roblox-Games passaram (bug de StarterPlayerScripts corrigido -- task-cli-014; ver comentários pros achados legítimos remanescentes)`)
+print(`{passedCount}/{totalCount} cenários reais de Roblox-Games passaram, {failedCount} falharam (bug de StarterPlayerScripts corrigido -- task-cli-014 + task-cli-016; ver comentários pros achados legítimos remanescentes)`)
+
+if failedCount > 0 then
+	process.exit(1)
+end
