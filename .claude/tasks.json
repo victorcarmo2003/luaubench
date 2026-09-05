@@ -1666,7 +1666,7 @@
       "id": "task-valuetypes-003",
       "title": "Enum: tools/generate-enums.luau + generated/EnumData.luau + types/Enum.luau (Enums/Enum/EnumItem)",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Maior alavanca da leva 1 (secao 10): milhares de propriedades do dump sao Category=Enum, o $properties do Rojo resolve enum por nome de item, e TweenInfo/Font/Faces/Axes dependem disso. tools/generate-enums.luau (ARQUIVO NOVO, exclusivo desta tarefa) le .cache/api-dump/28360dea....json e emite src/valuetypes/generated/EnumData.luau -- 629 enums, 3611 itens, ~64KB, carrega em ~8.5ms (medido nesta sessao). Espelha tools/generate-services.luau: mesmo api-dump.lock.json, mesmo cabecalho GERADO-nao-editar, mesmo relatorio de contagem. SAO TRES TIPOS, nao um (secao 3.2, confirmado por pesquisa): o global Enum e typeof Enums (:GetEnums()); Enum.KeyCode e typeof Enum (:GetEnumItems/:FromName/:FromValue); Enum.KeyCode.Space e typeof EnumItem (.Name/.Value/.EnumType, tostring Enum.KeyCode.Space). Construcao PREGUICOSA e memoizada por enum -- tocar Enum.KeyCode materializa so os itens do KeyCode. Itens INTERNADOS (mesma referencia sempre): P7 nao confirmou se o Roblox garante rawequal, e internar satisfaz as duas hipoteses.",
-      "column": "in-progress",
+      "column": "review",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 40,
@@ -1685,7 +1685,7 @@
       "id": "task-valuetypes-004",
       "title": "types/Vector3.luau + types/Vector2.luau",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. 354 e 145 referencias no dump -- os dois tipos mais usados. Toda assinatura vem de .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md, confirmada contra o YAML oficial de creator-docs. RESPEITAR AS ASSIMETRIAS REAIS (secao 3.2), nao copiar-e-colar entre os dois: Vector2 NAO tem operador //; Vector2:Cross() devolve number (o de Vector3 devolve Vector3); Vector2:Max/Min aceitam tupla variadica e os de Vector3 so um argumento; os FuzzyEq usam algoritmos de epsilon diferentes (default 1e-5). Quantizacao float32 no construtor privado unico -- como todo resultado de operador passa por la, a aritmetica inteira fica encadeada em f32 automaticamente (Decisao 3). DIVERGENCIA D8 OBRIGATORIA no cabecalho de Vector3.luau: type() aqui devolve userdata, no Roblox moderno devolve vector (tipo primitivo nativo da Luau) -- o Lune nao expoe debug.setmetatable, entao o tipo nativo nao pode ganhar .Magnitude. P8 (== exato vs epsilon) nao foi confirmado: implemente exato e MARQUE como aproximacao de boa-fe nao confirmada.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 40,
@@ -1698,13 +1698,14 @@
       "updatedAt": "2026-09-05",
       "depends": [
         "task-valuetypes-002"
-      ]
+      ],
+      "reviewResult": "APROVADO. lune run: 42/42 Vector3.spec, 38/38 Vector2.spec, 10/10 Float32, 33/33 Userdata, 14/14 Catalog. Paridade float32 bit-a-bit contra vector.create nativo. Assimetrias reais confirmadas (Vector2 sem //, Cross com aridade/retorno diferente, erros de tipo com TypeName correto). FromNormalId/FromAxis testados contra Enum.luau real. D8/P8 documentadas como aproximação. --strict, zero any, luau-lsp limpo nos 4 arquivos. Território intacto (grep valuetypes em runtime vazio). 2 notas BAIXO não bloqueantes: quantização f32 estendida a Magnitude/Dot/Cross/Angle (documentada), pequena duplicação de helpers entre Vector3/Vector2. Relatório: .claude/agents-memory/revisor-valuetypes-vector3-vector2-2026-09-05.md"
     },
     {
       "id": "task-valuetypes-005",
       "title": "types/Color3.luau + types/UDim.luau + types/UDim2.luau",
       "description": "LEIA ANTES DE ESCREVER CODIGO: .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md (desenho completo). Assinaturas reais confirmadas por pesquisa em .claude/agents-memory/pesquisa-datatypes-vector-cframe-2026-09-05.md e .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md -- NAO repita a pesquisa e NAO invente assinatura que nao esteja nesses arquivos. TERRITORIO: so src/valuetypes/ (e tools/generate-enums.luau, arquivo NOVO e exclusivo -- NAO tocar tools/generate-services.luau, que e do coder-services). NAO tocar src/runtime/, src/services/ nem src/cli/. Color3: 157 referencias no dump; e o tipo dos warnings reais que o testador observou no projeto Tiktok (Lighting.Ambient). Assinaturas de .claude/agents-memory/pesquisa-datatypes-color-udim-enum-2026-09-05.md. ATENCAO: a doc oficial traz math_operations vazio para Color3 -- Color3 NAO tem +, - nem *. O Descriptor passa Add/Sub/Mul/Div/Unm como nil e o erro que o Luau levanta sozinho ja e o certo; NAO inventar operador porque parece razoavel. UDim2 tem o overload .new(x: UDim, y: UDim) confirmado real, alem do de 4 numeros, mais fromScale/fromOffset; Width/Height sao sinonimos EXATOS de X/Y. Offset e int32 (Float32.QuantizeInt32), Scale e float32 -- ver a tabela da Decisao 3. P9 (unario - e == em UDim/UDim2) nao foi confirmado: a doc omite, mas omissao nao e prova (o mesmo YAML omite para Vector3, que comprovadamente os tem) -- implemente e MARQUE como nao confirmado.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 40,
@@ -1715,6 +1716,8 @@
       "acceptance": "types/Color3.luau + types/UDim.luau + types/UDim2.luau + specs. Specs cobrem construtores (incluindo fromRGB/fromHSV/fromHex e o overload UDim2(UDim,UDim)), propriedades, Lerp/ToHSV/ToHex, tostring, e um caso assertando que Color3 + Color3 ERRA. P9 documentada.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
+      "result": "Color3/UDim/UDim2 via Userdata.Define. Construtores/propriedades/metodos/operadores conforme pesquisa. Color3+Color3 erra (Add/Sub/Mul/Div/Unm ausentes do Descriptor). UDim2.new(UDim,UDim) overload real via intersecao de tipos de funcao. tostring fiel aos exemplos do YAML. P9 marcada como nao confirmada. 22/22 Color3.spec, 17/17 UDim.spec, 24/24 UDim2.spec.",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor reproduziu tudo com escopo restrito (copiou arquivos pro scratchpad pra nao afetar os outros 2 coders em paralelo): numeros exatos confirmados, Color3+Color3 erra de verdade, UDim2.new(UDim,UDim) identico byte a byte a forma de 4 numeros, tostring bate exato com YAML, Width/Height confirmados sinonimos de VALOR (rawequal false, == true), quantizacao float32/int32 confirmada com valores que estouram double. Dois achados MEDIO: (1) Catalog.luau nao atualizado pra Simulated=true (o coder do Enum, em paralelo, atualizou o proprio -- inconsistencia entre coders); (2) Color3.fromHex aceita '+'/'-' embutido e produz cor-lixo em vez de erro (tonumber(x,16)==nil insuficiente, precisa validar formato ^%x%x+$ antes) -- reproduzido: fromHex('-10000') nao erra, devolve R=72340177116200960 (wraparound). Um BAIXO: ToHex clampa HDR sem declarar. Nenhum GRAVE. Virou task-valuetypes-005-fix.",
       "depends": [
         "task-valuetypes-002"
       ]
@@ -2200,12 +2203,41 @@
       "agent": "coder-valuetypes",
       "reviewer": "revisor-valuetypes",
       "wave": 40,
-      "tags": ["value-types", "correcao-de-revisao", "bug"],
+      "tags": [
+        "value-types",
+        "correcao-de-revisao",
+        "bug"
+      ],
       "priority": "high",
       "acceptance": "SharedTable e Content passam a HasGlobalConstructor=true no Catalog.luau; Secret e RaycastResult continuam false (nao tocar); teste novo em Catalog.spec.luau confirmando os 4 valores (2 true, 2 false) e citando a fonte (doc oficial) no comentario; Catalog.UnsimulatedGlobalNames() continua sem intersectar SimulatedNames(); regressao total do territorio intacta; --!strict sem any.",
-      "depends": ["task-valuetypes-002"],
+      "depends": [
+        "task-valuetypes-002"
+      ],
       "result": "SharedTable e Content movidos pro bloco HasGlobalConstructor=true (12 nomes, era 10); Secret/RaycastResult continuam false (2, era 4). Cabecalho reescrito com paragrafo proprio por nome citando fonte oficial. Teste novo dedicado confirmando os 4 valores. 13/13 Catalog.spec (12+1), 33/33 Userdata, 10/10 Float32.",
       "reviewResult": "APROVADO. Revisor reproduziu tudo com escopo restrito (nao tocou nos outros 3 coders rodando em paralelo): 13/13+33/33+10/10 rodados por ele isoladamente, confirmou os 4 valores no codigo real, VERIFICOU VIA WEBFETCH DE VERDADE as 4 paginas oficiais da Roblox (SharedTable/Content/Secret/RaycastResult) confirmando cada citacao do cabecalho bate exatamente com a doc real, luau-lsp limpo so nos 2 arquivos da task, git diff --stat confirma so esses 2 tocados. Nenhum achado.",
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-valuetypes-005-fix",
+      "title": "Corrigir Color3.fromHex (validacao insuficiente) + consolidar Catalog.luau Simulated=true (Vector3/Vector2/Color3/UDim/UDim2)",
+      "description": "Dois achados reais das revisoes de task-valuetypes-004 e task-valuetypes-005, combinados numa so correcao porque tocam os mesmos arquivos (Catalog.luau e Color3.luau). (1) BUG REAL em Color3.fromHex (achado MEDIO do revisor-valuetypes, .claude/agents-memory/revisor-valuetypes-color-udim-udim2-2026-09-05.md): a validacao usa so tonumber(x,16)==nil, que NAO rejeita strings com sinal embutido -- Color3.fromHex('-10000') nao erra, devolve R=72340177116200960 (wraparound de tonumber('-1',16) sem sinal). Corrigir validando o FORMATO antes de converter (regex tipo ^%x%x%x%x%x%x$ ou ^%x%x%x$ pros 2 formatos aceitos, apos remover o # opcional), rejeitando qualquer caractere fora de [0-9a-fA-F] incluindo sinal. (2) CONSOLIDACAO: Catalog.luau e efetivamente um arquivo COMPARTILHADO entre as 3 tarefas paralelas desta wave (o proprio coder do Enum, task-valuetypes-003, avisou isso no relatorio) -- so a entrada 'Enum' foi virada Simulated=true; Vector3/Vector2/Color3/UDim/UDim2, todos totalmente implementados e aprovados (com ressalva), continuam Simulated=false. Virar as 5 entradas pra Simulated=true. NAO mexer nas entradas que ainda nao tem types/*.luau (CFrame e o resto).",
+      "column": "todo",
+      "agent": "coder-valuetypes",
+      "reviewer": "revisor-valuetypes",
+      "wave": 41,
+      "tags": [
+        "value-types",
+        "correcao-de-revisao",
+        "bug"
+      ],
+      "priority": "high",
+      "acceptance": "Color3.fromHex('-10000')/Color3.fromHex('+00ff00')/qualquer entrada com caractere fora de [0-9a-fA-F] erra citando a entrada invalida, nunca devolve valor-lixo; Color3.fromHex de entradas validas (3 e 6 digitos, com/sem #, case misto) continua funcionando identico a antes (regressao); Catalog.luau tem Vector3/Vector2/Color3/UDim/UDim2 com Simulated=true (Enum ja estava); teste de coerencia (ou ajuste do existente) confirmando que toda entrada com types/*.luau real no territorio tem Simulated=true; regressao total do territorio intacta (Float32/Userdata/Catalog/Enum/Vector3/Vector2/Color3/UDim/UDim2 specs); --!strict sem any.",
+      "depends": [
+        "task-valuetypes-003",
+        "task-valuetypes-004",
+        "task-valuetypes-005"
+      ],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }
