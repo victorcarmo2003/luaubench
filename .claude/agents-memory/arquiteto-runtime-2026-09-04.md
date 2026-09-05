@@ -1083,3 +1083,237 @@ Ainda assim, a recomendação fica registrada: **antes da leva 2 de `services` (
 ### Tarefa
 
 `task-runtime-023` — `coder-runtime`, território `src/runtime/ClassRegistry.luau` + `DataModel.luau` + `init.luau` + os 3 specs correspondentes. Lista completa de mudanças no `description` da tarefa em `.claude/tasks.json`.
+
+---
+
+## Revisão pós-integração 2026-09-05 (5) — `GetService` de classe desconhecida: o resolvedor injetado por `services`
+
+**Gatilho:** `task-runtime-029`. Achado incidental do `revisor-cli` em `task-cli-014` (mensagem interna em português vazando para o stderr do usuário) + pesquisa de confirmação que mostrou que o vazamento era o **sintoma**, não o defeito.
+
+**Fonte de verdade do comportamento:** `.claude/agents-memory/pesquisa-getservice-comportamento-2026-09-05.md` (`pesquisador`, disparado por este desenho). Os dois fatos load-bearing voltaram com **confiança alta**, de fonte primária:
+- string do caso (1), citada byte-a-byte de repro real no DevForum: `'Doge' is not a valid Service name` — aspas **simples** em volta do nome, `Service` com S maiúsculo, **sem** prefixo;
+- caso (2) devolve `nil`, citado da documentação oficial (`create.roblox.com`, atualizada em 2026-09-03): *"This function will return `nil` if the className parameter is an existing class, but the class is not a service."*
+- `GetService` **não** aceita alias nem nome legado — sempre o `ClassName` do dump (confiança alta). Nenhum caso adicional (security context, service client-only) encontrado.
+
+### Diagnóstico — três casos, um único `nil`
+
+`DataModel:GetService` decide o que fazer olhando **só** `ClassRegistry.Get(className)`. Esse registro contém, por construção, apenas as classes `Covered == true` (24 hoje). Quando `descriptor == nil`, `runtime` está diante de três realidades distintas e **não tem informação para separá-las**:
+
+| Caso | Exemplo | O que o Roblox real faz |
+|---|---|---|
+| (1) o nome não é classe nenhuma do Roblox | `"Frmae"` | **erra** — família Roblox, sem prefixo |
+| (2) classe real do dump, **sem** tag `Service` | `"Frame"`, `"Folder"`, `"Part"` | **devolve `nil`**, sem erro |
+| (3) classe real do dump, **com** tag `Service`, não coberta por esta leva | `"Teams"`, `"Chat"`, `"DataStoreService"` | funciona (lá não existe esse caso) |
+
+Hoje os três produzem a mesma linha em português (`GetService: classe 'X' não registrada em ClassRegistry`), pensada para quem programa o motor e não para quem escreve script — e um quarto caso, `"Folder"` **registrada** com `IsService == false`, produz outra linha em português (`está registrada mas não é um Service`) onde o Roblox devolveria `nil`.
+
+O dado que separa (1) de (2) de (3) — as 916 classes do dump e a tag `Service` de cada uma — existe, e existe **só em `services`** (`generated/Manifest.luau`, exposto por `Services.IsKnownClass`/`IsServiceClass`). A regra 02 é absoluta: `services` depende de `runtime`, **nunca** o contrário, e `runtime` nunca lê o API Dump. Logo o desenho tem que levar o dado até `runtime` sem criar a aresta proibida.
+
+**Nota de escopo que a descrição da tarefa não previa:** o caso (2) **não** está correto hoje, ao contrário do que a `acceptance` de `task-runtime-029` afirma ("comportamento já correto hoje, não regredir"). Para `"Folder"` (registrada, `IsService == false`) o código atual **erra em português**; para `"Frame"` (real, não registrada) erra a outra mensagem em português. Nenhum dos dois devolve `nil`. O caso (2) é, portanto, uma **correção**, não uma preservação — e ela muda o tipo de retorno de `GetService`. Ver "Consequência de tipo", abaixo.
+
+### Opções avaliadas
+
+**(a) registrar em `ClassRegistry` toda classe com tag `Service`, com `ClassDescriptor.IsSimulated`.** Rejeitada por dois motivos independentes, o primeiro fatal:
+
+1. **Não resolve o problema.** Registrar só as classes com tag `Service` deixa `"Frame"` (real, sem a tag, não coberta) exatamente onde está hoje: `descriptor == nil`, indistinguível de `"Frmae"`. O caso (2) continuaria impossível de acertar. Para funcionar, (a) teria que registrar **as 916**, e aí:
+2. **Inverte o significado de `IsRegistered` e quebra quatro pontos que dependem dele.** `Services.IsSimulatedClass` é literalmente `ClassRegistry.IsRegistered` (`src/services/init.luau:236`) — passaria a devolver `true` para tudo, matando o diagnóstico `materialize/service-not-simulated` de `cli` (`TreeMaterializer.luau:272`). `Services.new` entra pelo ramo `descriptor ~= nil` (`init.luau:361`) e chamaria `ClassRegistry.new("Frame")` em vez de emitir o `[LuauBench] ... not simulated yet` — **stub vazio silencioso**, proibido pela regra 03. `resolveClassChain`/`resolveClassMethods`/`resolveClassSchema` passariam a achatar cadeias por elos sem `Schema`, produzindo instância em modo leniente que aceita qualquer propriedade — a mesma mentira, um nível abaixo. E a guarda `IsAbstract` de `ClassRegistry.new` não segura nada disso (`Frame` é `IsAbstract == false`).
+
+   Salvar (a) exigiria uma guarda `IsSimulated` nova em `new`, em `NewEngineInstance` e em `resolveClassChain`, mais reescrever `Services.IsSimulatedClass` para não usar `IsRegistered`. É muito mais superfície mexida — em três funções que a revisão já bateu quatro vezes — do que o problema justifica.
+
+**(b) predicado/callback injetado por `services`.** Aceita, com refinamentos (abaixo). Custo total em `runtime`: **um módulo folha novo, sem dependências, e uma função reescrita**. `ClassRegistry` inteiro (`Register`/`Get`/`IsRegistered`/`new`/`NewEngineInstance`/os três `resolve*`/os dois caches/a guarda `IsAbstract`) fica **intocado** — risco de regressão perto de zero no código mais patchado do território.
+
+**(c) `services` instala o próprio `GetService` como método de classe do `DataModel`.** Considerada e rejeitada. Levaria a criação do singleton (`NewEngineInstance`) e a semântica de `ServiceProvider` inteira para `services`, deixando `DataModel.new()` produzir uma raiz sem `GetService` — `runtime` deixaria de ser utilizável sozinho, e `SetClassMethods` teria que virar superfície pública (hoje deliberadamente fora de `init.luau`). Inverte demais para resolver de menos.
+
+### Decisão — opção (b), com quatro refinamentos
+
+Os refinamentos importam tanto quanto a escolha; a versão literal de (b) na descrição da tarefa ("callback que formata a mensagem, injetado no `Bootstrap`") tem três problemas que o desenho abaixo corrige.
+
+**Refinamento 1 — o resolvedor devolve um veredito tipado, não uma mensagem.** A pergunta que `runtime` faz é de **classificação** ("o que é este nome?"); a decisão do que fazer com a resposta (errar, devolver `nil`) é semântica de `ServiceProvider`, que é de `runtime`. Um callback que devolvesse texto pronto entregaria a semântica junto — `services` passaria a decidir se `GetService` erra ou não.
+
+**Refinamento 2 — exceto a mensagem `[LuauBench]`, que vem no veredito.** É a única das três que **não tem contraparte no Roblox real**: ela existe porque o LuauBench é incompleto, e cita a versão do dump. É vocabulário de cobertura, domínio de `services`. Isso reproduz exatamente a regra de idioma já vigente no projeto (`ClassBuilder.luau:15`, `services/init.luau:52`): **`runtime` escreve as mensagens que o motor do Roblox escreveria; `services` escreve as que só existem porque falta cobertura.**
+
+**Refinamento 3 — instalado em `Services.Register()`, não em `Services.Bootstrap`.** `Bootstrap` é `Register()` + `Context.Set()`; quem chama só `Register()` (specs de `services`, e qualquer uso futuro sem scheduler) precisa do resolvedor igual. E `Register` já tem a guarda de idempotência (`registered`), então a instalação herda a idempotência de graça.
+
+**Refinamento 4 — o gate `IsService` vem antes da busca por filho, e vale também para `FindService`.** Ver "Reordenação", abaixo.
+
+### Mecanismo exato
+
+#### Módulo novo — `src/runtime/UnknownClassResolver.luau`
+
+Folha: depende de **nada** (nem de `Instance.luau`). Não é `ClassRegistry` de propósito — `ClassRegistry` responde "quais classes eu sei construir"; este responde "o que o território de cima sabe sobre um nome que eu não conheço". Misturar as duas dentro do mesmo módulo é o que reintroduz a confusão de `Get`/`IsRegistered` que derrubou a opção (a).
+
+```luau
+--!strict
+
+export type UnknownClassVerdict =
+	{ Kind: "NotAClass" }
+	| { Kind: "NotAService" }
+	| { Kind: "ServiceNotSimulated", Message: string }
+
+export type UnknownClassResolver = (className: string) -> UnknownClassVerdict
+
+-- Instalado uma vez por processo por `Services.Register()`. Sobrescreve silenciosamente numa
+-- segunda chamada, mesma invariante e mesma justificativa de `services/Context.luau:Set`.
+function UnknownClassResolver.Set(resolver: UnknownClassResolver): ()
+
+-- `nil` <=> nenhum resolvedor instalado. NUNCA levanta erro: quem decide o que fazer com a
+-- ausência é `DataModel`, que é quem tem o nível de erro certo para apontar o script do usuário.
+function UnknownClassResolver.Resolve(className: string): UnknownClassVerdict?
+```
+
+Contrato do resolvedor, obrigatório e documentado no módulo: **puro e total** — consulta de tabela, sem efeito colateral, sem `error()`, resposta para qualquer `className: string` (inclusive `""`). Um `error()` lá dentro sobe direto para o script do usuário como erro inesperado.
+
+Reexportado em `src/runtime/init.luau` **só** `Set` (mais os dois tipos). `Resolve` fica interno ao território — `services` não tem uso legítimo para ele, e `cli` nenhum. Mesmo precedente de `NewBase`/`SetClassChain`/`SetClassMethods`.
+
+#### `DataModel.GetService` reescrito
+
+```luau
+GetService = function(self: Instance, className: string): Instance?
+	local descriptor = ClassRegistryModule.Get(className)
+
+	if descriptor ~= nil then
+		-- Caso (2), ramo registrado: classe real do dump que não é Service -> nil, igual ao Roblox.
+		if not descriptor.IsService then
+			return nil
+		end
+		local existing = self:FindFirstChildOfClass(className)
+		if existing ~= nil then
+			return existing
+		end
+		local service = ClassRegistryModule.NewEngineInstance(className, nil)
+		service.Parent = self
+		return service
+	end
+
+	local verdict = UnknownClassResolverModule.Resolve(className)
+	if verdict == nil then
+		-- Erro de ENGENHARIA INTERNA, em português (regra de idioma): só alcançável se ninguém
+		-- chamou `Services.Register()`/`Bootstrap` antes -- e nesse estado NENHUMA classe está
+		-- registrada, então `GetService("Workspace")` também cairia aqui. Inalcançável por script
+		-- de usuário: `cli` sempre faz o Bootstrap antes de rodar qualquer script.
+		error(`GetService: nenhum resolvedor de classe desconhecida instalado -- Services.Register()/Services.Bootstrap() precisa ter rodado antes de qualquer GetService (não é possível classificar '{className}')`, 2)
+	end
+
+	if verdict.Kind == "NotAService" then
+		return nil                                    -- caso (2), ramo não registrado
+	end
+	if verdict.Kind == "ServiceNotSimulated" then
+		error(verdict.Message, 2)                     -- caso (3), família `[LuauBench]`
+	end
+	error(`'{className}' is not a valid Service name`, 2)   -- caso (1), família Roblox
+end
+```
+
+**Nível 2 em todos os `error`, sem exceção** — aponta para a linha do `game:GetService(...)` no script do usuário, que é a informação acionável, e é o que `cli` já sabe higienizar (`stripEngineErrorLocation`, `TreeMaterializer.luau`). Nenhuma das profundidades muda entre os ramos, então não há aqui o problema de nível variável que `task-runtime-023` teve em `resolveClassChain`.
+
+**Reordenação (refinamento 4):** `FindFirstChildOfClass` deixa de ser o primeiro passo e passa a rodar **só dentro do ramo `IsService == true`**. Motivo de fidelidade, não de estilo: hoje, um `Folder` criado pelo usuário direto sob `game` faz `game:GetService("Folder")` devolver **esse Folder**. No Roblox, `GetService` consulta a tabela de serviços do `ServiceProvider`, nunca os filhos por classe. Com o gate na frente, o sequestro deixa de existir e o caso (2) passa a devolver `nil` de forma consistente, com ou sem filho homônimo na raiz.
+
+#### `DataModel.FindService` — o mesmo gate
+
+Mesmo defeito, mesma linha de código, 20 linhas abaixo. Incluído **de propósito** na mesma tarefa: corrigir um e não o outro deixa as duas irmãs divergentes, e o revisor perguntaria de qualquer jeito.
+
+```luau
+FindService = function(self: Instance, className: string): Instance?
+	local descriptor = ClassRegistryModule.Get(className)
+	if descriptor == nil or not descriptor.IsService then
+		return nil
+	end
+	return self:FindFirstChildOfClass(className)
+end
+```
+
+`FindService` **não** consulta o resolvedor e **nunca** erra: no Roblox real ele já devolve `nil` tanto para "Service que ainda não foi criado" quanto para "não é Service", e um nome inválido é indistinguível desses dois pela própria assinatura. Não há `[LuauBench]` aqui — a lacuna de cobertura aparece no `GetService`, que é onde o usuário de fato pede o objeto. Verificado que os 6 chamadores existentes (todos em spec de `cli`/`services`) usam nome de Service real e coberto: o gate é no-op para todos.
+
+#### Consequência de tipo — `GetService` passa a devolver `Instance?`
+
+Inevitável e deliberada: o caso (2) devolve `nil` de verdade. A alternativa (declarar `-> Instance` e apagar o `nil` com cast, como a própria tipagem oficial do Roblox faz) é mentira para o verificador num projeto `--!strict` sem `any`. `FindService` já é `Instance?`; as duas ficam simétricas.
+
+Ripple medido, **duas linhas em `cli`**, nenhuma em `services`:
+- `RunCommand.luau:170` — `game:GetService(className)` com resultado descartado: **não muda**.
+- `RunCommand.luau:176` — `local workspaceInstance = game:GetService("Workspace")` alimenta `ScriptRunner.Options.Workspace: Runtime.Instance` (não-opcional): **precisa de estreitamento explícito**, nunca de `::`.
+- `TreeMaterializer.luau:283` — `return game:GetService(node.ClassName)` dentro de `createInstance(...): Runtime.Instance?`: **não muda**, o tipo de retorno já é opcional.
+
+#### Lado `services` — `src/services/init.luau`
+
+```luau
+-- Mesma frase de `Services.new`, caso 3 -- fatorada para que as duas famílias `[LuauBench]`
+-- (Instance.new e GetService) nunca divirjam por edição de uma só.
+local function unsimulatedClassMessage(className: string): string
+	return `[LuauBench] {className} exists in the Roblox API Dump ({Manifest.DumpVersion}) but is not simulated by LuauBench yet`
+end
+
+-- Puro e total (contrato de Runtime.UnknownClassResolver). `Covered` NÃO é consultado de
+-- propósito: `runtime` só chama isto quando a classe não está registrada, e "não registrada"
+-- já é a resposta operacional para "não simulada" -- consultar `Covered` aqui criaria um quinto
+-- caso silencioso para a (impossível em produção) divergência entre as duas listas.
+local function resolveUnknownClass(className: string): Runtime.UnknownClassVerdict
+	local entry = Manifest.Classes[className]
+	if entry == nil then
+		return { Kind = "NotAClass" }
+	end
+	if not entry.IsService then
+		return { Kind = "NotAService" }
+	end
+	return { Kind = "ServiceNotSimulated", Message = unsimulatedClassMessage(className) }
+end
+```
+
+Instalação dentro de `Services.Register()`, **logo depois de `registered = true` e antes do laço de registro** — se o laço estourar no meio, o resolvedor já está instalado e a mensagem seguinte é útil em vez de "resolvedor não instalado".
+
+`Services.new` (caso 3) passa a chamar `unsimulatedClassMessage(className)` em vez do literal inline. Nada mais em `services` muda: `Manifest`, `IsKnownClass`, `IsServiceClass`, `IsSimulatedClass`, `GetSimulatedServiceClasses`, `ClassBuilder` — todos intocados.
+
+### Contrato entre territórios
+
+| De | Para | Superfície exata | Quem chama primeiro |
+|---|---|---|---|
+| `services` | `runtime` | `Runtime.UnknownClassResolver.Set(resolver)` + os tipos `UnknownClassVerdict`/`UnknownClassResolver` | `services`, dentro de `Services.Register()` |
+| `runtime` | `services` | **nenhuma** — `runtime` chama de volta a função que recebeu, nunca `require` de `services` | `runtime`, dentro de `GetService`, só quando `ClassRegistry.Get == nil` |
+| `runtime` | `cli` | `GetService: (self, className: string) -> Instance?` (era `-> Instance`) | `cli`, depois do `Bootstrap` |
+
+A regra 02 fica intacta: nenhum `require` novo aponta de `runtime` para `services`; `runtime` guarda um ponteiro de função opaco e **um** tipo de veredito que não menciona API Dump, manifesto, cobertura nem `ClassName` do Roblox.
+
+### Fluxo de dados
+
+`Full-API-Dump.json` (fixado no commit `28360dea…`, Roblox `0.737.0.7371584`) → `tools/generate-services.luau` → `src/services/generated/Manifest.luau` (916 entradas, `IsService`/`Covered`) → `resolveUnknownClass` (fechamento sobre o manifesto) → `Runtime.UnknownClassResolver.Set` no `Register()` → `DataModel:GetService` chama o fechamento quando `ClassRegistry.Get` devolve `nil` → veredito → `nil`, erro da família Roblox, ou erro da família `[LuauBench]` → sobe pelo Sandbox → `OutputFormatter` → stderr.
+
+### Divisão por território
+
+| Território | O que constrói | Contrato com o vizinho |
+|---|---|---|
+| `runtime` | `UnknownClassResolver.luau` (novo), `GetService`/`FindService` reescritos, export em `init.luau`, specs | expõe `Set` + 2 tipos; consome um `UnknownClassResolver` opaco |
+| `services` | `unsimulatedClassMessage` + `resolveUnknownClass` + `Set` no `Register()`, specs | consome `Runtime.UnknownClassResolver.Set`; nada novo exposto para `cli` |
+| `cli` | estreitamento em `RunCommand.luau:176`; comentários agora obsoletos em `TreeMaterializer.luau` | consome `GetService: -> Instance?` |
+
+Série obrigatória: `runtime` → (`services` ‖ `cli`). Os dois últimos são paralelos entre si.
+
+### Fidelidade vs. pragmatismo
+
+- **Exato (ganho):** caso (1) erra com a família Roblox em inglês; caso (2) devolve `nil` sem erro; caso (3) é o único que não existe no Roblox e por isso é o único com prefixo `[LuauBench]`. Nenhuma mensagem em português alcança script de usuário por este caminho.
+- **Exato (ganho colateral):** `GetService`/`FindService` deixam de sequestrar filho homônimo de classe não-Service sob a raiz.
+- **Exato, com fonte:** a string do caso (1) e o `nil` do caso (2) vêm de fonte primária (repro no DevForum e documentação oficial), registradas em `pesquisa-getservice-comportamento-2026-09-05.md`. **Melhor** que o status da família `Unable to create an Instance of type "X"` de `services/init.luau`, que segue como aproximação de boa-fé não confirmada.
+- **Aproximado, declarado:** o `pesquisador` classificou como confiança **média** a persistência da string do caso (1) até a build exata do dump fixado (`0.737.0.7371584`) — é texto interno do motor, não faz parte do API Dump, logo não é verificável contra a fonte de verdade do projeto. Mitigação: a string vive num literal **único** em `DataModel.luau`, para que qualquer correção futura seja de uma linha.
+- **Aproximado, declarado:** `Folder`/`Frame` especificamente não foram testados; a generalização do `nil` vem da frase da documentação oficial, que cobre a classe da situação e não esses dois nomes.
+- **Não coberto, declarado:** o erro `singleton serviceName already exists` (Roblox real, quando um Service já existe pendurado em outro `Object`) não tem contraparte no LuauBench e continua sem simulação — inalcançável aqui, porque só `GetService` cria singleton e ele sempre parenteia sob a raiz.
+- **Fora de escopo, declarado:** `GetService` chamado com argumento não-string por script de usuário (o sandbox não apaga tipos em runtime). É lacuna geral de toda a superfície de métodos de `Instance`, não específica desta, e merece tarefa própria.
+
+### Riscos e decisões
+
+- **Estado global mutável novo em `runtime`.** Um ponteiro de função por processo, mesma invariante já documentada em `ClassRegistry` e em `services/Context` ("um processo por `luaubench run`, sem reset"). Se algum dia existir harness agregado ou watch mode que reinicie o `DataModel` sem reiniciar o processo, os três voltam ao arquiteto juntos — não separadamente.
+- **`runtime` executa código de `services` dentro de `GetService`.** Contido por contrato (puro, total, sem `error`) e por implementação (consulta de tabela). Não é aresta de dependência: `runtime` não sabe de onde a função veio.
+- **Dois specs de `runtime` invertem** (`DataModel.spec.luau:115` e `:130`) — são testes-gatilho, a inversão é o sinal de que a correção pegou. `:115` (registrada, `IsService == false`, hoje espera erro) passa a esperar `nil`; `:130` (nunca registrada, sem resolvedor instalado) passa a esperar a mensagem de engenharia nova. Cobertura nova obrigatória: um resolvedor falso instalado no spec exercitando os três vereditos + o sequestro por filho homônimo.
+- **`cli` continua pré-validando antes de `GetService`** (`TreeMaterializer.luau:272`). **Manter**: o diagnóstico de `cli` cita o `NodePath` do `.project.json`, informação que `GetService` não tem. Só os comentários que justificam a pré-validação pelo "erraria em português" ficam obsoletos e precisam ser corrigidos — o comportamento, não.
+- **Script travado / `while true do end`:** inalterado por esta mudança.
+
+### O que deliberadamente NÃO fazer agora
+
+- **Não** registrar as 916 classes em `ClassRegistry` (opção (a)) — inverte `IsRegistered` e abre stub silencioso.
+- **Não** dar a `runtime` a versão do dump, nem qualquer campo do manifesto, nem o texto "API Dump" — a mensagem que precisa disso chega pronta no veredito.
+- **Não** transformar `ClassRegistry.Get` em resolvedor de três estados — são duas perguntas diferentes e a fusão é exatamente o defeito que a opção (a) tem.
+- **Não** fazer o resolvedor devolver as três mensagens prontas — entregaria a `services` a decisão de errar ou não.
+- **Não** mexer em `Services.new`, `Manifest`, `ClassBuilder` nem no gerador.
+- **Não** aproveitar a tarefa para renomear `IsAbstract -> IsNotCreatable` (pendência da revisão (4), continua adiada para a passada única de revisão do `ClassDescriptor`).
+- **Não** validar tipo de argumento em runtime (`className` não-string) — tarefa própria, superfície inteira.
+
+### Tarefas
+
+`task-runtime-030` (`coder-runtime`) → `task-services-011` (`coder-services`) ‖ `task-cli-017` (`coder-cli`). Descrição completa de cada uma no `description` em `.claude/tasks.json`. A pesquisa que essas três dependiam já foi feita e está fechada em `.claude/agents-memory/pesquisa-getservice-comportamento-2026-09-05.md` — **nenhuma tarefa de pesquisa fica pendente**.
