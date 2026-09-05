@@ -1,0 +1,16 @@
+{
+  "name": "TreeMaterializerProperties",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "BadProps": {
+        "$className": "Folder",
+        "$properties": {
+          "archivable": false,
+          "Gravty": 10,
+          "className": "Hacked"
+        }
+      }
+    }
+  }
+}

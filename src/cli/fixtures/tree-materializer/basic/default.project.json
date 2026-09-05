@@ -1,0 +1,12 @@
+{
+  "name": "TreeMaterializerBasic",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Modules": { "$path": "shared/Modules" }
+    },
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

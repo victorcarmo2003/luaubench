@@ -295,4 +295,55 @@ function Messages.PlanIoError(nodePath: string, path: string, ioError: string): 
 	return `Could not read "{path}" (for "{nodePath}"): {ioError}`
 end
 
+--------------------------------------------------------------------------------------------------
+-- TreeMaterializer (InstancePlan -> DataModel real) -- task-cli-004, arquiteto-cli-2026-09-05.md,
+-- Decisões 4, 5 e 7.
+--------------------------------------------------------------------------------------------------
+
+-- Decisão 14 do desenho: "luaubench run" executa place projects; um projeto cuja raiz resolve
+-- para outra classe (ex.: "Model", "Package") não tem `game`. Mensagem própria, não o erro
+-- genérico de classe -- é um caso comum (projeto de biblioteca/pacote) e merece explicação.
+function Messages.MaterializeRootNotDataModel(rootClassName: string): string
+	return `The project's root resolves to "{rootClassName}", not "DataModel" -- "luaubench run" executes place projects, and a project whose root is a model or package has no "game".`
+end
+
+-- Defesa em profundidade (Decisão 4): o Rojo real permite um Service raiz com Name diferente da
+-- classe; o LuauBench não, porque DataModel:GetService é dono da nomeação do singleton.
+-- TreePlanner (plan/service-name-mismatch) já barra isto no caminho normal -- este diagnóstico
+-- só é alcançável se alguém montar um InstancePlan à mão (fora de TreePlanner.Plan) com um nó
+-- IsServiceRoot cujo Name diverge do ClassName, ex.: teste unitário de TreeMaterializer sozinho.
+function Messages.MaterializeServiceNameMismatch(nodePath: string, name: string, className: string): string
+	return `"{nodePath}" is marked as the service "{className}", but is named "{name}" -- LuauBench requires a service directly under the DataModel to be named exactly like its class (DataModel:GetService owns the singleton's name).`
+end
+
+-- Mesma disciplina de defesa em profundidade acima: só alcançável por um InstancePlan montado à
+-- mão com IsServiceRoot = true numa classe que o Roblox API Dump não marca como Service --
+-- TreePlanner só marca IsServiceRoot depois de confirmar Services.IsServiceClass.
+function Messages.MaterializeNotAService(nodePath: string, className: string): string
+	return `"{nodePath}" is marked as a service root, but "{className}" is not tagged as a Service in the Roblox API Dump -- this is a LuauBench-internal inconsistency, not a project error.`
+end
+
+-- Uma classe Service real (tag "Service" do dump, ex.: "Teams", "Chat") que este BUILD do
+-- LuauBench ainda não simula (fora da leva de cobertura atual de `services`) -- família
+-- "[LuauBench] ... not simulated yet" (mesma família de Services.new, regra de idioma:
+-- SEM contraparte real, é o LuauBench que está incompleto, nunca o Roblox).
+function Messages.MaterializeServiceNotSimulated(nodePath: string, className: string, dumpVersion: string): string
+	return `[LuauBench] "{nodePath}" resolves to the service "{className}", which exists in the Roblox API Dump ({dumpVersion}) but is not simulated by LuauBench yet.`
+end
+
+-- `Services.new` já erra com uma mensagem de boa qualidade (família Roblox real, ou
+-- "[LuauBench] ... not simulated yet" quando aplicável) -- este wrapper só garante que o
+-- diagnóstico final cita o nó do projeto de onde veio o "$className" problemático, e nunca deixa
+-- o erro cru derrubar o comando inteiro (regra 04).
+function Messages.MaterializeInvalidClass(nodePath: string, className: string, engineError: string): string
+	return `Could not create "{nodePath}" as "{className}": {engineError}`
+end
+
+-- Decisão 7: `$properties` grava pela via pública (o `__newindex` real do runtime), então um nome
+-- inválido ou uma propriedade somente-leitura chega aqui como o ERRO DO MOTOR (pcall), não como
+-- um diagnóstico inventado por `cli` -- este wrapper só garante a citação do nó/propriedade.
+function Messages.MaterializePropertyAssignmentFailed(nodePath: string, propertyName: string, engineError: string): string
+	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {engineError}`
+end
+
 return Messages
