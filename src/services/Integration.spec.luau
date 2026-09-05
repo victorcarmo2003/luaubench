@@ -156,9 +156,12 @@ test(
 -- 1b. game:GetService(...) funciona para as Services desta leva (task-runtime-023 destravou
 --     Runtime.ClassRegistry.NewEngineInstance -- ver o cabeçalho do arquivo). Cobre as 8 Services
 --     listadas na retomada de task-services-003 mais Workspace (mesmo mecanismo, Service +
---     NotCreatable como as outras). Players/RunService são deliberadamente EXCLUÍDAS aqui --
---     estão registradas nesta leva (task-services-002) mas o COMPORTAMENTO delas (e a decisão de
---     testar GetService para elas) é escopo de task-services-004, não desta retomada.
+--     NotCreatable como as outras). `Players`/`RunService` ENTRAM AQUI a partir de
+--     task-services-004 -- estavam deliberadamente EXCLUÍDAS enquanto o COMPORTAMENTO delas não
+--     existia (task-services-002 só as registrava). Este loop cobre só a superfície GENÉRICA de
+--     Service (ClassName/Parent/singleton) -- a superfície ESPECÍFICA de cada uma
+--     (rawequal(Heartbeat, scheduler.Heartbeat), RenderStepped errando, GetPlayers() vazio etc.)
+--     tem spec dedicado em `behavior/RunService.spec.luau`/`behavior/Players.spec.luau`.
 --------------------------------------------------------------------------------------------------
 
 local SERVICES_THIS_LEVA: { string } = {
@@ -171,6 +174,8 @@ local SERVICES_THIS_LEVA: { string } = {
 	"StarterPlayer",
 	"Lighting",
 	"Workspace",
+	"Players",
+	"RunService",
 }
 
 test(

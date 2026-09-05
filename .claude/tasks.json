@@ -611,7 +611,7 @@
       "id": "task-services-004",
       "title": "RunService e Players: as duas classes com comportamento real da primeira leva",
       "description": "As duas classes mais usadas do recon do testador depois de ReplicatedStorage — RunService (196 usos) e Players (154) — LER .claude/agents-memory/arquiteto-services-2026-09-05.md, seções 'Decisão 5' e 'Fidelidade vs. pragmatismo'. Território: src/services/behavior/RunService.luau, src/services/behavior/Players.luau, src/services/behavior/Index.luau e specs. (1) RunService: Heartbeat e Stepped são ligados ao Signal REAL do Scheduler (a MESMA instância, sem proxy nem reemissão — evita qualquer dessincronia), instalados no Initialize via Runtime.Instance.SetPropertyRaw sobre a entrada do schema, alcançando o scheduler por Context.GetScheduler(). RenderStepped: DECISÃO REVISADA EM 2026-09-05 (ler a seção \"Revisão pós-pesquisa 2026-09-05 — Capabilities e RenderStepped\", parte B, do desenho ANTES de implementar) — conectar em RunService.RenderStepped ERRA. O antigo \"existe e nunca dispara\" reproduzia um BUG reconhecido do Studio, não o Roblox real: num servidor de produção (RCC) conectar erra, e o LuauBench já se declara IsStudio() == false e IsServer() == true. Mecanismo: src/services/RejectingSignal.luau (MÓDULO NOVO desta tarefa, extensão do LuauBench em módulo próprio, nunca dentro do namespace de uma classe real e nunca em runtime/ ou generated/) — RejectingSignal.new(message: string): Runtime.Signal<...unknown> devolve um objeto estruturalmente compatível com Signal cujo Connect/Once/Wait erram com `message` em nível 2 (culpa o call site do usuário, convenção de Instance.luau) e cujo DisconnectAll é no-op. Não inventar ConnectParallel (não existe no Signal do runtime). behavior/RunService.luau instala no Initialize por SetPropertyRaw sobre a entrada do schema — a ordem funciona porque ClassRegistry.new semeia o Signal do evento ANTES do Initialize. LER a propriedade NÃO erra (devolve o objeto); só Connect/Once/Wait erram. Mensagem, pela regra de idioma dos erros (tem contraparte real -> família Roblox, inglês, SEM prefixo [LuauBench]): \"RenderStepped event can only be used from local scripts\", comentada no código como aproximação de boa-fé (texto coletado de bug trackers de 2014-2024, não verificado ao vivo em 2026). NÃO estender esse tratamento a PreRender, que continua existindo e NUNCA disparando — não há evidência de que erre, e errar sem confirmação é falhar por comissão. BindToRenderStep/UnbindFromRenderStep continuam com o stub [LuauBench] do ClassBuilder. Aliasar RenderStepped para Heartbeat continua REJEITADO (fabricaria frames de render inexistentes). Isto NÃO abre escopo de contexto client/server: o LuauBench é servidor fixo, então o erro é uma constante deste build, não uma consulta a um subsistema — quando existir um --client, é a `message` que vira condicional, num ponto só. IsServer() -> true, IsClient() -> false, IsStudio() -> false, IsRunning() -> true: o LuauBench se apresenta como SERVIDOR RODANDO, escolha deliberada porque o uso medido é dominado por lógica de servidor (ProfileStore, DataStore); um flag --client é tarefa futura, nunca implícito aqui. Os demais métodos do dump (BindToRenderStep, Pause, Run, Set3dRenderingEnabled, ...) ficam com o stub-que-erra do ClassBuilder. (2) Players: comportamento MÍNIMO e honesto — GetPlayers() devolve {}, LocalPlayer é nil, GetPlayerByUserId/GetPlayerFromCharacter devolvem nil, PlayerAdded/PlayerRemoving existem e NUNCA disparam. Isto NÃO é stub: é o resultado correto de um mundo sem jogadores, e é por isso que esses métodos são implementados de verdade em vez de errarem. A classe Player NÃO entra nesta leva. Documentar a divergência com clareza (um jogo real espera PlayerAdded; aqui ele nunca vem). (3) services dispara evento de classe via Runtime.Instance.GetPropertyRaw(instance, 'NomeDoEvento') estreitado para Runtime.FireableSignal<...> — o tipo é reexportado por task-runtime-022 exatamente para isso; nunca redeclarar o tipo à mão. (4) Testes: Heartbeat conectado num RunService obtido por GetService dispara quando o Scheduler dá StepOnce (prova de que é o MESMO Signal); RenderStepped conectado nunca dispara sob N StepOnce; IsServer/IsClient batem; Players.GetPlayers() devolve tabela vazia e PlayerAdded é conectável sem erro; escrever sobre Heartbeat ERRA com a mensagem de evento. NOTAS ADICIONAIS DA REVISÃO 2026-09-05: (a) Território desta tarefa passa a incluir src/services/RejectingSignal.luau e seu spec. (b) RunService.FrameNumber e RunService.Misprediction NÃO estão mais no schema (excluídos pelo eixo Capabilities: InternalTest e PluginOrOpenCloud respectivamente) — lê-los erra como membro inexistente; isso é esperado, não regressão. (c) O gerador passou a filtrar MethodNames por Security/Capabilities, então RunService emite 11 dos 28 métodos do dump: Pause, Run, Stop, Reset, IsEdit e os RobloxScriptSecurity NÃO existem mais para o script do usuário, e chamá-los erra como membro inexistente em vez da mensagem [LuauBench]. Players emite 24 de 36 pelo mesmo motivo.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 13,
@@ -630,7 +630,9 @@
       ],
       "note": "Sequencial com as demais tarefas de coder-services. Depois desta, o cenário tests/scenarios/scheduler-multi-script-concurrency deveria poder usar RunService de verdade — vale disparar o testador em paralelo com o revisor.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "RunService/Players/RejectingSignal implementados. Heartbeat/Stepped rawequal ao Scheduler real via SetPropertyRaw. RenderStepped via RejectingSignal (Connect/Once/Wait erram, leitura nao erra). PreRender intocado, nunca dispara. IsServer/IsClient/IsStudio/IsRunning corretos. Players minimo e honesto (GetPlayers vazio, PlayerAdded conectavel mas nunca dispara). FrameNumber/Misprediction fora do schema confirmado. Pause confirmado como membro inexistente. 143 runtime + 64 services testes.",
+      "reviewResult": "APROVADO. Revisor confirmou os 13 pontos rodando de verdade: Heartbeat/Stepped rawequal ao Scheduler real, RenderStepped com os 3 verbos testados separadamente, PreRender testado ativamente nunca disparando sob 10x StepOnce, IsServer/IsClient/IsStudio corretos, Players honesto, FrameNumber/Misprediction/Pause distinguidos corretamente. 143 runtime + 64 services. Observacao nao-bloqueante: task-services-007 recomendou (como inferencia, nao confirmacao) estender RejectingSignal a PreRender tambem, e deferiu a decisao para agora -- arquiteto nunca fechou isso formalmente. Coder corretamente nao decidiu sozinho."
     },
     {
       "id": "task-services-005",
@@ -717,6 +719,25 @@
       "depends": [
         "task-runtime-023"
       ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-services-008",
+      "title": "Fechar decisao pendente: PreRender deve usar RejectingSignal como RenderStepped?",
+      "description": "Observacao nao-bloqueante do revisor-services na revisao de task-services-004. task-services-007 (pesquisa) recomendou, por analogia estrutural e marcado explicitamente como inferencia nao confirmada empiricamente, tratar RunService.PreRender igual a RenderStepped (RejectingSignal, erro ao conectar) -- e deferiu essa decisao formal para quando task-services-004 fosse revisado. O coder de task-services-004 corretamente manteve PreRender intocado (conectavel, nunca dispara) em vez de decidir sozinho uma mudanca de fidelidade sem confirmacao empirica (regra 00/02). Decisao fica pendente com o arquiteto: fechar como esta (PreRender conectavel e nunca dispara, documentado como fidelidade menor sem evidencia de erro) ou estender RejectingSignal a ele tambem por analogia. Nao bloqueia nada em andamento.",
+      "column": "todo",
+      "agent": "arquiteto",
+      "reviewer": "revisor-services",
+      "wave": 14,
+      "tags": [
+        "services",
+        "fidelidade",
+        "decisao-pendente"
+      ],
+      "priority": "low",
+      "acceptance": "Decisao documentada explicitamente na secao de fidelidade do desenho de services, com justificativa; se decidir estender RejectingSignal a PreRender, vira tarefa nova para coder-services; se decidir manter como esta, o comentario de PreRender em behavior/RunService.luau e atualizado para deixar de citar a pendencia como aberta.",
+      "depends": [],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }
