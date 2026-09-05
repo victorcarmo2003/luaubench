@@ -331,6 +331,23 @@ function Messages.MaterializeServiceNotSimulated(nodePath: string, className: st
 	return `[LuauBench] "{nodePath}" resolves to the service "{className}", which exists in the Roblox API Dump ({dumpVersion}) but is not simulated by LuauBench yet.`
 end
 
+-- Defesa em profundidade (task-cli-016, arquiteto-cli-2026-09-05.md, seção "task-cli-015" -- filho
+-- fixo do motor): `services` (`EngineFixedChildren.luau`) declara que um pai de classe
+-- `parentClassName` pré-cria um filho `className` dentro de si, mas a instância não existe de fato
+-- ao materializar -- o `Initialize` de `behavior/<Pai>.luau` não criou o que `EngineFixedChildren`
+-- afirma. Inconsistência INTERNA de `services` entre seus dois próprios módulos, nunca um erro do
+-- `.project.json` do usuário -- mesma categoria de `MaterializeNotAService`, acima.
+function Messages.MaterializeFixedChildMissing(nodePath: string, className: string, parentClassName: string): string
+	return `"{nodePath}" should adopt the "{className}" that the engine pre-creates inside "{parentClassName}", but no such child was found -- this is a LuauBench-internal inconsistency, not a project error.`
+end
+
+-- Mesma disciplina do diagnóstico acima: a instância pré-criada pelo motor existe, mas com um
+-- ClassName diferente do que `EngineFixedChildren` declarou -- também uma inconsistência interna
+-- entre `EngineFixedChildren.luau` e o `behavior/**` correspondente, nunca um erro de projeto.
+function Messages.MaterializeFixedChildClassMismatch(nodePath: string, expectedClassName: string, actualClassName: string): string
+	return `"{nodePath}" should adopt an engine-created "{expectedClassName}" inside its parent, but found a "{actualClassName}" instead -- this is a LuauBench-internal inconsistency, not a project error.`
+end
+
 -- `Services.new` já erra com uma mensagem de bom CONTEÚDO (família Roblox real, ou
 -- "[LuauBench] ... not simulated yet" quando aplicável) -- este wrapper só garante que o
 -- diagnóstico final cita o nó do projeto de onde veio o "$className" problemático, e nunca deixa

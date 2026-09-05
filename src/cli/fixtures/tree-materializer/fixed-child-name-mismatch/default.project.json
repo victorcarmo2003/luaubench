@@ -1,0 +1,9 @@
+{
+  "name": "TreeMaterializerFixedChildNameMismatch",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "MyScripts": { "$className": "StarterPlayerScripts" }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "TreeMaterializerFixedChildren",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "$path": "player-scripts",
+        "$properties": {
+          "archivable": false
+        }
+      },
+      "StarterCharacterScripts": {
+        "$path": "character-scripts"
+      }
+    }
+  }
+}

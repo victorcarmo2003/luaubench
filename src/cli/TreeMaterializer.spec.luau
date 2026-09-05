@@ -619,5 +619,333 @@ test("Materialize: erro de \"$className\" inválido não vaza caminho absoluto d
 	assert(string.find(diagnostic.Message, "Frmae", 1, true) ~= nil, "mensagem deveria citar a classe inválida 'Frmae'")
 end)
 
+--------------------------------------------------------------------------------------------------
+-- task-cli-016: terceiro ramo de createInstance ADOTA filho fixo do motor (StarterPlayerScripts/
+-- StarterCharacterScripts dentro de StarterPlayer), nunca cria -- arquiteto-cli-2026-09-05.md,
+-- seção "task-cli-015". Fixture 'fixed-children' tem um LocalScript real dentro de cada um dos
+-- dois filhos fixos, mais $properties no nó StarterPlayerScripts, pra provar o caminho ponta a
+-- ponta (é o repro direto do bug de duplicação de StarterPlayerScripts que motivou "adotar, não
+-- criar").
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: fixture 'fixed-children' ADOTA StarterPlayerScripts/StarterCharacterScripts (rawequal com o filho pré-criado pelo motor, EXATAMENTE uma instância de cada, $properties aplicado)", function()
+	local plan, planBag = planFixture("fixed-children")
+	assert(plan ~= nil, `fixture 'fixed-children' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	local tree = TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(not bag:HasErrors(), `materialização de 'fixed-children' não deveria produzir erro (bag: {#bag:All()} diagnostic(s))`)
+
+	local starterPlayer = game:FindService("StarterPlayer")
+	assert(starterPlayer ~= nil, "game deveria ter um StarterPlayer depois de Materialize")
+	if starterPlayer == nil then
+		return
+	end
+
+	-- Repro direto do bug de duplicação que motivou "adotar, não criar": EXATAMENTE UMA instância
+	-- chamada StarterPlayerScripts (e uma StarterCharacterScripts) dentro de StarterPlayer -- não
+	-- duas (a pré-criada pelo motor + uma segunda criada por engano).
+	local starterPlayerScriptsCount = 0
+	local starterCharacterScriptsCount = 0
+	for _, child in starterPlayer:GetChildren() do
+		if child.Name == "StarterPlayerScripts" then
+			starterPlayerScriptsCount += 1
+		elseif child.Name == "StarterCharacterScripts" then
+			starterCharacterScriptsCount += 1
+		end
+	end
+	assert(starterPlayerScriptsCount == 1, `esperava EXATAMENTE 1 filho chamado StarterPlayerScripts dentro de StarterPlayer, achou {starterPlayerScriptsCount}`)
+	assert(starterCharacterScriptsCount == 1, `esperava EXATAMENTE 1 filho chamado StarterCharacterScripts dentro de StarterPlayer, achou {starterCharacterScriptsCount}`)
+
+	local starterPlayerScripts = starterPlayer:FindFirstChild("StarterPlayerScripts")
+	local starterCharacterScripts = starterPlayer:FindFirstChild("StarterCharacterScripts")
+	assert(starterPlayerScripts ~= nil, "StarterPlayer deveria ter StarterPlayerScripts")
+	assert(starterCharacterScripts ~= nil, "StarterPlayer deveria ter StarterCharacterScripts")
+	if starterPlayerScripts == nil or starterCharacterScripts == nil then
+		return
+	end
+
+	-- Prova que ADOTOU, não criou: o MESMO objeto que game:GetService('StarterPlayer'):FindFirstChild(...) devolve (rawequal, não só ==).
+	assert(rawequal(starterPlayerScripts, game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")), "StarterPlayerScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
+	assert(rawequal(starterCharacterScripts, game:GetService("StarterPlayer"):FindFirstChild("StarterCharacterScripts")), "StarterCharacterScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
+
+	assert(starterPlayerScripts.ClassName == "StarterPlayerScripts", "StarterPlayerScripts adotado deveria manter seu ClassName real")
+	assert(starterCharacterScripts.ClassName == "StarterCharacterScripts", "StarterCharacterScripts adotado deveria manter seu ClassName real")
+
+	-- $properties aplicado NA INSTÂNCIA DO MOTOR (Decisão 7 -- via pública, __newindex real, não SetPropertyRaw).
+	local starterPlayerScriptsDot = (starterPlayerScripts :: unknown) :: { [string]: unknown }
+	assert(starterPlayerScriptsDot["archivable"] == false, "'archivable' deveria ter sido aplicado como false via $properties na instância ADOTADA (do motor)")
+
+	-- Camera.client.luau / Equip.client.luau materializados de verdade DENTRO dos filhos adotados.
+	local camera = starterPlayerScripts:FindFirstChild("Camera")
+	assert(camera ~= nil, "StarterPlayerScripts (adotado) deveria ter um filho 'Camera'")
+	if camera ~= nil then
+		assert(camera.ClassName == "LocalScript", "'Camera.client.luau' deveria materializar como LocalScript")
+	end
+
+	local equip = starterCharacterScripts:FindFirstChild("Equip")
+	assert(equip ~= nil, "StarterCharacterScripts (adotado) deveria ter um filho 'Equip'")
+	if equip ~= nil then
+		assert(equip.ClassName == "LocalScript", "'Equip.client.luau' deveria materializar como LocalScript")
+	end
+
+	assert(#tree.Scripts == 2, `esperava exatamente 2 scripts materializados (Camera + Equip), achou {#tree.Scripts}`)
+end)
+
+test("Materialize: adoção de filho fixo do motor NÃO dispara ChildAdded/ChildRemoved/AncestryChanged espúrios (task-cli-016)", function()
+	local plan, planBag = planFixture("fixed-children")
+	assert(plan ~= nil, `fixture 'fixed-children' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+
+	-- Cria o singleton StarterPlayer (e os dois filhos fixos, via behavior/StarterPlayer.Initialize)
+	-- ANTES de conectar os eventos -- só nos interessa o que acontece durante a ADOÇÃO em
+	-- Materialize, nunca a criação inicial do motor no bootstrap.
+	local starterPlayer = game:GetService("StarterPlayer")
+	local starterPlayerScripts = starterPlayer:FindFirstChild("StarterPlayerScripts")
+	local starterCharacterScripts = starterPlayer:FindFirstChild("StarterCharacterScripts")
+	assert(starterPlayerScripts ~= nil and starterCharacterScripts ~= nil, "sanity check: StarterPlayer deveria já ter os dois filhos fixos pré-criados pelo motor")
+	if starterPlayerScripts == nil or starterCharacterScripts == nil then
+		return
+	end
+
+	local events: { string } = {}
+	local childAddedConn = starterPlayer.ChildAdded:Connect(function(child: Runtime.Instance)
+		table.insert(events, `ChildAdded({child.Name})`)
+	end)
+	local childRemovedConn = starterPlayer.ChildRemoved:Connect(function(child: Runtime.Instance)
+		table.insert(events, `ChildRemoved({child.Name})`)
+	end)
+	local playerScriptsAncestryConn = starterPlayerScripts.AncestryChanged:Connect(function(instance: Runtime.Instance)
+		table.insert(events, `AncestryChanged({instance.Name})`)
+	end)
+	local characterScriptsAncestryConn = starterCharacterScripts.AncestryChanged:Connect(function(instance: Runtime.Instance)
+		table.insert(events, `AncestryChanged({instance.Name})`)
+	end)
+
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	childAddedConn:Disconnect()
+	childRemovedConn:Disconnect()
+	playerScriptsAncestryConn:Disconnect()
+	characterScriptsAncestryConn:Disconnect()
+
+	assert(not bag:HasErrors(), `materialização não deveria produzir erro (bag: {#bag:All()} diagnostic(s))`)
+	assert(#events == 0, `nenhum evento deveria disparar na adoção do filho fixo (ChildAdded/ChildRemoved em StarterPlayer, AncestryChanged nos filhos adotados), achou: {table.concat(events, ", ")}`)
+end)
+
+--------------------------------------------------------------------------------------------------
+-- Nó com Name divergente do trio exigido ("MyScripts" com $className "StarterPlayerScripts" sob
+-- StarterPlayer) NÃO é adotado -- Services.IsEngineFixedChild exige Name E ClassName batendo, então
+-- cai no ramo normal (Services.new) e erra a família Roblox real, igual ao Roblox faria.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: \"$className\" explícito com Name divergente ('MyScripts') sob StarterPlayer NÃO é adotado -- erra via Services.new normal, família Roblox real", function()
+	local plan, planBag = planFixture("fixed-child-name-mismatch")
+	assert(plan ~= nil, `fixture 'fixed-child-name-mismatch' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(bag:HasErrors(), "'MyScripts' com $className 'StarterPlayerScripts' deveria falhar -- Name não bate o filho fixo declarado")
+	local diagnostic = findByCode(bag, "materialize/invalid-class")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/invalid-class' (ramo normal Services.new, não o de adoção)")
+	if diagnostic ~= nil then
+		assert(string.find(diagnostic.Message, "Unable to create an Instance of type", 1, true) ~= nil, "mensagem deveria ser a família Roblox real 'Unable to create an Instance of type ...'")
+		assert(string.find(diagnostic.Message, "StarterPlayerScripts", 1, true) ~= nil, "mensagem deveria citar a classe 'StarterPlayerScripts'")
+	end
+
+	assert(findByCode(bag, "materialize/fixed-child-missing") == nil, "NÃO deveria ter passado pelo ramo de adoção -- Name diverge do trio exigido")
+	assert(findByCode(bag, "materialize/fixed-child-class-mismatch") == nil, "NÃO deveria ter passado pelo ramo de adoção -- Name diverge do trio exigido")
+
+	local starterPlayer = game:FindService("StarterPlayer")
+	assert(starterPlayer ~= nil, "StarterPlayer (Service real, sem relação com o filho inválido) deveria continuar existindo")
+	if starterPlayer ~= nil then
+		assert(starterPlayer:FindFirstChild("MyScripts") == nil, "'MyScripts' nunca deveria ter sido criado")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- Regressão: Workspace.Terrain (Covered=false, services NÃO pré-cria) continua errando com a
+-- família "[LuauBench] ... not simulated yet" -- NÃO é tratado como filho fixo do motor
+-- (EngineFixedChildren só declara StarterPlayer -- Workspace nunca é chave dessa tabela, ver
+-- arquiteto-cli-2026-09-05.md, "Onde vive a lista fechada, e por que não é a mesma de SyncRules").
+-- Reusa a fixture 'fixed-children' JÁ EXISTENTE de TreePlanner (task-cli-014,
+-- src/cli/fixtures/tree-planner/fixed-children/, que já tem Workspace/Terrain) -- não duplica
+-- fixture só para isto.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: Workspace.Terrain continua errando com '[LuauBench] ... not simulated yet' (não regride, não passa a mentir que foi adotado)", function()
+	local treePlannerFixturesRoot = process.cwd .. "src/cli/fixtures/tree-planner"
+	local planBag = Diagnostics.newBag()
+	local project = ProjectFile.Read(treePlannerFixturesRoot .. "/fixed-children/default.project.json", planBag)
+	assert(project ~= nil, `fixture 'tree-planner/fixed-children' deveria ler (bag: {#planBag:All()} diagnostic(s))`)
+	if project == nil then
+		return
+	end
+	local plan = TreePlanner.Plan(project, REAL_PLAN_OPTIONS, planBag)
+	assert(plan ~= nil, "fixture 'tree-planner/fixed-children' deveria planejar sem erro")
+	assert(not planBag:HasErrors(), `TreePlanner não deveria produzir erro pra esta fixture (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	-- StarterPlayer continua sendo adotado sem erro -- a mesma fixture cobre os dois casos ao
+	-- mesmo tempo, provando que os dois ramos (adoção e "not simulated yet") coexistem sem
+	-- interferência.
+	assert(findByCode(bag, "materialize/fixed-child-missing") == nil, "StarterPlayer não deveria ter erro de filho fixo faltando")
+	assert(findByCode(bag, "materialize/fixed-child-class-mismatch") == nil, "StarterPlayer não deveria ter erro de classe divergente")
+
+	local terrainDiagnostic = findByCode(bag, "materialize/invalid-class")
+	assert(terrainDiagnostic ~= nil, "Workspace.Terrain deveria produzir 'materialize/invalid-class' (services não pré-cria Terrain, Covered=false)")
+	if terrainDiagnostic ~= nil then
+		assert(string.find(terrainDiagnostic.Message, "[LuauBench]", 1, true) ~= nil, "mensagem deveria ter o prefixo [LuauBench] (LuauBench incompleto, não o Roblox)")
+		assert(string.find(terrainDiagnostic.Message, "not simulated", 1, true) ~= nil, "mensagem deveria seguir a família 'not simulated yet'")
+	end
+
+	local workspaceService = game:FindService("Workspace")
+	assert(workspaceService ~= nil, "Workspace deveria continuar existindo mesmo com Terrain falhando")
+	if workspaceService ~= nil then
+		assert(workspaceService:FindFirstChild("Terrain") == nil, "Terrain NUNCA deveria ter sido criado -- LuauBench não pode fingir que simula")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- Defesa em profundidade (task-cli-016): os dois diagnósticos novos só são alcançáveis se a
+-- instância que o motor pré-criou for removida/substituída DEPOIS do bootstrap -- não há como
+-- reproduzir isto com `services`/`behavior/StarterPlayer.luau` reais (task-services-010 garante
+-- coerência entre EngineFixedChildren e Initialize: para toda entrada declarada,
+-- game:GetService(pai):FindFirstChild(nome) sempre existe com o ClassName certo). Simulado aqui
+-- manipulando o singleton StarterPlayer JÁ CRIADO, só com API PÚBLICA (game:GetService, Destroy,
+-- Services.new, .Parent) -- mesma disciplina dos outros diagnósticos de defesa em profundidade
+-- deste arquivo (NUNCA chama NewEngineInstance -- proibido em todo src/cli/**, inclusive specs).
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: 'materialize/fixed-child-missing' quando o filho pré-criado pelo motor foi removido antes da adoção", function()
+	local game = newGame()
+	local starterPlayer = game:GetService("StarterPlayer")
+	local existing = starterPlayer:FindFirstChild("StarterPlayerScripts")
+	assert(existing ~= nil, "sanity check: StarterPlayer deveria nascer com StarterPlayerScripts pré-criado pelo motor")
+	if existing ~= nil then
+		existing:Destroy()
+	end
+	assert(starterPlayer:FindFirstChild("StarterPlayerScripts") == nil, "sanity check: StarterPlayerScripts deveria ter sido removido")
+
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeFixedChildMissingProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		Roots = {
+			{
+				Name = "StarterPlayer",
+				ClassName = "StarterPlayer",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						Name = "StarterPlayerScripts",
+						ClassName = "StarterPlayerScripts",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {},
+						Children = {},
+						NodePath = "tree.StarterPlayer.StarterPlayerScripts",
+					},
+				},
+				NodePath = "tree.StarterPlayer",
+			},
+		},
+		Diagnostics = {},
+	}
+
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(bag:HasErrors(), "filho fixo faltando deveria produzir um erro")
+	local diagnostic = findByCode(bag, "materialize/fixed-child-missing")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/fixed-child-missing'")
+	if diagnostic ~= nil then
+		assert(string.find(diagnostic.Message, "StarterPlayerScripts", 1, true) ~= nil, "mensagem deveria citar a classe 'StarterPlayerScripts'")
+		assert(string.find(diagnostic.Message, "StarterPlayer", 1, true) ~= nil, "mensagem deveria citar o pai 'StarterPlayer'")
+	end
+end)
+
+test("Materialize: 'materialize/fixed-child-class-mismatch' quando a instância achada tem ClassName diferente do esperado", function()
+	local game = newGame()
+	local starterPlayer = game:GetService("StarterPlayer")
+	local existing = starterPlayer:FindFirstChild("StarterPlayerScripts")
+	assert(existing ~= nil, "sanity check: StarterPlayer deveria nascer com StarterPlayerScripts pré-criado pelo motor")
+	if existing ~= nil then
+		existing:Destroy()
+	end
+
+	-- Impostor: mesmo Name, ClassName diferente -- só alcançável se EngineFixedChildren/Initialize
+	-- divergirem de verdade (nunca via um .project.json legítimo).
+	local impostor = Services.new("Folder", "StarterPlayerScripts")
+	impostor.Parent = starterPlayer
+	assert(starterPlayer:FindFirstChild("StarterPlayerScripts") == impostor, "sanity check: o impostor deveria estar parenteado como 'StarterPlayerScripts'")
+
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeFixedChildMismatchProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		Roots = {
+			{
+				Name = "StarterPlayer",
+				ClassName = "StarterPlayer",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						Name = "StarterPlayerScripts",
+						ClassName = "StarterPlayerScripts",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {},
+						Children = {},
+						NodePath = "tree.StarterPlayer.StarterPlayerScripts",
+					},
+				},
+				NodePath = "tree.StarterPlayer",
+			},
+		},
+		Diagnostics = {},
+	}
+
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(bag:HasErrors(), "ClassName divergente na instância achada deveria produzir um erro")
+	local diagnostic = findByCode(bag, "materialize/fixed-child-class-mismatch")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/fixed-child-class-mismatch'")
+	if diagnostic ~= nil then
+		assert(string.find(diagnostic.Message, "StarterPlayerScripts", 1, true) ~= nil, "mensagem deveria citar o ClassName esperado 'StarterPlayerScripts'")
+		assert(string.find(diagnostic.Message, "Folder", 1, true) ~= nil, "mensagem deveria citar o ClassName real achado 'Folder'")
+	end
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

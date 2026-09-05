@@ -7,8 +7,36 @@
 	nenhum dos dois (Decisão 3, "planejar antes de materializar"), então é AQUI que o plano puro
 	vira Instance simulada.
 
-	Nó com `IsServiceRoot` -> `game:GetService(ClassName)` (singleton do motor, parenteado direto
-	sob a raiz). Todo o resto -> `Services.new(ClassName, Name)` seguido de `.Parent = pai`.
+	Três caminhos em `createInstance`, NUNCA dois (correção task-cli-016, arquiteto-cli-2026-09-
+	05.md, seção "Revisão pós-implementação 2026-09-05 (task-cli-015) -- filho fixo do motor:
+	adotar, não criar" -- LER A SEÇÃO INTEIRA antes de mexer aqui):
+
+	1. `IsServiceRoot` -> `game:GetService(ClassName)` (singleton do motor, parenteado direto sob
+	   a raiz).
+	2. `Services.IsEngineFixedChild(parent.ClassName, node.Name, node.ClassName)` -> ADOTA a
+	   Instance que `behavior/<Pai>.luau` já criou dentro do pai no bootstrap
+	   (`parent:FindFirstChild(node.Name)`), NUNCA cria uma nova. É o caso de
+	   `StarterPlayerScripts`/`StarterCharacterScripts` dentro de `StarterPlayer`: esses filhos são
+	   `IsAbstract = true` (não instanciáveis por `Instance.new`, fiel ao Roblox real) E já nascem
+	   pré-criados pelo `Initialize` do Service pai -- uma API de CRIAÇÃO aqui produziria um IRMÃO
+	   DUPLICADO de mesmo nome (o do motor, vazio, e o do `.project.json`, com os scripts do
+	   usuário), e `FindFirstChild`/acesso por ponto no script do usuário resolveria para o
+	   PRIMEIRO (o do motor) -- trocaria o erro alto de hoje (`materialize/invalid-class`) por uma
+	   DIVERGÊNCIA SILENCIOSA, exatamente o que a regra 00 proíbe. O Rojo real, sincronizando
+	   contra um `DataModel` vivo, também nunca instancia esses nós -- ele faz merge dentro do
+	   filho que o motor já criou. Devolve a instância adotada SEM tocar em `.Parent` -- ela já
+	   está parenteada pelo motor, e reatribuir o MESMO pai (ainda que hoje seja um no-op de
+	   disparo, `Instance.spec.luau`, "reatribuir o mesmo Parent não deveria disparar
+	   Changed/ChildAdded") não tem nenhum motivo para acontecer aqui. `parent.ClassName` (da
+	   Instance já materializada, não do `PlanNode` planejado) é a única informação nova
+	   necessária, e já está disponível -- `PlanNode` NÃO ganha campo novo, `TreePlanner.luau` NÃO
+	   é tocado.
+	3. Todo o resto -> `Services.new(ClassName, Name)` seguido de `.Parent = pai`.
+
+	Os ramos são mutuamente exclusivos por construção: `IsServiceRoot` só é `true` quando o pai é
+	o `DataModel`, e `DataModel` não é chave de `EngineFixedChildren` -- e a ordem (1, depois 2,
+	depois 3) preserva byte a byte o comportamento de todo projeto que já materializava sem erro
+	antes desta correção.
 
 	NUNCA `Runtime.ClassRegistry.NewEngineInstance` -- o cabeçalho de `src/runtime/init.luau`
 	("LISTA FECHADA de chamadores legítimos") lista só `runtime/DataModel.luau` (dentro de
@@ -255,7 +283,51 @@ local function createInstance(node: TreePlanner.PlanNode, parent: Runtime.Instan
 		return game:GetService(node.ClassName)
 	end
 
-	-- Resto: `Services.new` (NUNCA `Runtime.ClassRegistry.NewEngineInstance` -- ver cabeçalho
+	-- Ramo 2 (task-cli-016): filho fixo do motor -- ADOTA a Instance que `behavior/<Pai>.luau` já
+	-- criou dentro de `parent` no bootstrap, NUNCA cria uma nova (ver cabeçalho deste arquivo e
+	-- arquiteto-cli-2026-09-05.md, seção "task-cli-015", para o porquê: criar produziria um irmão
+	-- duplicado de mesmo nome, e o script do usuário resolveria para o do motor, vazio).
+	-- `parent.ClassName` é a Instance JÁ MATERIALIZADA (não o `ClassName` planejado) -- garante que
+	-- só um `StarterPlayer` de verdade (o singleton, único jeito de `parent` chegar aqui com essa
+	-- classe) pode ter um filho adotado; um `$className: "StarterPlayer"` num nó qualquer nem chega
+	-- a existir, porque `Services.new("StarterPlayer")` já erra antes por `IsAbstract`.
+	if Services.IsEngineFixedChild(parent.ClassName, node.Name, node.ClassName) then
+		local existing = parent:FindFirstChild(node.Name)
+
+		-- Defesa em profundidade (mesma categoria de materialize/service-name-mismatch/
+		-- not-a-service, acima): só alcançável se `EngineFixedChildren.luau` declarar um filho que
+		-- o `Initialize` do `behavior/<Pai>.luau` correspondente não cria de fato --
+		-- inconsistência interna de `services` entre seus dois próprios módulos, nunca um erro do
+		-- `.project.json` do usuário. Nenhum projeto real alcança este ramo hoje (task-services-010
+		-- tem teste de coerência cobrindo justamente isto do lado de `services`).
+		if existing == nil then
+			bag:Add({
+				Severity = "error",
+				Code = "materialize/fixed-child-missing",
+				Message = Messages.MaterializeFixedChildMissing(node.NodePath, node.ClassName, parent.ClassName),
+				NodePath = node.NodePath,
+			})
+			return nil
+		end
+
+		if existing.ClassName ~= node.ClassName then
+			bag:Add({
+				Severity = "error",
+				Code = "materialize/fixed-child-class-mismatch",
+				Message = Messages.MaterializeFixedChildClassMismatch(node.NodePath, node.ClassName, existing.ClassName),
+				NodePath = node.NodePath,
+			})
+			return nil
+		end
+
+		-- Devolve SEM tocar em `.Parent` -- já está parenteado pelo motor. Reatribuir o mesmo pai
+		-- dispararia ChildRemoved/ChildAdded/AncestryChanged espúrios se algum dia deixasse de ser
+		-- tratado como no-op (divergência de eventos, regra 02) -- e não há nenhum motivo para
+		-- escrever num campo que já está correto.
+		return existing
+	end
+
+	-- Ramo 3: `Services.new` (NUNCA `Runtime.ClassRegistry.NewEngineInstance` -- ver cabeçalho
 	-- deste arquivo) + `.Parent = pai`. `pcall` porque `Services.new` pode falhar de verdade para
 	-- um "$className" explícito que TreePlanner nunca valida contra `services` (typo, ou classe
 	-- real ainda não simulada) -- ver cabeçalho, "DEFESA EM PROFUNDIDADE".
