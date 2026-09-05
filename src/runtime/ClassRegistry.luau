@@ -203,15 +203,19 @@ end
 	  nenhuma das duas tem `error()`; ambas só constroem a tabela achatada ou devolvem `nil`.
 	  Fora do escopo.
 	- `Instance.SetClassMethods`/`Instance.SetClassSchema` (Instance.luau) — têm `error(..., 2)`,
-	  mas o nível 2 aponta para "quem chamou SetClassMethods/SetClassSchema", e as duas são
-	  chamadas em um ÚNICO ponto, sempre de dentro de `NewEngineInstance` (nunca diretamente por
+	  mas o nível 2 aponta para "quem chamou SetClassMethods/SetClassSchema". Dentro deste
+	  módulo, as duas só são chamadas de dentro de `NewEngineInstance` (nunca diretamente por
 	  `ClassRegistry.new`, que só delega). O frame extra que `new()` insere fica ACIMA de
 	  `NewEngineInstance` na pilha, não ENTRE `NewEngineInstance` e essas duas funções — então o
 	  nível 2 aponta sempre para a mesma linha (dentro de `NewEngineInstance`), não importa qual
 	  das duas entradas externas foi usada. Diferente de `resolveClassChain`: o problema ali era
 	  especificamente ela ser chamada de dentro de `NewEngineInstance` enquanto o PRÓPRIO
 	  `NewEngineInstance` passou a ter duas profundidades possíveis vistas de fora. Nenhuma
-	  mudança necessária.
+	  mudança necessária. (CORREÇÃO task-runtime-024: `Instance.SetClassMethods` tem um SEGUNDO
+	  call site real, fora deste módulo — `DataModel.luau`, construção da raiz `game` — chamado
+	  diretamente, sem passar por `ClassRegistry.new`/`NewEngineInstance`. Esse call site é
+	  igualmente estável e fora do escopo desta auditoria, que trata só do wrapper de `new()`;
+	  citado aqui apenas para não afirmar "único ponto" quando não é.)
 	- `getInternal` (Instance.luau, chamada internamente por SetClassChain/SetClassMethods/
 	  SetClassSchema, nível 3) — mesmo raciocínio do item acima: chamada num único ponto fixo
 	  dentro de cada uma dessas três funções, blindada do frame extra do wrapper pela mesma

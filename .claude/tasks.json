@@ -707,7 +707,7 @@
       "id": "task-runtime-024",
       "title": "Corrigir comentario da auditoria: SetClassMethods tem dois call sites, nao um",
       "description": "Achado MEDIO do revisor-runtime na revisao de task-runtime-023 (.claude/agents-memory/revisor-runtime-engineinstance-2026-09-05.md). O comentario da auditoria em src/runtime/ClassRegistry.luau (por volta da linha 205-210) afirma que Instance.SetClassMethods e chamada em um UNICO ponto, sempre de dentro de NewEngineInstance -- isso e factualmente falso: src/runtime/DataModel.luau:116 tambem chama InstanceModule.SetClassMethods diretamente, fora de ClassRegistry inteiramente. Nao e bug de comportamento (nivel 2 continua correto no call site direto, por ser estavel), so o texto do comentario esta errado. Corrigir o comentario para listar os dois call sites reais.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 13,
@@ -722,7 +722,8 @@
         "task-runtime-023"
       ],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "Feito inline pelo orquestrador (mudanca trivial de comentario, um arquivo). Linha do segundo call site em DataModel.luau mudou de 116 para 196 desde a abertura desta task (multiplas edicoes de DataModel.luau ao longo da sessao) -- comentario referencia DataModel.luau/construcao da raiz game sem hardcoded numero de linha, pra nao ficar obsoleto de novo. ClassRegistry.spec.luau 29/29 intacto."
     },
     {
       "id": "task-services-008",
