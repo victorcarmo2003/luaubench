@@ -48,6 +48,16 @@
 	  SEM `Initialize` -- `LocalPlayer`/`PlayerAdded`/`PlayerRemoving` já ficam corretos só com o
 	  que o schema gerado semeia sozinho (ver comentário completo em `./Players.luau`).
 
+	task-services-024 (`Lighting` -- LER .claude/agents-memory/arquiteto-services-2026-09-05.md,
+	seção "L2.5.2", antes de mexer aqui) adiciona a quarta entrada com `Behavior` de verdade:
+	- `Lighting` (ver `./Lighting.luau`): `Initialize` conecta em `instance.Changed` para manter
+	  `ClockTime`/`TimeOfDay`/minutos como três vistas do mesmo estado sincronizadas, e dispara
+	  `LightingChanged` para toda propriedade do schema exceto as quatro exclusões documentadas
+	  oficialmente (`GlobalShadows`/`FogColor`/`FogStart`/`FogEnd`). `Methods` cobre
+	  `Get`/`SetMinutesAfterMidnight` e `GetMoonPhase` (sempre `0.75`); `GetSunDirection`/
+	  `GetMoonDirection` permanecem com o stub `[LuauBench]` do `ClassBuilder` de propósito (sem
+	  fórmula pública, ver o cabeçalho de `Lighting.luau`).
+
 	Todas as outras classes desta e da leva anterior continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
 	`Initialize`/`Methods` próprio.
@@ -59,6 +69,7 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	StarterPlayer = require("./StarterPlayer") :: Types.Behavior,
 	RunService = require("./RunService") :: Types.Behavior,
 	Players = require("./Players") :: Types.Behavior,
+	Lighting = require("./Lighting") :: Types.Behavior,
 }
 
 return BehaviorIndex
