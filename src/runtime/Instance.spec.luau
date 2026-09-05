@@ -674,5 +674,322 @@ test(
 	end
 )
 
+--[[
+	Testes NOVOS da task-runtime-018 (ClassSchema/Instance.SetClassSchema — modo estrito de
+	__index/__newindex). Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"/
+	"Decisão 4"/"Decisão 6". Nenhum dos 42 testes acima foi alterado. Cobertura de achatamento
+	(schema herdado, override entre classes) fica em ClassRegistry.spec.luau -- aqui é caixa-branca
+	sobre a mecânica de __index/__newindex, via InstanceModule.SetClassSchema direto.
+]]
+
+type ClassSchema = InstanceModule.ClassSchema
+
+-- Helper só destes testes: monta e congela um ClassSchema bem-formado a partir de um mapa
+-- nome -> descritor parcial (ReadOnly default para `false` quando omitido).
+local function makeSchema(
+	entries: { [string]: { Kind: InstanceModule.MemberKind, Default: unknown?, ReadOnly: boolean? } }
+): ClassSchema
+	local schema: ClassSchema = {}
+	for key, entry in entries do
+		schema[key] = {
+			Kind = entry.Kind,
+			Default = entry.Default,
+			ReadOnly = if entry.ReadOnly ~= nil then entry.ReadOnly else false,
+		}
+	end
+	table.freeze(schema)
+	return schema
+end
+
+-- Helper só dos testes de VALIDAÇÃO abaixo: monta um schema com um descritor deliberadamente mal
+-- formado (Kind fora da união, ReadOnly não-boolean) -- precisa escapar da checagem ESTÁTICA de
+-- `MemberDescriptor` via cast em duas etapas por `unknown` (mesmo padrão de `asDynamic`, já usado
+-- neste arquivo desde task-runtime-016), porque um `Kind` malformado não compilaria em --!strict
+-- se escrito como um `MemberDescriptor` de verdade -- é exatamente por isso que a validação de
+-- SetClassSchema existe: o schema vem do gerador de `services`, não do type-checker do LuauBench.
+local function makeRawSchema(entries: { [string]: { [string]: unknown } }): ClassSchema
+	local schema: { [string]: unknown } = {}
+	for key, entry in entries do
+		schema[key] = entry
+	end
+	table.freeze(schema)
+	return (schema :: unknown) :: ClassSchema
+end
+
+test("instância COM ClassSchema: ler nome fora do schema erra com 'is not a valid member of'", function()
+	local instance = InstanceModule.NewBase("TestSchemaUnknownRead", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2 },
+		})
+	)
+
+	local ok, err = pcall(function()
+		return asDynamic(instance).NomeQueNaoExisteNoSchema
+	end)
+	assert(not ok, "ler nome fora do schema deveria erro")
+	assert(
+		string.find(tostring(err), "is not a valid member of", 1, true) ~= nil,
+		`mensagem deveria conter 'is not a valid member of', recebeu: {err}`
+	)
+end)
+
+test("instância COM ClassSchema: escrever nome fora do schema erra com 'is not a valid member of'", function()
+	local instance = InstanceModule.NewBase("TestSchemaUnknownWrite", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2 },
+		})
+	)
+
+	local ok, err = pcall(function()
+		asDynamic(instance).NomeQueNaoExisteNoSchema = 1
+	end)
+	assert(not ok, "escrever nome fora do schema deveria erro")
+	assert(
+		string.find(tostring(err), "is not a valid member of", 1, true) ~= nil,
+		`mensagem deveria conter 'is not a valid member of', recebeu: {err}`
+	)
+end)
+
+test("instância COM ClassSchema: escrever propriedade ReadOnly erra com a string confirmada", function()
+	local instance = InstanceModule.NewBase("TestSchemaReadOnly", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			SeatPart = { Kind = "Property", Default = "x", ReadOnly = true },
+		})
+	)
+
+	local ok, err = pcall(function()
+		asDynamic(instance).SeatPart = "outro"
+	end)
+	assert(not ok, "escrever propriedade ReadOnly do schema deveria erro")
+	assert(
+		string.find(tostring(err), "Unable to assign property SeatPart. Property is read only", 1, true) ~= nil,
+		`mensagem deveria ser a string confirmada, recebeu: {err}`
+	)
+end)
+
+test("ler propriedade do schema cujo Default é nil devolve nil SEM errar (caso que motivou o schema)", function()
+	local instance = InstanceModule.NewBase("TestSchemaNilDefault", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			SeatPart = { Kind = "Property", Default = nil, ReadOnly = false },
+		})
+	)
+
+	local ok, result = pcall(function()
+		return asDynamic(instance).SeatPart
+	end)
+	assert(ok, `ler propriedade do schema com Default nil não deveria erro, recebeu: {result}`)
+	assert(result == nil, "propriedade do schema com Default nil deveria devolver nil")
+end)
+
+test("defaults do schema são semeados sem disparar Changed", function()
+	local instance = InstanceModule.NewBase("TestSchemaSeedNoChanged", nil)
+	local fired: { string } = {}
+	instance.Changed:Connect(function(propertyName: string)
+		table.insert(fired, propertyName)
+	end)
+
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2 },
+			SeatPart = { Kind = "Property", Default = nil },
+		})
+	)
+
+	assert(
+		#fired == 0,
+		`SetClassSchema não deveria disparar Changed ao semear defaults, recebeu: {table.concat(fired, ", ")}`
+	)
+	assert(asDynamic(instance).Gravity == 196.2, "Gravity deveria ter sido semeada com o Default")
+end)
+
+test("escrever propriedade gravável do schema funciona e dispara Changed", function()
+	local instance = InstanceModule.NewBase("TestSchemaWritable", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2, ReadOnly = false },
+		})
+	)
+
+	local fired: { string } = {}
+	instance.Changed:Connect(function(propertyName: string)
+		table.insert(fired, propertyName)
+	end)
+
+	asDynamic(instance).Gravity = 50
+	assert(asDynamic(instance).Gravity == 50, "escrever propriedade gravável do schema deveria mudar o valor")
+	assert(#fired == 1 and fired[1] == "Gravity", "deveria disparar Changed('Gravity') exatamente uma vez")
+end)
+
+test("escrever sobre entrada Kind == 'Event' do schema erra 'is an event of'", function()
+	local instance = InstanceModule.NewBase("TestSchemaEventWrite", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			PlayerAdded = { Kind = "Event", Default = nil, ReadOnly = true },
+		})
+	)
+
+	local ok, err = pcall(function()
+		asDynamic(instance).PlayerAdded = nil
+	end)
+	assert(not ok, "escrever sobre um evento de classe do schema deveria erro")
+	assert(
+		string.find(tostring(err), "is an event of", 1, true) ~= nil,
+		`mensagem deveria dizer 'is an event of', recebeu: {err}`
+	)
+end)
+
+test("escrever sobre entrada Kind == 'Callback' do schema é permitido (assinável por design)", function()
+	local instance = InstanceModule.NewBase("TestSchemaCallback", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			OnInvoke = { Kind = "Callback", Default = nil, ReadOnly = false },
+		})
+	)
+
+	local handler = function() end
+	local ok = pcall(function()
+		asDynamic(instance).OnInvoke = handler
+	end)
+	assert(ok, "escrever sobre um Callback do schema não deveria erro -- é assinável por design")
+	assert(asDynamic(instance).OnInvoke == handler, "OnInvoke deveria refletir o valor atribuído")
+end)
+
+test("SetClassSchema cria um Signal fresco por instância para cada entrada Kind == 'Event' (nunca compartilhado)", function()
+	local schema = makeSchema({
+		PlayerAdded = { Kind = "Event", Default = nil, ReadOnly = true },
+	})
+
+	local instanceA = InstanceModule.NewBase("TestSchemaFreshSignalA", nil)
+	local instanceB = InstanceModule.NewBase("TestSchemaFreshSignalB", nil)
+	InstanceModule.SetClassSchema(instanceA, schema)
+	InstanceModule.SetClassSchema(instanceB, schema)
+
+	local signalA = asDynamic(instanceA).PlayerAdded
+	local signalB = asDynamic(instanceB).PlayerAdded
+	assert(signalA ~= nil and signalB ~= nil, "PlayerAdded deveria existir nas duas instâncias")
+	assert(
+		signalA ~= signalB,
+		"cada instância deveria ter seu PRÓPRIO Signal, nunca compartilhado a partir do MESMO schema congelado"
+	)
+end)
+
+test("SetClassSchema NÃO rejeita colisão com a superfície fixa de Instance (diferente de SetClassMethods)", function()
+	local instance = InstanceModule.NewBase("TestSchemaInstanceCollision", nil)
+	local ok = pcall(function()
+		InstanceModule.SetClassSchema(
+			instance,
+			makeSchema({
+				Name = { Kind = "Property", Default = "TestSchemaInstanceCollision", ReadOnly = false },
+				Parent = { Kind = "Property", Default = nil, ReadOnly = false },
+				ClassName = { Kind = "Property", Default = "TestSchemaInstanceCollision", ReadOnly = true },
+				Changed = { Kind = "Event", Default = nil, ReadOnly = true },
+			})
+		)
+	end)
+	assert(ok, "SetClassSchema não deveria rejeitar um schema que contém Name/Parent/ClassName/Changed")
+
+	-- Os passos 1-2 de __index continuam servindo esses nomes pelos campos fixos, não pelo
+	-- schema -- ClassName continua imutável mesmo tendo entrado no schema como ReadOnly = true.
+	assert(instance.Name == "TestSchemaInstanceCollision", "Name deveria continuar vindo do campo fixo")
+	assert(instance.ClassName == "TestSchemaInstanceCollision", "ClassName deveria continuar vindo do campo fixo")
+end)
+
+test("SetClassSchema rejeita tabela de schema não congelada", function()
+	local instance = InstanceModule.NewBase("TestSchemaUnfrozen", nil)
+	local schema: ClassSchema = {
+		Gravity = { Kind = "Property", Default = 196.2, ReadOnly = false },
+	}
+	-- NÃO congelada de propósito -- SetClassSchema precisa rejeitar isto.
+	local ok, err = pcall(function()
+		InstanceModule.SetClassSchema(instance, schema)
+	end)
+	assert(not ok, "SetClassSchema deveria rejeitar um schema não congelado")
+	assert(
+		string.find(tostring(err), "congelada", 1, true) ~= nil,
+		`mensagem deveria mencionar 'congelada', recebeu: {err}`
+	)
+end)
+
+test("SetClassSchema rejeita Kind fora de Property/Event/Callback", function()
+	local instance = InstanceModule.NewBase("TestSchemaInvalidKind", nil)
+	local schema = makeRawSchema({
+		Foo = { Kind = "Bogus", Default = nil, ReadOnly = false },
+	})
+
+	local ok, err = pcall(function()
+		InstanceModule.SetClassSchema(instance, schema)
+	end)
+	assert(not ok, "SetClassSchema deveria rejeitar um Kind fora de Property/Event/Callback")
+	assert(
+		string.find(tostring(err), "Kind de", 1, true) ~= nil,
+		`mensagem deveria mencionar o Kind inválido, recebeu: {err}`
+	)
+end)
+
+test("SetClassSchema rejeita ReadOnly que não é boolean", function()
+	local instance = InstanceModule.NewBase("TestSchemaInvalidReadOnly", nil)
+	local schema = makeRawSchema({
+		Foo = { Kind = "Property", Default = nil, ReadOnly = "sim" },
+	})
+
+	local ok, err = pcall(function()
+		InstanceModule.SetClassSchema(instance, schema)
+	end)
+	assert(not ok, "SetClassSchema deveria rejeitar ReadOnly que não é boolean")
+	assert(
+		string.find(tostring(err), "ReadOnly de", 1, true) ~= nil,
+		`mensagem deveria mencionar o ReadOnly inválido, recebeu: {err}`
+	)
+end)
+
+test("membro do schema vence filho homônimo mesmo quando o Default é nil", function()
+	local parent = InstanceModule.NewBase("TestSchemaMemberVsChild", nil)
+	InstanceModule.SetClassSchema(
+		parent,
+		makeSchema({
+			SeatPart = { Kind = "Property", Default = nil, ReadOnly = false },
+		})
+	)
+	local homonymousChild = InstanceModule.NewBase("Folder", "SeatPart")
+	homonymousChild.Parent = parent
+
+	assert(asDynamic(parent).SeatPart == nil, "membro do schema (mesmo com Default nil) deveria vencer o filho homônimo")
+	assert(parent:FindFirstChild("SeatPart") == homonymousChild, "o filho continua alcançável via FindFirstChild")
+end)
+
+test("GetPropertyRaw/SetPropertyRaw NUNCA consultam o schema (via de engenharia abaixo do enforcement)", function()
+	local instance = InstanceModule.NewBase("TestSchemaBypass", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Heartbeat = { Kind = "Event", Default = nil, ReadOnly = true },
+		})
+	)
+
+	-- SetPropertyRaw escreve por cima de uma entrada Kind == "Event" (ReadOnly do ponto de vista
+	-- do script) sem erro nenhum -- é exatamente o que `services` precisa para instalar o
+	-- Heartbeat real do Scheduler sobre a entrada semeada por SetClassSchema.
+	local ok = pcall(function()
+		InstanceModule.SetPropertyRaw(instance, "Heartbeat", "valor de engenharia")
+	end)
+	assert(ok, "SetPropertyRaw não deveria consultar o schema nem errar sobre uma entrada Event/ReadOnly")
+	assert(
+		InstanceModule.GetPropertyRaw(instance, "Heartbeat") == "valor de engenharia",
+		"GetPropertyRaw deveria devolver o valor bruto, sem checagem de schema"
+	)
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

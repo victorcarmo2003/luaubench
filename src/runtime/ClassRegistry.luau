@@ -8,17 +8,20 @@
 	"ClassRegistry.luau", a seção "Revisão pós-integração 2026-09-04 (2) — contrato
 	ClassDescriptor.Construct" (contrato Initialize atual, substitui o Construct original) e a
 	seção "Revisão pós-integração 2026-09-04 (3) — acesso a membro" (campo Methods + achatamento
-	de métodos de classe, task-runtime-016).
+	de métodos de classe, task-runtime-016) e .claude/agents-memory/arquiteto-services-2026-09-05.md,
+	"Decisão 3"/"Decisão 4"/"Decisão 6" (campo Schema + achatamento de schema, modo estrito de
+	Instance.luau, task-runtime-018).
 
 	`services` chama `Register` uma vez por classe coberta do API Dump, no carregamento do
 	módulo (efeito de `require("services")`, antes de qualquer `cli` tentar `new`). `cli`
 	(e o Sandbox, através do que `services` embrulhar em `extraGlobals.Instance.new`) chama
 	`ClassRegistry.new` para instanciar por nome — é esta função, e só ela, que cria a instância
-	base (via Instance.NewBase), aplica a cadeia de classes (via Instance.SetClassChain) e
-	instala os métodos achatados da classe (via Instance.SetClassMethods) ANTES de chamar o
-	Initialize da classe concreta. `Instance.NewBase` não é mais chamado por `services` (ver
-	seção "Consequência: Runtime.Instance.NewBase sai da superfície pública") —
-	`ClassRegistry.new` é o único criador de instância disponível a `services`/`cli`.
+	base (via Instance.NewBase), aplica a cadeia de classes (via Instance.SetClassChain), instala
+	os métodos achatados da classe (via Instance.SetClassMethods) e instala + semeia o schema
+	achatado da classe (via Instance.SetClassSchema) ANTES de chamar o Initialize da classe
+	concreta. `Instance.NewBase` não é mais chamado por `services` (ver seção "Consequência:
+	Runtime.Instance.NewBase sai da superfície pública") — `ClassRegistry.new` é o único criador
+	de instância disponível a `services`/`cli`.
 
 	Depende de: Instance.luau (tipo Instance, Instance.NewBase e Instance.SetClassChain, para
 	resolver IsA sem Instance.luau precisar conhecer ClassRegistry.luau — evita require
@@ -49,6 +52,17 @@ export type ClassDescriptor = {
 	-- sem método próprio dispensa o campo. task-runtime-016, ver arquiteto-runtime-2026-09-04.md,
 	-- seção "Revisão pós-integração 2026-09-04 (3) — acesso a membro".
 	Methods: InstanceModule.ClassMethods?,
+
+	-- Schema de Property/Event/Callback que ESTA classe declara — nunca os herdados (mesmo
+	-- espelhamento do campo `Superclass` do dump que `Methods` já faz, acima). Opcional: classe
+	-- sem membro desse tipo dispensa o campo — instância permanece no modo LENIENTE de
+	-- `Instance.luau` (sem checagem de nome desconhecido) até que algum elo da cadeia declare
+	-- Schema. Achatamento em `resolveClassSchema`, abaixo (mesma disciplina de
+	-- `resolveClassMethods`); instalação + semeadura de defaults (incluindo um `Signal.new()`
+	-- fresco por entrada `Kind == "Event"`) em `Instance.SetClassSchema`, chamada por
+	-- `ClassRegistry.new`. task-runtime-018, ver
+	-- .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"/"Decisão 4"/"Decisão 6".
+	Schema: InstanceModule.ClassSchema?,
 
 	-- Chamado por ClassRegistry.new SOBRE uma instância base JÁ criada, JÁ com a cadeia de
 	-- classes aplicada e JÁ com os métodos da classe instalados — logo tanto
@@ -179,6 +193,49 @@ local function resolveClassMethods(className: string, chain: { string }): Instan
 	return flattened
 end
 
+-- Cache module-local do `ClassSchema` ACHATADO (próprio + herdado) e CONGELADO por `className`,
+-- construído preguiçosamente no primeiro `new()` — mesmo padrão e mesma razão já documentados
+-- para `methodsCache`/`resolveClassMethods`, acima (task-runtime-016): achatamento de trás para
+-- frente (classe mais concreta sobrescreve superclasse), cache por identidade de `className`.
+-- `schema = nil` guardado explicitamente distingue "já resolvido, esta classe não declara schema
+-- nenhum na cadeia" de "ainda não resolvido". task-runtime-018, ver
+-- .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 6" (último parágrafo: "o
+-- achatamento do schema segue a mesma disciplina já construída para Methods").
+type SchemaCacheEntry = { schema: InstanceModule.ClassSchema? }
+local schemaCache: { [string]: SchemaCacheEntry } = {}
+
+local function resolveClassSchema(className: string, chain: { string }): InstanceModule.ClassSchema?
+	local cached = schemaCache[className]
+	if cached ~= nil then
+		return cached.schema
+	end
+
+	local flattened: InstanceModule.ClassSchema = {}
+	local hasAny = false
+
+	for i = #chain, 1, -1 do
+		local linkDescriptor = registry[chain[i]]
+		if linkDescriptor ~= nil then
+			local linkSchema = linkDescriptor.Schema
+			if linkSchema ~= nil then
+				hasAny = true
+				for key, memberDescriptor in linkSchema do
+					flattened[key] = memberDescriptor
+				end
+			end
+		end
+	end
+
+	if not hasAny then
+		schemaCache[className] = { schema = nil }
+		return nil
+	end
+
+	table.freeze(flattened)
+	schemaCache[className] = { schema = flattened }
+	return flattened
+end
+
 function ClassRegistry.new(className: string, name: string?): Instance
 	local descriptor = registry[className]
 	if descriptor == nil then
@@ -189,11 +246,15 @@ function ClassRegistry.new(className: string, name: string?): Instance
 	end
 
 	-- Ordem obrigatória (task-runtime-013 fixou resolver->NewBase->SetClassChain->Initialize;
-	-- task-runtime-016 insere SetClassMethods entre SetClassChain e Initialize — mesma razão:
+	-- task-runtime-016 insere SetClassMethods entre SetClassChain e Initialize; task-runtime-018
+	-- insere SetClassSchema entre SetClassMethods e Initialize — mesma razão em todos os casos:
 	-- a identidade de classe precisa estar COMPLETA antes de qualquer código de `services`
 	-- rodar, para que dentro do próprio Initialize tanto `instance:IsA(ancestral)` quanto
-	-- `instance:MetodoDaPropriaClasse()` já funcionem). ClassName/identidade da tabela/default
-	-- de Name ficam garantidos aqui, não confiados a cada uma das dezenas de classes geradas.
+	-- `instance:MetodoDaPropriaClasse()` quanto uma leitura/escrita de propriedade do schema já
+	-- funcionem. ClassName/identidade da tabela/default de Name ficam garantidos aqui, não
+	-- confiados a cada uma das dezenas de classes geradas). Ordem final fechada em
+	-- .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 4": resolver -> NewBase ->
+	-- SetClassChain -> SetClassMethods -> SetClassSchema -> Initialize.
 	local chain = resolveClassChain(descriptor)
 	local instance = InstanceModule.NewBase(className, name)
 	InstanceModule.SetClassChain(instance, chain)
@@ -201,6 +262,14 @@ function ClassRegistry.new(className: string, name: string?): Instance
 	local methods = resolveClassMethods(className, chain)
 	if methods ~= nil then
 		InstanceModule.SetClassMethods(instance, methods)
+	end
+
+	-- SetClassSchema, quando chamada, também semeia os defaults desta instância (incluindo um
+	-- Signal.new() fresco por entrada Kind == "Event") direto no storage interno — ver comentário
+	-- de Instance.SetClassSchema para o porquê disso rodar ali e não aqui.
+	local schema = resolveClassSchema(className, chain)
+	if schema ~= nil then
+		InstanceModule.SetClassSchema(instance, schema)
 	end
 
 	-- SEM pcall: erro dentro do Initialize de uma classe é erro real de construção e sobe para

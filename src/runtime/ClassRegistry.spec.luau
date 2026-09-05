@@ -336,5 +336,231 @@ test("classe sem Methods em nenhum elo da cadeia mantém classMethods nil (compo
 	assert(dynamic.QualquerCoisa == nil, "sem Methods na cadeia, ler nome desconhecido deveria devolver nil")
 end)
 
+--[[
+	Testes NOVOS da task-runtime-018 (ClassDescriptor.Schema + achatamento/wiring em
+	ClassRegistry.new). Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"/
+	"Decisão 4"/"Decisão 6". Nenhum dos 17 testes acima foi alterado. Mecânica de __index/
+	__newindex (modo estrito/leniente, mensagens de erro) já é coberta em Instance.spec.luau, via
+	Instance.SetClassSchema direto — aqui o foco é achatamento entre classes e o wiring automático
+	de ClassRegistry.new (SetClassSchema chamada, defaults semeados, Signal fresco por instância).
+]]
+
+-- Helper NOVO da task-runtime-018, no mesmo espírito de `makeDescriptorWithMethods`: não
+-- reaproveita `makeDescriptor` de propósito, para não alterar a assinatura usada pelos 17 testes
+-- já existentes.
+local function makeDescriptorWithSchema(
+	className: string,
+	superClassName: string?,
+	schema: InstanceModule.ClassSchema?,
+	initialize: ((instance: Instance) -> ())?
+): ClassDescriptor
+	return {
+		ClassName = className,
+		SuperClassName = superClassName,
+		IsAbstract = false,
+		IsService = false,
+		Schema = schema,
+		Initialize = initialize,
+	}
+end
+
+-- Mesmo helper de Instance.spec.luau (duplicado de propósito: as duas suítes são independentes,
+-- mesma razão de `makeDescriptorWithMethods` já não reaproveitar `makeDescriptor`).
+local function makeSchema(
+	entries: { [string]: { Kind: InstanceModule.MemberKind, Default: unknown?, ReadOnly: boolean? } }
+): InstanceModule.ClassSchema
+	local schema: InstanceModule.ClassSchema = {}
+	for key, entry in entries do
+		schema[key] = {
+			Kind = entry.Kind,
+			Default = entry.Default,
+			ReadOnly = if entry.ReadOnly ~= nil then entry.ReadOnly else false,
+		}
+	end
+	table.freeze(schema)
+	return schema
+end
+
+test("new() de classe com Schema instala o modo estrito: ler nome fora do schema erra", function()
+	ClassRegistry.Register(
+		makeDescriptorWithSchema(
+			"TestSchemaWiredUnknown",
+			nil,
+			makeSchema({
+				Gravity = { Kind = "Property", Default = 196.2 },
+			}),
+			nil
+		)
+	)
+
+	local instance = ClassRegistry.new("TestSchemaWiredUnknown", nil)
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+
+	local ok, err = pcall(function()
+		return dynamic.NomeQueNaoExiste
+	end)
+	assert(not ok, "instância de classe com Schema deveria errar ao ler nome desconhecido")
+	assert(
+		string.find(tostring(err), "is not a valid member of", 1, true) ~= nil,
+		`mensagem deveria conter 'is not a valid member of', recebeu: {err}`
+	)
+end)
+
+test("new() semeia o Default do schema automaticamente, sem disparar Changed", function()
+	ClassRegistry.Register(
+		makeDescriptorWithSchema(
+			"TestSchemaWiredDefault",
+			nil,
+			makeSchema({
+				Gravity = { Kind = "Property", Default = 196.2, ReadOnly = false },
+			}),
+			nil
+		)
+	)
+
+	local instance = ClassRegistry.new("TestSchemaWiredDefault", nil)
+	local fired = false
+	instance.Changed:Connect(function()
+		fired = true
+	end)
+
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+	assert(dynamic.Gravity == 196.2, "Gravity deveria ter sido semeada com o Default pelo próprio ClassRegistry.new")
+	assert(
+		not fired,
+		"Changed não deveria ter disparado por causa da semeadura (que aconteceu ANTES desta Connection, dentro de new())"
+	)
+end)
+
+test("classe mais concreta sobrescreve entrada do schema de mesmo nome da superclasse", function()
+	ClassRegistry.Register(
+		makeDescriptorWithSchema(
+			"TestSchemaOverrideParent",
+			nil,
+			makeSchema({
+				Foo = { Kind = "Property", Default = "parent", ReadOnly = false },
+			}),
+			nil
+		)
+	)
+	ClassRegistry.Register(
+		makeDescriptorWithSchema(
+			"TestSchemaOverrideChild",
+			"TestSchemaOverrideParent",
+			makeSchema({
+				Foo = { Kind = "Property", Default = "child", ReadOnly = false },
+			}),
+			nil
+		)
+	)
+
+	local instance = ClassRegistry.new("TestSchemaOverrideChild", nil)
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+	assert(dynamic.Foo == "child", "classe mais concreta deveria sobrescrever o Default herdado da superclasse")
+end)
+
+test("entrada do schema herdada de uma superclasse registrada é servida igual a entrada própria", function()
+	ClassRegistry.Register(
+		makeDescriptorWithSchema(
+			"TestSchemaInheritedParent",
+			nil,
+			makeSchema({
+				Bar = { Kind = "Property", Default = "from-parent", ReadOnly = false },
+			}),
+			nil
+		)
+	)
+	ClassRegistry.Register(makeDescriptorWithSchema("TestSchemaInheritedChild", "TestSchemaInheritedParent", nil, nil))
+
+	local instance = ClassRegistry.new("TestSchemaInheritedChild", nil)
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+	assert(dynamic.Bar == "from-parent", "propriedade herdada do schema da superclasse deveria ser servida igual a uma própria")
+
+	-- O modo estrito também se aplica quando o schema vem só da superclasse, não só quando é
+	-- próprio da classe concreta.
+	local ok = pcall(function()
+		return dynamic.NomeQueNaoExisteEmLugarNenhum
+	end)
+	assert(not ok, "modo estrito herdado deveria continuar errando para nome fora do schema")
+end)
+
+test("classe sem Schema em nenhum elo da cadeia mantém o modo leniente (comportamento de hoje)", function()
+	ClassRegistry.Register(makeDescriptor("TestSchemaNoneAtAll", nil, false, nil))
+	local instance = ClassRegistry.new("TestSchemaNoneAtAll", nil)
+
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+	assert(dynamic.QualquerCoisa == nil, "sem Schema na cadeia, ler nome desconhecido deveria continuar devolvendo nil, sem erro")
+end)
+
+test(
+	"cada new() da mesma classe com evento no schema recebe um Signal PRÓPRIO (não compartilhado entre instâncias)",
+	function()
+		ClassRegistry.Register(
+			makeDescriptorWithSchema(
+				"TestSchemaWiredFreshSignal",
+				nil,
+				makeSchema({
+					PlayerAdded = { Kind = "Event", Default = nil, ReadOnly = true },
+				}),
+				nil
+			)
+		)
+
+		local instanceA = ClassRegistry.new("TestSchemaWiredFreshSignal", nil)
+		local instanceB = ClassRegistry.new("TestSchemaWiredFreshSignal", nil)
+
+		type Dynamic = { [string]: unknown }
+		local dynamicA = (instanceA :: unknown) :: Dynamic
+		local dynamicB = (instanceB :: unknown) :: Dynamic
+
+		assert(dynamicA.PlayerAdded ~= nil, "PlayerAdded deveria existir em instanceA")
+		assert(dynamicB.PlayerAdded ~= nil, "PlayerAdded deveria existir em instanceB")
+		assert(
+			dynamicA.PlayerAdded ~= dynamicB.PlayerAdded,
+			"cada instância deveria ter seu próprio Signal, mesmo vindo do MESMO schema achatado e cacheado por ClassName"
+		)
+	end
+)
+
+test("Methods e Schema coexistem na mesma classe sem interferência (task-runtime-016 + task-runtime-018)", function()
+	local methods: InstanceModule.ClassMethods = {
+		Greet = function(): string
+			return "oi"
+		end,
+	}
+	table.freeze(methods)
+
+	ClassRegistry.Register({
+		ClassName = "TestMethodsAndSchema",
+		SuperClassName = nil,
+		IsAbstract = false,
+		IsService = false,
+		Methods = methods,
+		Schema = makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2, ReadOnly = false },
+		}),
+		Initialize = nil,
+	})
+
+	local instance = ClassRegistry.new("TestMethodsAndSchema", nil)
+	type WithGreet = Instance & { Greet: (self: Instance) -> string }
+	local typed = (instance :: unknown) :: WithGreet
+	assert(typed:Greet() == "oi", "método de classe deveria continuar funcionando com Schema instalado também")
+
+	type Dynamic = { [string]: unknown }
+	local dynamic = (instance :: unknown) :: Dynamic
+	assert(dynamic.Gravity == 196.2, "propriedade do schema deveria continuar funcionando com Methods instalado também")
+
+	local ok = pcall(function()
+		dynamic.NomeQueNaoExisteNoSchemaNemEmMethods = 1
+	end)
+	assert(not ok, "modo estrito deveria continuar valendo para escrita de nome desconhecido")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

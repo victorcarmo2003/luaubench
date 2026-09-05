@@ -7,8 +7,15 @@
 	É a única classe cujo comportamento `runtime` codifica por nome (ver
 	.claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Instance.luau") — todo
 	Service concreto que `services` registra herda desta base via `NewBase` + as funções de
-	engenharia interna (GetPropertyRaw/SetPropertyRaw/SetClassChain), nunca reimplementando
-	hierarquia/eventos do zero.
+	engenharia interna (GetPropertyRaw/SetPropertyRaw/SetClassChain/SetClassMethods/
+	SetClassSchema), nunca reimplementando hierarquia/eventos do zero.
+
+	task-runtime-018 (ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"/
+	"Decisão 4"/"Decisão 6"): toda instância tem um MODO, definido por `classSchema` em `Internal`
+	ser `nil` ou não. LENIENTE (`classSchema == nil`) é o comportamento histórico deste arquivo —
+	propriedade genérica lida/escrita sem checagem. ESTRITO (`classSchema ~= nil`, instalado por
+	`ClassRegistry.new` via `Instance.SetClassSchema`) replica o Roblox real: ler/escrever um nome
+	fora do schema erra. Os dois modos coexistem por instância — nunca um interruptor global.
 
 	Depende de Signal.luau, ThreadBroker.luau e, só no ramo (C) de WaitForChild com timeout em
 	thread NÃO gerida por um Scheduler (ver comentário dentro do método), de `@lune/task` —
@@ -64,6 +71,34 @@ export type Instance = {
 -- pós-integração 2026-09-04 (3) — acesso a membro" (task-runtime-016).
 export type ClassMethods = { [string]: unknown }
 
+-- Descritor de UM membro (Property/Event/Callback) de uma classe concreta, gerado por `services`
+-- a partir do Roblox API Dump — nunca escrito à mão por engenharia de `runtime`. `Kind` existe
+-- porque Property/Event/Callback moram no mesmo espaço de nomes de __index/__newindex mas se
+-- comportam diferente na escrita: evento erra ("is an event of X and cannot be reassigned"),
+-- Callback é assinável por design (ex.: BindableFunction.OnInvoke), só Property consulta
+-- `ReadOnly`. `Default` já vem parseado pelo gerador (número/bool/string reais, nunca a string
+-- bruta do dump) — `unknown` é o tipo honesto pelo mesmo motivo de `ClassMethods`, acima. Formato
+-- fechado na revisão de arquitetura de `services`: ver
+-- .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3 — Formato do descritor de
+-- membro" (task-runtime-018; substitui o `PropertyDescriptor` provisório do desenho original).
+export type MemberKind = "Property" | "Event" | "Callback"
+
+export type MemberDescriptor = {
+	Kind: MemberKind,
+	Default: unknown,
+	ReadOnly: boolean,
+}
+
+-- Tabela ACHATADA (membros próprios + herdados) e CONGELADA de uma classe concreta, COMPARTILHADA
+-- por todas as instâncias dela (ver Instance.SetClassSchema, abaixo) — mesmo padrão de
+-- `ClassMethods`. Uma instância SEM ClassSchema instalado (`classSchema == nil` em `Internal`)
+-- permanece no modo LENIENTE de hoje: propriedade genérica lida/escrita livremente, sem erro para
+-- nome desconhecido. Uma instância COM ClassSchema entra no modo ESTRITO: ler/escrever um nome
+-- fora do schema erra, replicando o Roblox real ("X is not a valid member of Y"). Ver "Decisão 4 —
+-- Como task-runtime-018 entra" no mesmo arquivo de arquitetura, "Ordem final de __index"/"Ordem
+-- final de __newindex" — a ordem exata que InstanceMeta segue abaixo.
+export type ClassSchema = { [string]: MemberDescriptor }
+
 -- Estado privado por Instance — nunca reexposto na metatable pública (só alcançável por quem
 -- faz `require("./Instance")` direto, isto é, `runtime`/`services`, nunca o script do usuário).
 type Internal = {
@@ -77,6 +112,13 @@ type Internal = {
 	-- `nil` = instância criada direto por NewBase, sem classe concreta (comportamento de hoje,
 	-- ver Instance.SetClassMethods). Só ClassRegistry.new grava aqui, via SetClassMethods.
 	classMethods: ClassMethods?,
+	-- `nil` = instância LENIENTE (comportamento de hoje: propriedade genérica sem checagem
+	-- nenhuma). Não-nil = instância ESTRITA para os membros que o schema declara
+	-- (task-runtime-018). Só ClassRegistry.new grava aqui, via Instance.SetClassSchema — que, no
+	-- mesmo passo, já semeia os defaults desta instância (incluindo um Signal.new() fresco por
+	-- entrada Kind == "Event") direto em `properties`, sem passar por SetPropertyRaw (que
+	-- dispararia Changed para cada default semeado).
+	classSchema: ClassSchema?,
 
 	changed: FireableSignal<string>,
 	childAdded: FireableSignal<Instance>,
@@ -507,16 +549,26 @@ local FIXED_PROPERTY_KEYS: { [string]: boolean } = {
 
 local InstanceMeta = {}
 
+-- Ordem final fechada pelo arquiteto em .claude/agents-memory/arquiteto-services-2026-09-05.md,
+-- "Decisão 4 — Como task-runtime-018 entra, e o buraco que ela abriria sozinha", "Ordem final de
+-- __index" — seguida aqui literalmente, passo a passo.
 InstanceMeta.__index = function(self: Instance, key: string): unknown
 	local data = getInternal(self)
 
+	-- Passo 1 — campos fixos. ClassName/Name/Parent NUNCA passam pelo schema: são tratados aqui,
+	-- antes de qualquer olhada em `classSchema`, mesmo quando o schema de uma classe legitimamente
+	-- os contém (ex.: o schema de "Instance" — ver Instance.SetClassSchema, que por isso NÃO
+	-- rejeita essa "colisão" do jeito que SetClassMethods rejeitaria).
 	if key == "ClassName" then
 		return data.className
 	elseif key == "Name" then
 		return data.name
 	elseif key == "Parent" then
 		return data.parent
-	elseif key == "Changed" then
+	end
+
+	-- Passo 2 — sinais fixos de Instance.
+	if key == "Changed" then
 		return data.changed
 	elseif key == "ChildAdded" then
 		return data.childAdded
@@ -528,16 +580,16 @@ InstanceMeta.__index = function(self: Instance, key: string): unknown
 		return data.destroying
 	end
 
+	-- Passo 3 — métodos base de Instance.
 	local method = ((Methods :: unknown) :: { [string]: unknown })[key]
 	if method ~= nil then
 		return method
 	end
 
-	-- Métodos da classe concreta (Workspace:Raycast, Players:GetPlayerByUserId, ...), instalados
-	-- por ClassRegistry.new via Instance.SetClassMethods — consultados DEPOIS dos métodos base de
-	-- Instance (ordem de caminho quente, não de semântica: colisão entre os dois já é rejeitada
-	-- com erro alto em SetClassMethods) e ANTES de data.properties (task-runtime-016, ver
-	-- arquiteto-runtime-2026-09-04.md, seção "Revisão pós-integração 2026-09-04 (3)").
+	-- Passo 4 — métodos da classe concreta (Workspace:Raycast, Players:GetPlayerByUserId, ...),
+	-- instalados por ClassRegistry.new via Instance.SetClassMethods — consultados DEPOIS dos
+	-- métodos base de Instance (ordem de caminho quente, não de semântica: colisão entre os dois
+	-- já é rejeitada com erro alto em SetClassMethods) e ANTES do schema/propriedades, abaixo.
 	if data.classMethods ~= nil then
 		local classMethod = data.classMethods[key]
 		if classMethod ~= nil then
@@ -545,44 +597,47 @@ InstanceMeta.__index = function(self: Instance, key: string): unknown
 		end
 	end
 
-	-- DIVERGÊNCIA CONHECIDA E ACEITA (task-runtime-016): no Roblox real, ler um nome que a classe
-	-- não declara ERRA ("X is not a valid member of Y", formato confirmado por citação verbatim
-	-- em .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md). Aqui, sem um schema
-	-- de propriedades por classe (que só o Roblox API Dump fornece e que `services` ainda não gera
-	-- — fecha em task-runtime-018), uma propriedade genérica já setada é servida abaixo; se não
-	-- houver propriedade com esse nome, a chave passa para a busca por filho (task-runtime-021,
-	-- logo abaixo) antes de finalmente cair em nil.
-	local propertyValue = data.properties[key]
-	if propertyValue ~= nil then
-		return propertyValue
+	-- Passos 5/6 — propriedade genérica, ramificando pelo MODO da instância (task-runtime-018):
+	local classSchema = data.classSchema
+	if classSchema ~= nil then
+		-- (5) MODO ESTRITO: `key` é um membro que o schema declara -> devolve `data.properties[key]`
+		-- mesmo que seja `nil` — é exatamente o caso que motivou o schema inteiro (ex.:
+		-- Humanoid.SeatPart, ObjectValue.Value: propriedade válida com valor corrente nil, que uma
+		-- tabela Lua não armazena, então presença em `properties` sozinha nunca serviria de schema).
+		if classSchema[key] ~= nil then
+			return data.properties[key]
+		end
+	else
+		-- (6) MODO LENIENTE (`classSchema == nil`: instância criada por NewBase direto, ou a raiz
+		-- do DataModel enquanto não for registrada por uma classe concreta) — comportamento de
+		-- hoje, sem checagem nenhuma contra um schema que não existe para esta instância.
+		local propertyValue = data.properties[key]
+		if propertyValue ~= nil then
+			return propertyValue
+		end
 	end
 
 	--[[
-		task-runtime-021 — resolução de filho por nome (ex.: `ReplicatedStorage.Modules.Combat`).
-		Ver .claude/agents-memory/arquiteto-services-2026-09-05.md, seção "Decisão 4 — Como
-		task-runtime-018 entra, e o buraco que ela abriria sozinha", "Ordem final de __index"
-		(passos 6/7): sem isto, o modo estrito que task-runtime-018 liga transformaria todo acesso
-		a filho por nome (o padrão mais frequente do ecossistema Roblox) num erro barulhento em
-		código válido.
+		Passo 7 (task-runtime-021) — resolução de filho por nome, ex.:
+		`ReplicatedStorage.Modules.Combat`. Sem isto, o modo estrito acima transformaria todo
+		acesso a filho por nome (o padrão mais frequente do ecossistema Roblox) num erro barulhento
+		em código válido.
 
-		HIPÓTESE NÃO CONFIRMADA CONTRA O ROBLOX REAL (mesmo protocolo de task-runtime-002 para a
-		ordem de eventos de reparenting): a pesquisa que confirmaria isto, task-services-006
-		("Confirmar contra o Roblox real: membro vs. filho no __index, ..."), está rodando em
-		paralelo e NÃO tinha respondido no momento em que este código foi escrito. Duas coisas são
-		assumidas aqui, nenhuma confirmada:
-		(a) MEMBRO VENCE FILHO — por isso a checagem de `propertyValue` acima roda ANTES desta
-		    busca por filho, e os campos fixos/sinais/métodos (passos 1-4, topo desta função) já
-		    interceptam a chave antes de chegarmos aqui. Em colisão real (ex.: um filho chamado
-		    "Name" ou "Destroy", ou uma propriedade genérica cujo nome também é o de um filho), a
-		    hipótese é que a Instance real do Roblox devolveria o membro/propriedade, nunca o
-		    filho — `FindFirstChild(key)` continua sendo a forma explícita de alcançar o filho
-		    nesse caso (ver testes correspondentes em Instance.spec.luau).
-		(b) A busca abaixo é não-recursiva e devolve exatamente o que `FindFirstChild(key)`
-		    devolveria — comportamento reaproveitado, nunca duplicado.
+		CONFIRMADO contra documentação oficial da Roblox (task-services-006, ver
+		.claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md, seção 1) — NÃO é mais
+		hipótese (a versão anterior deste comentário, escrita por task-runtime-021, marcava isto
+		como hipótese não confirmada; a pesquisa que a confirmaria rodou em paralelo e voltou antes
+		deste patch). Citação literal do campo `description` do membro `FindFirstChild` da classe
+		`Instance`, `Roblox/creator-docs`, `content/en-us/reference/engine/classes/Instance.yaml`:
+		"Sometimes the Name of an object is the same as that of a property of its Parent. When
+		using the dot operator, properties take precedence over children if they share a name." —
+		MEMBRO VENCE FILHO é comportamento documentado oficialmente, não suposição do LuauBench; é
+		por isso que os passos 1-6 acima rodam antes deste. `FindFirstChild(key)` continua sendo a
+		forma explícita de alcançar o filho numa colisão dessas (é o próprio motivo, segundo a doc
+		oficial, de FindFirstChild existir).
 
-		Se task-services-006 devolver o oposto (filho vence membro, ou uma regra mais específica
-		por tipo de membro), esta ordem muda e os testes que a fixam mudam junto — decisão de
-		revisor-runtime/arquiteto, não assumida por esta tarefa.
+		A busca abaixo é NÃO-recursiva e devolve exatamente o que `FindFirstChild(key)` devolveria
+		— comportamento reaproveitado, nunca duplicado.
 
 		Custo de performance aceito nesta fase: esta busca é uma varredura LINEAR sobre os filhos
 		(Methods.FindFirstChild) a cada miss de membro — o mesmo custo de uma chamada explícita a
@@ -590,7 +645,26 @@ InstanceMeta.__index = function(self: Instance, key: string): unknown
 		gargalo real (árvores com muitos filhos diretos e acesso por nome em laço quente), um
 		índice por nome é tarefa própria; não otimizado aqui.
 	]]
-	return Methods.FindFirstChild(self, key)
+	local child = Methods.FindFirstChild(self, key)
+	if child ~= nil then
+		return child
+	end
+
+	-- Passo 8 — fallback final, ramificando pelo mesmo MODO dos passos 5/6.
+	if classSchema ~= nil then
+		-- MODO ESTRITO: `key` não é membro do schema nem filho -> ERRO, replicando o Roblox real.
+		-- String CONFIRMADA por citação verbatim de thread real (ver
+		-- .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md, "Formato da
+		-- mensagem"): `"HumanoidRootPart is not a valid member of Model \"Workspace.<username>\""`.
+		-- A divergência que task-runtime-016 deixou registrada aqui (Roblox real erra, LuauBench
+		-- devolvia nil) fica FECHADA para toda instância com schema instalado — só permanece,
+		-- deliberadamente, no modo leniente logo abaixo.
+		error(`{key} is not a valid member of {data.className} "{Methods.GetFullName(self)}"`, 2)
+	end
+	-- MODO LENIENTE: nome sem membro e sem filho continua devolvendo nil — preservado de propósito
+	-- para instância sem ClassSchema instalado (opt-in por classe, ver ClassSchema acima e
+	-- "Decisão 4"/"Por que o schema pode ser gradual sem risco" no desenho de services).
+	return nil
 end
 
 InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown): ()
@@ -631,25 +705,55 @@ InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown):
 		error(`Unable to assign property {key}. {key} is a method of {data.className} and cannot be reassigned`, 2)
 	end
 
-	-- DIVERGÊNCIA CONHECIDA E ACEITA (task-runtime-016, mesma causa do fallback de __index acima):
-	-- no Roblox real, escrever um nome que a classe não declara ERRA ("X is not a valid member of
-	-- Y"); escrever propriedade conhecida-porém-somente-leitura erraria com a string CONFIRMADA
-	-- "Unable to assign property {key}. Property is read only". Sem um schema de propriedades por
-	-- classe (que só o Roblox API Dump fornece — `services` ainda não gera), LuauBench não
-	-- consegue distinguir "nome desconhecido" de "propriedade genérica legítima" aqui: cria a
-	-- propriedade em silêncio e dispara Changed. Fecha em task-runtime-018 quando o schema
-	-- existir (ver .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md).
-	--
-	-- task-runtime-021 (resolução de filho por nome, só em __index — ver comentário lá acima) NÃO
-	-- estende este fallback de propósito: escrever sobre um nome que hoje só existe como FILHO
-	-- (ex.: `rs.Modules = 1` quando `rs.Modules` é uma pasta) continua caindo aqui e cria uma
-	-- propriedade genérica homônima — o filho em si não é desparentado nem afetado, só passa a
-	-- ficar "encoberto" em leituras futuras por essa propriedade nova (propriedade vence filho,
-	-- mesma ordem de __index). O comportamento CORRETO para este caso no Roblox real — erra,
-	-- substitui, ou é rejeitado de outra forma — depende do schema e é decisão de
-	-- task-runtime-018 (ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 4",
-	-- "Ordem final de __newindex", passo 7, e a nota logo abaixo dela). É também uma das perguntas
-	-- em aberto na pesquisa task-services-006 ("o que acontece ao ESCREVER num nome que é filho").
+	-- Passos 7/8/9 — propriedade genérica, ramificando pelo MODO da instância (task-runtime-018,
+	-- mesmo split de InstanceMeta.__index acima). Ordem final: ver
+	-- .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 4", "Ordem final de
+	-- __newindex".
+	local classSchema = data.classSchema
+	if classSchema ~= nil then
+		local descriptor = classSchema[key]
+		if descriptor ~= nil then
+			-- (7) MODO ESTRITO, `key` é membro do schema:
+			if descriptor.Kind == "Event" then
+				-- Evento de CLASSE (ex.: Players.PlayerAdded) — mesma aproximação de boa-fé já
+				-- usada acima para os 5 sinais fixos de Instance: string real do Roblox para este
+				-- caso não confirmada (ver comentário em SIGNAL_KEYS, acima).
+				error(`Unable to assign property {key}. {key} is an event of {data.className} and cannot be reassigned`, 2)
+			elseif descriptor.Kind == "Property" and descriptor.ReadOnly then
+				-- String CONFIRMADA contra o Roblox real por convergência de múltiplos threads
+				-- independentes do Developer Forum reportando exatamente esta frase para
+				-- propriedades reais-porém-somente-leitura distintas (ver
+				-- .claude/agents-memory/pesquisa-instance-member-access-2026-09-04.md, Q1).
+				error(`Unable to assign property {key}. Property is read only`, 2)
+			else
+				-- Property gravável OU Callback (ex.: BindableFunction.OnInvoke) — assinável por
+				-- design, sem erro (arquiteto-services-2026-09-05.md, "Decisão 6").
+				data.properties[key] = value
+				data.changed:Fire(key)
+			end
+			return
+		end
+
+		-- (8) MODO ESTRITO, `key` fora do schema (nem membro, nem sinal/método já tratados acima)
+		-- -> ERRO, mesma família e mesma string confirmada usada no fallback de __index. Fecha,
+		-- para toda instância com schema instalado, a divergência que task-runtime-016 deixou
+		-- registrada aqui (Roblox real erra "X is not a valid member of Y", LuauBench criava
+		-- propriedade genérica em silêncio).
+		--
+		-- Cobre também escrever sobre um nome que hoje só existe como FILHO (ex.: `rs.Modules = 1`
+		-- quando `Modules` é uma pasta): task-services-006 confirma, por inferência forte a partir
+		-- do mecanismo de atribuição de propriedade do Roblox real (que nunca consulta a lista de
+		-- filhos — são estruturas internas separadas), que este caso cai na mesma família de erro,
+		-- nunca cria propriedade nem afeta o filho (ver
+		-- .claude/agents-memory/pesquisa-member-vs-child-2026-09-05.md, seção 1, "Limites e
+		-- pegadinhas" — string exata para este cenário específico não confirmada literalmente,
+		-- mas a família do erro sim).
+		error(`{key} is not a valid member of {data.className} "{Methods.GetFullName(self)}"`, 2)
+	end
+
+	-- (9) MODO LENIENTE (`classSchema == nil`) — comportamento de hoje, preservado de propósito
+	-- para instância sem ClassSchema instalado: cria propriedade genérica em silêncio e dispara
+	-- Changed, mesmo para nome desconhecido ou nome que hoje só existe como filho.
 	data.properties[key] = value
 	data.changed:Fire(key)
 end
@@ -666,6 +770,7 @@ function Instance.NewBase(className: string, name: string?): Instance
 		classChain = if className == "Instance" then { "Instance" } else { className, "Instance" },
 		destroyed = false,
 		classMethods = nil,
+		classSchema = nil,
 
 		changed = SignalModule.new(),
 		childAdded = SignalModule.new(),
@@ -679,11 +784,20 @@ function Instance.NewBase(className: string, name: string?): Instance
 	return self
 end
 
+-- Via de engenharia abaixo do enforcement de ClassSchema — NUNCA consulta `data.classSchema`,
+-- de propósito (Decisão 6 do desenho de services). É o que permite `services` instalar valores
+-- sobre uma entrada `ReadOnly` (ex.: o Heartbeat do Scheduler sobre `RunService.Heartbeat`) e
+-- `cli` guardar/ler `Script.Source` (fora do schema) sem passar pelo enforcement que
+-- InstanceMeta.__index/__newindex aplicam ao script do usuário.
 function Instance.GetPropertyRaw(instance: Instance, name: string): unknown
 	local data = getInternal(instance)
 	return data.properties[name]
 end
 
+-- Mesma via de engenharia de GetPropertyRaw, acima — nunca consulta o schema. Dispara Changed
+-- normalmente (diferente da semeadura de defaults em SetClassSchema, que é silenciosa de
+-- propósito): esta função representa uma MUDANÇA de propriedade feita por `services`/`cli`, não
+-- o estado inicial de uma instância recém-criada.
 function Instance.SetPropertyRaw(instance: Instance, name: string, value: unknown): ()
 	local data = getInternal(instance)
 	data.properties[name] = value
@@ -747,6 +861,81 @@ function Instance.SetClassMethods(instance: Instance, methods: ClassMethods): ()
 
 	local data = getInternal(instance)
 	data.classMethods = methods
+end
+
+local VALID_MEMBER_KINDS: { [string]: boolean } = {
+	Property = true,
+	Event = true,
+	Callback = true,
+}
+
+-- Memoização da validação de SetClassSchema por IDENTIDADE da tabela de schema — mesmo padrão de
+-- `validatedClassMethodTables`, acima: ClassRegistry passa sempre a MESMA tabela
+-- achatada+congelada para todas as instâncias de uma classe, então a varredura completa roda uma
+-- vez por classe.
+local validatedClassSchemas: { [ClassSchema]: boolean } =
+	(setmetatable({}, { __mode = "k" }) :: unknown) :: { [ClassSchema]: boolean }
+
+-- Chamada por ClassRegistry.new, DEPOIS de SetClassChain/SetClassMethods e ANTES de Initialize
+-- (mesma ordem e mesma razão já documentadas para SetClassMethods, acima). NÃO copia `schema`:
+-- guarda a REFERÊNCIA (uma tabela por classe, compartilhada por todas as instâncias dela).
+--
+-- Mesma disciplina de SetClassMethods (validação memoizada por identidade, tabela precisa estar
+-- congelada), MAS com uma diferença deliberada (arquiteto-services-2026-09-05.md, "Decisão 6",
+-- item 3): NÃO rejeita colisão com a superfície fixa de Instance — o schema de "Instance" contém
+-- legitimamente Name/Parent/ClassName/Changed, e InstanceMeta.__index/__newindex já tratam esses
+-- nomes nos passos 1-2, antes de olhar o schema (ver acima). A validação aqui cobre só
+-- congelamento e FORMA do descritor (Kind é um dos três valores válidos, ReadOnly é boolean) —
+-- nunca o "o quê" do schema, que é responsabilidade do gerador de `services`.
+--
+-- Ao contrário de SetClassMethods (que só instala a referência), esta função também SEMEIA o
+-- estado inicial da instância: para cada entrada do schema, grava o `Default` direto em
+-- `data.properties` — ou, para `Kind == "Event"`, um `Signal.new()` FRESCO por instância (nunca
+-- compartilhado da tabela congelada: um Signal é por instância, `Default` não serve pra isso,
+-- arquiteto-services-2026-09-05.md, "Decisão 6", item 1). A semeadura roda SEM passar por
+-- SetPropertyRaw de propósito — grava direto em `data.properties`, sem chamar `data.changed:Fire`
+-- — porque o estado inicial de uma instância recém-criada não é uma "mudança" observável
+-- (acceptance de task-runtime-018: "defaults do schema são semeados sem disparar Changed").
+function Instance.SetClassSchema(instance: Instance, schema: ClassSchema): ()
+	if validatedClassSchemas[schema] == nil then
+		if not table.isfrozen(schema) then
+			error(
+				"Instance.SetClassSchema: a tabela de schema precisa estar congelada (table.freeze) antes de ser instalada — é compartilhada por todas as instâncias da classe e não pode ser mutável depois",
+				2
+			)
+		end
+
+		for key, descriptor in schema do
+			if typeof(descriptor) ~= "table" then
+				error(
+					`Instance.SetClassSchema: o descritor de '{key}' precisa ser uma tabela (MemberDescriptor), recebeu {typeof(descriptor)}`,
+					2
+				)
+			end
+			if not VALID_MEMBER_KINDS[descriptor.Kind] then
+				error(
+					`Instance.SetClassSchema: Kind de '{key}' precisa ser "Property", "Event" ou "Callback", recebeu {tostring(descriptor.Kind)}`,
+					2
+				)
+			end
+			if typeof(descriptor.ReadOnly) ~= "boolean" then
+				error(`Instance.SetClassSchema: ReadOnly de '{key}' precisa ser boolean, recebeu {typeof(descriptor.ReadOnly)}`, 2)
+			end
+		end
+
+		validatedClassSchemas[schema] = true
+	end
+
+	local data = getInternal(instance)
+	data.classSchema = schema
+
+	for key, descriptor in schema do
+		if descriptor.Kind == "Event" then
+			data.properties[key] = SignalModule.new()
+		else
+			data.properties[key] = descriptor.Default
+		end
+	end
 end
 
 return Instance
