@@ -104,7 +104,9 @@
       "id": "task-runtime-005",
       "title": "Implementar DataModel (raiz da árvore, equivalente a game)",
       "description": "Criar src/runtime/DataModel.luau: export type DataModel = Instance & {GetService: (self, className: string) -> Instance, FindService: (self, className: string) -> Instance?}. DataModel.new(): DataModel. GetService cria o singleton via ClassRegistry.new na primeira chamada (só se o ClassDescriptor tiver IsService = true, senão erro claro) e parenteia direto sob a raiz com Name == ClassName, igual ao Roblox real; chamadas seguintes devolvem o mesmo singleton. FindService só consulta, nunca cria. Depende de task-runtime-002 (Instance.luau) e task-runtime-004 (ClassRegistry.luau).",
-      "column": "todo",
+      "column": "done",
+      "reviewResult": "APROVADO. Revisor rodou 20 checks proprios (rawequal de identidade, escrita de nil e funcao sobre GetService/FindService, funcionalidade pos-rejeicao, isolamento entre duas raizes). Decisoes do coder (SetClassChain direto sem registrar no ClassRegistry, protecao via SetClassMethods) confirmadas corretas e ja pre-aprovadas pelo arquiteto. Achado BAIXO nao bloqueante: GetService pode ser enganado se services deixar Service ser instanciavel via ClassRegistry.new livre -- virou task-runtime-019 (backlog, aguarda services). Relatorio: nenhum arquivo longo salvo, resumo no proprio retorno do agente.",
+      "result": "DataModel.luau + DataModel.spec.luau criados. 9/9 testes. Cadeia DataModel->ServiceProvider->Instance aplicada explicitamente via SetClassChain (sem registrar no ClassRegistry, decisao documentada). GetService/FindService protegidos via SetClassMethods. Regressao total intacta (Signal 6/6, Instance 33/33, Scheduler 12/12, Integration 9/9, Sandbox 7/7, ClassRegistry 17/17). luau-lsp limpo, zero any.",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 5,
@@ -154,7 +156,7 @@
       "id": "task-runtime-007",
       "title": "Criar src/runtime/init.luau (ponto de entrada público) + teste de integração do runtime",
       "description": "Criar src/runtime/init.luau agregando e reexportando a API pública de todos os módulos anteriores sob os namespaces Runtime.Signal/.Instance/.ClassRegistry/.DataModel/.Scheduler/.Sandbox, exatamente como especificado na seção 'Contrato entre territórios' do desenho em .claude/agents-memory/arquiteto-runtime-2026-09-04.md -- esse é o único arquivo que services/cli devem importar (require direto de um módulo individual dentro de src/runtime/ por fora deste agregador é erro de design). Reexportar todos os export type listados no desenho (Signal<T...>, Connection, Instance, ClassDescriptor, DataModel, Scheduler, TaskHandle, SandboxOptions, SandboxResult, OutputRecord, OutputLevel). Incluir um teste de integração leve: registrar uma classe de teste via ClassRegistry.Register, criar DataModel, instanciar via ClassRegistry.new, montar hierarquia com .Parent, rodar um Sandbox.Run que usa Instance.new/task.wait/WaitForChild de verdade e confirma que um erro proposital não derruba o processo. Depende de todas as tasks anteriores (001-006).",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 6,
@@ -252,7 +254,8 @@
       "id": "task-runtime-011",
       "title": "Scheduler:Cancel() deve desconectar listeners de Signal registrados pela thread cancelada",
       "description": "Achado MÉDIO do revisor-runtime na revisão de task-runtime-008 (.claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md), confirmado empiricamente: Scheduler:Cancel(handle) remove o bookkeeping da thread no Scheduler, mas não desconecta a Connection que essa thread tinha registrado num Signal alheio (ex: ChildAdded de um WaitForChild com timeout que corre via ThreadBroker, ou qualquer Signal:Wait() pendente). O listener fica pendurado até o evento disparar de novo (autolimpa sozinho aí, sem crash) ou para sempre se nunca disparar -- vazamento de memória/CPU de baixo grau, não corrompe estado. Não é regressão do patch de task-runtime-008, é lacuna pré-existente na fronteira Scheduler<->Signal que só ficou visível depois do bookkeeping de threads ficar correto. Não bloqueia release do runtime, mas services vai depender pesado de Cancel (ex: destruir um NPC no meio de um WaitForChild) então precisa ser resolvido antes de task-runtime-004/005/006 assumirem que Cancel é seguro sem vazar.",
-      "column": "todo",
+      "column": "done",
+      "result": "ThreadBroker.RegisterCleanup/RunCleanups criados (infraestrutura). Scheduler:Cancel chama RunCleanups no momento do cancelamento. 16/16 testes (12+4 novos). Regressao total intacta. PENDENCIA DECLARADA PELO PROPRIO CODER: Instance.luau (ramo B de WaitForChild) e Signal.luau (Wait, listener Once interno) ainda NAO chamam RegisterCleanup -- estavam fora do territorio desta tarefa. O vazamento real de producao continua aberto, so a infraestrutura existe. Virou task-runtime-020.",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 6,
@@ -269,13 +272,14 @@
         "task-runtime-008"
       ],
       "createdAt": "2026-09-04",
-      "updatedAt": "2026-09-04"
+      "updatedAt": "2026-09-04",
+      "reviewResult": "APROVADO para o escopo da infraestrutura. Revisor confirmou pcall isolando erro entre limpezas, RunCleanups chamado antes de coroutine.close (sem janela pos-morte), sem duplicacao entre poda natural e Cancel, coroutine.resume continua em ponto unico. Vazamento real de producao (Instance.luau/Signal.luau nao chamam RegisterCleanup) segue aberto ate task-runtime-020, nao bloqueia esta aprovacao."
     },
     {
       "id": "task-runtime-012",
       "title": "Isolar cenários 1/2/3a/3b de Integration.spec.luau da rede de segurança de IsAlive()",
       "description": "Achado MÉDIO do revisor-runtime na revisão de task-runtime-009 (.claude/agents-memory/revisor-runtime-integration-spec-2026-09-04.md). Scheduler.IsAlive() poda liveThreads por coroutine.status como rede de segurança (adicionada em task-runtime-008) -- isso é correto e desejado em produção, mas faz com que os cenários 1/2/3a/3b de Integration.spec.luau passem mesmo se APENAS Signal.luau regredir (Wait() voltando a coroutine.resume cru), porque a rede de segurança de IsAlive() se autocorrige a cada chamada independente do que Signal.luau faz. Só o cenário 6 (via ThreadError) pegaria essa regressão isolada. Adicionar aos cenários 1/2/3a/3b uma asserção adicional que não dependa só de IsAlive() -- por exemplo, inspecionar diretamente se a Connection que Signal:Wait() criou internamente foi desconectada, ou contar quantas vezes um hook de instrumentação foi chamado -- de forma que uma regressão confinada a Signal.luau também derrube esses cenários, não só o 6. Não enfraquecer a rede de segurança de IsAlive() em si (ela é uma correção deliberada de task-runtime-008).",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 6,
@@ -289,8 +293,10 @@
       "depends": [
         "task-runtime-009"
       ],
+      "result": "Adicionada instrumentação via ThreadBroker.IsManaged(handle) (módulo-folha do próprio território, require direto do arquivo de teste, mesmo padrão já usado para Scheduler/Instance -- não faz parte da API pública reexportada por init.luau, mas isso restringe services/cli, não um teste de caixa-branca dentro de runtime). Cenários 1/2: checado direto após StepOnce/child.Parent=parent, antes de qualquer chamada a IsAlive() (StepOnce não chama IsAlive internamente). Cenários 3a/3b: como Run() chama IsAlive() internamente logo após cada tick (o que cicatrizaria o vazamento antes de devolver o controle ao teste), foi adicionado um segundo listener (Heartbeat:Once / ChildAdded:Once) registrado DEPOIS do Spawn alvo -- a ordem de Connect/Once determina a ordem de disparo dentro do mesmo Fire, então esse probe roda logo depois da continuação de Wait() ter (ou não) chamado ThreadBroker.Release, ainda dentro do mesmo tick, antes de Run() poder rechamar IsAlive(). Validado revertendo Signal.luau (Wait() para coroutine.resume cru) numa cópia de scratch fora do repo (%TEMP%\\luaubench-task-runtime-012-repro, removida ao final): com a regressão isolada, cenários 1, 2, 3a, 3b E 6 falham (4/9, harness diagnóstico com pcall só na cópia de scratch para ver todos de uma vez); com Signal.luau original, 9/9. Contra o código real (não revertido): Integration.spec 9/9, Signal.spec 6/6, Instance.spec 33/33, Scheduler.spec 12/12 (nenhum desses três specs alterado). luau-lsp analyze --platform=standard limpo (exit 0); zero ocorrências de 'any'. Território: só src/runtime/Integration.spec.luau tocado (git diff --stat confirma); Scheduler.luau/ThreadBroker.luau/DataModel.luau aparecem modificados/novos no git status por causa de task-runtime-011/005 rodando em paralelo, não por este trabalho.",
       "createdAt": "2026-09-04",
-      "updatedAt": "2026-09-04"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "APROVADO. Revisor reproduziu a regressao isolada em sandbox fora do repo (cenarios 1/2/3a/3b/6 falham, byte a byte com o relatado), confirmou que a rede de seguranca de IsAlive() nao foi tocada, e confirmou por leitura de codigo que a tecnica do segundo listener e deterministica (ordem de insercao no array, sem yield entre listeners), nao corrida por timing."
     },
     {
       "id": "task-runtime-013",
@@ -416,6 +422,30 @@
       "note": "Deve entrar JUNTO com a primeira classe real de services (não antes): o modo estrito precisa nascer com pelo menos uma classe que o exercite de ponta a ponta, senão é código sem consumidor. Enquanto isso a divergência fica declarada no código pelos comentários de task-runtime-016 — não é omissão silenciosa.",
       "createdAt": "2026-09-04",
       "updatedAt": "2026-09-04"
+    },
+    {
+      "id": "task-runtime-020",
+      "title": "Fechar o vazamento real: Instance.luau e Signal.luau chamando ThreadBroker.RegisterCleanup",
+      "description": "A infraestrutura de limpeza (ThreadBroker.RegisterCleanup/RunCleanups, Scheduler:Cancel chamando RunCleanups) ja existe e esta testada (task-runtime-011), mas os dois pontos de producao que de fato vazam ficaram fora do territorio daquela tarefa. Contexto completo em .claude/agents-memory/ (relatorio do coder de task-runtime-011, secao PENDENCIA DECLARADA nos cabecalhos de ThreadBroker.luau e Scheduler.luau). Escopo: (1) Instance.luau, ramo B (gerido) de WaitForChild com timeout: logo apos criar a Connection de data.childAdded:Connect, chamar ThreadBroker.RegisterCleanup(coroutine.running(), function() connection:Disconnect() end). (2) Signal.luau, Wait(): em torno do listener interno criado via connect(listeners, ..., true) (o Once que Wait usa por baixo), registrar a mesma limpeza -- mas SEM importar ThreadBroker.luau em Signal.luau (Signal.luau nao deve ganhar dependencia nova de modulo do runtime; usar o mesmo padrao de deteccao opcional que Wait ja usa hoje via table de fallback, ou expor um hook fraco -- decidir a forma mais simples que nao viole a regra de Signal.luau ficar sem dependencia de Scheduler/ThreadBroker; se nao houver jeito limpo, reportar ao arquiteto em vez de forcar). (3) Teste reproduzindo cancelamento de verdade: task.spawn real chamando Instance:WaitForChild(nome, timeout) sob um Scheduler:Run() de verdade, cancelado no meio via Scheduler:Cancel(handle), confirmando que a Connection de childAdded foi desconectada (contagem de listeners cai a zero) -- e o mesmo para uma thread parada em Signal:Wait() cancelada no meio. Regressao total obrigatoria (Signal/Instance/Scheduler/ThreadBroker/ClassRegistry/DataModel/Sandbox/Integration) sem alterar nenhum arquivo alem do escopo desta tarefa.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 6,
+      "tags": [
+        "runtime",
+        "scheduler",
+        "signal",
+        "instance",
+        "cleanup",
+        "correcao-de-revisao"
+      ],
+      "priority": "medium",
+      "acceptance": "Cancelar um task.spawn real parado em Instance:WaitForChild(nome, timeout) desconecta a Connection de childAdded no momento do Cancel (nao espera o evento disparar de novo); cancelar uma thread parada em Signal:Wait() idem para o listener interno; nenhuma dependencia nova de modulo introduzida em Signal.luau se isso violar a regra de modulo-folha (decisao documentada no codigo se precisar de solucao alternativa); regressao total intacta; luau-lsp limpo; zero any.",
+      "depends": [
+        "task-runtime-011"
+      ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
     }
   ]
 }

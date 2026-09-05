@@ -54,6 +54,19 @@
 	precisa lidar com o erro de CONTINUAÇÃO de um `Wait()` (que agora vira ThreadError direto
 	via o driver), só com erro genuíno de callback de listener quando `Signal.Fire` não
 	encontra dono para a thread hospedeira.
+
+	Achado MÉDIO RESOLVIDO nesta revisão (task-runtime-011, ver
+	.claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md): `Cancel` desfazia
+	só o bookkeeping do próprio Scheduler (fila/liveThreads/driver), nunca a Connection que a
+	thread cancelada tinha registrado num Signal alheio (ChildAdded de um WaitForChild com
+	timeout, listener interno de Signal:Wait) — o listener ficava pendurado até o Signal
+	disparar de novo, ou para sempre. `resumeThread`/`Cancel`/`IsAlive` agora chamam
+	`ThreadBroker.RunCleanups(co)` em todo ponto em que já podavam `liveThreads`/`driver` por a
+	thread não poder mais ser retomada — ver ThreadBroker.luau para o mecanismo
+	(RegisterCleanup/RunCleanups) e a PENDÊNCIA DECLARADA lá: o mecanismo está pronto e testado
+	aqui, mas Instance.luau/Signal.luau (fora do território desta tarefa) ainda não chamam
+	`ThreadBroker.RegisterCleanup` nos dois pontos de criação de Connection que vazam — fechar
+	o vazamento relatado de fato exige uma tarefa de acompanhamento que toque esses arquivos.
 ]]
 
 local Signal = require("./Signal")
@@ -203,6 +216,10 @@ local function resumeThread<A...>(self: Internal, co: thread, ...: A...)
 		if coroutine.status(co) == "dead" then
 			self.liveThreads[co] = nil
 			ThreadBroker.Release(co)
+			-- task-runtime-011: por simetria com Cancel (ver comentário de topo do módulo),
+			-- roda também aqui qualquer limpeza pendente de uma thread que morreu por um
+			-- caminho que não passou por Cancel -- no-op para quem nunca registrou nada.
+			ThreadBroker.RunCleanups(co)
 		end
 		return
 	end
@@ -210,12 +227,14 @@ local function resumeThread<A...>(self: Internal, co: thread, ...: A...)
 	if not ok then
 		self.liveThreads[co] = nil
 		ThreadBroker.Release(co)
+		ThreadBroker.RunCleanups(co)
 		self.threadErrorSignal:Fire(co, tostring(err))
 		return
 	end
 	if coroutine.status(co) == "dead" then
 		self.liveThreads[co] = nil
 		ThreadBroker.Release(co)
+		ThreadBroker.RunCleanups(co)
 	end
 end
 
@@ -389,6 +408,11 @@ function Scheduler.Cancel(self: Internal, handle: TaskHandle)
 	removeFromQueues(self, handle)
 	self.liveThreads[handle] = nil
 	ThreadBroker.Release(handle)
+	-- task-runtime-011: desconecta, no MOMENTO do cancelamento, toda Connection que a thread
+	-- cancelada registrou via ThreadBroker.RegisterCleanup -- não espera o Signal de origem
+	-- disparar de novo (ver ThreadBroker.luau para o mecanismo e a pendência declarada sobre
+	-- Instance.luau/Signal.luau ainda não chamarem RegisterCleanup nos pontos que vazam hoje).
+	ThreadBroker.RunCleanups(handle)
 	local status = coroutine.status(handle)
 	if status ~= "running" and status ~= "normal" then
 		-- Segue a doc do Roblox real: Cancel fecha a thread, nunca deixa retomar de novo
@@ -406,6 +430,7 @@ function Scheduler.IsAlive(self: Internal): boolean
 		if coroutine.status(co) == "dead" then
 			self.liveThreads[co] = nil
 			ThreadBroker.Release(co)
+			ThreadBroker.RunCleanups(co)
 		end
 	end
 	if next(self.liveThreads) ~= nil then

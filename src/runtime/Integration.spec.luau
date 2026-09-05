@@ -22,12 +22,35 @@
 	(regra 01/acceptance da tarefa). As asserções confirmam explicitamente que a guarda NUNCA
 	foi o motivo real do término do laço.
 
+	CORREÇÃO task-runtime-012 (achado MÉDIO da revisão de task-runtime-009, ver
+	.claude/agents-memory/revisor-runtime-integration-spec-2026-09-04.md): os cenários 1/2/3a/
+	3b só afirmavam `scheduler:IsAlive() == false` (direto ou via `Run()`) como prova de que
+	`Signal:Wait()` roteia a retomada por `ThreadBroker.Resume` (ponto único de resume do
+	Scheduler). Mas `Scheduler.IsAlive()` tem sua PRÓPRIA rede de segurança independente
+	(`Scheduler.luau:400-418`) que poda `liveThreads`/libera `ThreadBroker` por
+	`coroutine.status(co) == "dead"` toda vez que é chamada -- ela sozinha já mascarava uma
+	regressão confinada a `Signal.luau` (`Wait()` voltando a `coroutine.resume` cru), porque o
+	simples fato de chamar `IsAlive()` depois já limpa o estado, não importa quem resumiu a
+	coroutine. Cada um dos quatro cenários abaixo ganhou uma instrumentação adicional que
+	verifica `ThreadBroker.IsManaged(handle)` no momento exato em que a continuação do
+	`Wait()`/`WaitForChild` roda -- ANTES de qualquer chamada (própria ou de `Run()`) a
+	`IsAlive()` ter chance de cicatrizar o vazamento -- para que uma regressão isolada em
+	`Signal.luau` derrube 1/2/3a/3b diretamente, não só o cenário 6 (via `ThreadError`). Ver o
+	comentário de cada cenário para o raciocínio específico.
+
 	Roda com `lune run src/runtime/Integration.spec.luau`.
 ]]
 
 local process = require("@lune/process")
 local Scheduler = require("./Scheduler")
 local InstanceModule = require("./Instance")
+-- Módulo-folha interno do território (ver ThreadBroker.luau) -- não faz parte da API pública
+-- reexportada por init.luau para services/cli, mas este é um teste de caixa-branca DENTRO do
+-- próprio território runtime (mesmo padrão já usado aqui para Scheduler/Instance): precisa
+-- inspecionar se uma thread ainda está "adotada" por um driver para distinguir a correção real
+-- (roteamento por ThreadBroker.Resume) da rede de segurança independente de IsAlive() -- ver
+-- nota task-runtime-012 acima.
+local ThreadBroker = require("./ThreadBroker")
 
 local passedCount = 0
 local totalCount = 0
@@ -87,6 +110,18 @@ test("1. Spawn + Heartbeat:Wait() + StepOnce -> thread termina e IsAlive() fica 
 
 	assert(finished, "a thread deveria ter terminado depois que Heartbeat disparou em StepOnce")
 	assert(coroutine.status(handle) == "dead", "a coroutine deveria estar morta (dead) após a thread terminar")
+	-- Instrumentação task-runtime-012: checada ANTES de qualquer chamada a IsAlive() (a
+	-- primeira chamada real é a asserção seguinte) -- `StepOnce` não chama `IsAlive()`
+	-- internamente, então neste ponto exato o único jeito de `ThreadBroker` já não estar mais
+	-- "managed" para `handle` é `resumeThread` ter rodado de verdade a partir da continuação
+	-- de `Heartbeat:Wait()` (via `ThreadBroker.Resume`, dentro de `Signal.luau:Wait`). Se
+	-- `Signal:Wait()` regredisse para `coroutine.resume` cru, a coroutine ainda morreria (a
+	-- asserção acima continuaria passando), mas `ThreadBroker.Release` nunca seria chamado
+	-- aqui -- só a rede de segurança de IsAlive() (achado desta tarefa) esconderia isso.
+	assert(
+		not ThreadBroker.IsManaged(handle),
+		"ThreadBroker deveria ter liberado esta thread (via resumeThread, chamado a partir do roteamento de Signal:Wait por ThreadBroker.Resume) assim que ela terminou -- ainda estar 'managed' aqui indica que algo resumiu a coroutine por fora do ponto único do driver (ex.: Signal:Wait() regredindo para coroutine.resume cru) -- task-runtime-012"
+	)
 	assert(not scheduler:IsAlive(), "depois que a thread terminou e nada mais está pendente, IsAlive() deveria ser false")
 end)
 
@@ -99,7 +134,7 @@ test("2. Spawn + WaitForChild sem timeout + Parent -> resolve e IsAlive() fica f
 	local parent = InstanceModule.NewBase("Folder", "Parent")
 	local found: InstanceModule.Instance? = nil
 
-	scheduler:Spawn(function()
+	local handle = scheduler:Spawn(function()
 		found = parent:WaitForChild("Child")
 	end)
 
@@ -111,6 +146,16 @@ test("2. Spawn + WaitForChild sem timeout + Parent -> resolve e IsAlive() fica f
 
 	assert(found ~= nil, "WaitForChild deveria ter resolvido depois de Parent ser setado")
 	assert((found :: InstanceModule.Instance).Name == "Child", "WaitForChild deveria ter resolvido com o filho certo")
+	-- Instrumentação task-runtime-012 (mesmo raciocínio do cenário 1, ver comentário lá):
+	-- checada ANTES de qualquer chamada a IsAlive() -- nada entre `child.Parent = parent`
+	-- (que resolveu WaitForChild síncronamente, via `data.childAdded:Wait()` dentro do laço
+	-- de Methods.WaitForChild) e esta linha chama IsAlive(). Se `Signal:Wait()` regredisse
+	-- para coroutine.resume cru, a resolução acima ainda aconteceria (found/Name já
+	-- corretos), mas ThreadBroker.Release nunca seria chamado para `handle` aqui.
+	assert(
+		not ThreadBroker.IsManaged(handle),
+		"ThreadBroker deveria ter liberado esta thread assim que WaitForChild resolveu via ChildAdded -- ainda estar 'managed' aqui indica que Signal:Wait() (usado por WaitForChild sem timeout) resumiu por fora do ponto único do driver -- task-runtime-012"
+	)
 	assert(not scheduler:IsAlive(), "depois que a thread resolveu e nada mais está pendente, IsAlive() deveria ser false")
 end)
 
@@ -122,9 +167,25 @@ test("3a. Run() termina sozinho por IsAlive() ficar false, não pela guarda (cas
 	local scheduler = Scheduler.new()
 	local finished = false
 
-	scheduler:Spawn(function()
+	local handle = scheduler:Spawn(function()
 		scheduler.Heartbeat:Wait()
 		finished = true
+	end)
+
+	-- Instrumentação task-runtime-012: diferente dos cenários 1/2, aqui a resolução acontece
+	-- DENTRO do laço de `Scheduler:Run()`, que chama `IsAlive()` (com sua própria rede de
+	-- segurança) logo depois de cada `tick()` -- checar `ThreadBroker.IsManaged(handle)` só
+	-- DEPOIS de `Run()` retornar já não provaria nada (o próprio `Run()` já teria cicatrizado
+	-- o vazamento internamente antes de devolver o controle). Em vez disso, conecta-se um
+	-- segundo listener (Once, para não manter Heartbeat "vivo" para sempre e prender Run() em
+	-- loop) a `scheduler.Heartbeat` DEPOIS do Spawn -- a ordem de registro é a ordem de
+	-- disparo dentro do MESMO Fire (Signal.luau documenta isso), então este listener roda
+	-- logo depois do listener interno de `Wait()` já ter (ou não) rodado `resumeThread`, ainda
+	-- dentro do mesmo `tick()`/`Fire`, antes de `Run()` recuperar o controle e chamar
+	-- `IsAlive()` de novo.
+	local capturedManagedDuringFire: boolean? = nil
+	scheduler.Heartbeat:Once(function()
+		capturedManagedDuringFire = ThreadBroker.IsManaged(handle)
 	end)
 
 	local guardTriggered = runWithGuard(scheduler, RUN_GUARD_SECONDS)
@@ -132,6 +193,11 @@ test("3a. Run() termina sozinho por IsAlive() ficar false, não pela guarda (cas
 	assert(finished, "a thread deveria ter terminado durante Run()")
 	assert(not scheduler:IsAlive(), "Run() só deveria ter retornado com IsAlive() já false")
 	assert(not guardTriggered, "o término de Run() não deveria ter sido causado pela guarda de tempo, e sim por IsAlive() ficar false sozinho")
+	assert(capturedManagedDuringFire ~= nil, "o listener de instrumentação deveria ter disparado durante Run()")
+	assert(
+		capturedManagedDuringFire == false,
+		"logo após a continuação de Heartbeat:Wait() rodar (mesmo Fire, antes de Run() poder rechamar IsAlive()), ThreadBroker já deveria ter liberado a thread -- ainda 'managed' aqui indica que Signal:Wait() resumiu por fora do ponto único do driver -- é exatamente a regressão que a rede de segurança de IsAlive() sozinha mascararia (task-runtime-012)"
+	)
 end)
 
 test("3b. Run() termina sozinho por IsAlive() ficar false, não pela guarda (caso WaitForChild + Parent)", function()
@@ -139,9 +205,21 @@ test("3b. Run() termina sozinho por IsAlive() ficar false, não pela guarda (cas
 	local parent = InstanceModule.NewBase("Folder", "Parent")
 	local found: InstanceModule.Instance? = nil
 
-	scheduler:Spawn(function()
+	local handle = scheduler:Spawn(function()
 		found = parent:WaitForChild("Child")
 	end)
+
+	-- Instrumentação task-runtime-012 (mesmo raciocínio do cenário 3a, ver comentário lá, mas
+	-- observando `ChildAdded` em vez de `Heartbeat` -- é o Signal que `WaitForChild` sem
+	-- timeout usa por baixo). Conectado (Once) DEPOIS do Spawn acima, para disparar DEPOIS do
+	-- listener interno de `Wait()` dentro do mesmo Fire de ChildAdded, e ANTES do Spawn
+	-- abaixo, cuja continuação (depois de `scheduler:Wait(0.02)`) é quem depois dispara esse
+	-- ChildAdded ao setar `child.Parent = parent`.
+	local capturedManagedDuringFire: boolean? = nil
+	parent.ChildAdded:Once(function(_child: InstanceModule.Instance)
+		capturedManagedDuringFire = ThreadBroker.IsManaged(handle)
+	end)
+
 	scheduler:Spawn(function()
 		-- Wait real pequeno: garante que a resolução acontece DENTRO do laço de Run() (mais
 		-- de um tique), não já no primeiro Spawn síncrono, exercitando o laço de verdade.
@@ -156,6 +234,11 @@ test("3b. Run() termina sozinho por IsAlive() ficar false, não pela guarda (cas
 	assert((found :: InstanceModule.Instance).Name == "Child", "deveria ter resolvido com o filho certo")
 	assert(not scheduler:IsAlive(), "Run() só deveria ter retornado com IsAlive() já false")
 	assert(not guardTriggered, "o término de Run() não deveria ter sido causado pela guarda de tempo, e sim por IsAlive() ficar false sozinho")
+	assert(capturedManagedDuringFire ~= nil, "o listener de instrumentação deveria ter disparado durante Run()")
+	assert(
+		capturedManagedDuringFire == false,
+		"logo após a continuação de WaitForChild (via ChildAdded) rodar (mesmo Fire, antes de Run() poder rechamar IsAlive()), ThreadBroker já deveria ter liberado a thread -- ainda 'managed' aqui indica que Signal:Wait() resumiu por fora do ponto único do driver (task-runtime-012)"
+	)
 end)
 
 -- ── Cenário 4 ──────────────────────────────────────────────────────────────────────────

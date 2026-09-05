@@ -7,11 +7,19 @@
 	o caso propagado por Signal:Wait -- ver comentário em Scheduler.luau), Heartbeat/Stepped
 	com deltaTime real e ordem relativa entre si, Delay/Defer, Cancel, e IsAlive.
 
+	task-runtime-011 acrescenta os testes de `ThreadBroker.RegisterCleanup`/`RunCleanups`
+	(achado MÉDIO de task-runtime-008 -- Cancel não desconectava Connection que a thread
+	cancelada tinha registrado num Signal alheio): requer `ThreadBroker.luau` e `Signal.luau`
+	diretamente, mesmo padrão de teste de caixa-branca já usado em Integration.spec.luau
+	(task-runtime-012) para inspecionar o território `runtime` por dentro.
+
 	Roda com `lune run src/runtime/Scheduler.spec.luau`.
 ]]
 
 local process = require("@lune/process")
 local Scheduler = require("./Scheduler")
+local ThreadBroker = require("./ThreadBroker")
+local Signal = require("./Signal")
 
 local passedCount = 0
 local totalCount = 0
@@ -252,6 +260,97 @@ test("Run() roda até IsAlive() ficar falso e retorna sozinho (task.wait real, c
 	assert(order[3] == "A-end", "A (wait mais curto) deveria terminar antes de B")
 	assert(order[4] == "B-end", "B deveria terminar por último")
 	assert(not scheduler:IsAlive(), "depois de Run() retornar, não deveria sobrar nada pendente")
+end)
+
+test("Cancel desconecta, no momento do cancelamento, uma Connection registrada via ThreadBroker.RegisterCleanup pela thread cancelada (repro do achado de task-runtime-011 -- padrão do ramo B de WaitForChild com timeout)", function()
+	local scheduler = Scheduler.new()
+	-- Simula o padrão de Instance:WaitForChild com timeout (Instance.luau, fora do território
+	-- desta tarefa): a thread gerida conecta (Connect, NÃO Once -- não se autolimpa num Fire
+	-- genérico que não bata o alvo esperado) um listener num Signal alheio e registra a
+	-- própria desconexão como limpeza da thread, para o Scheduler poder desfazer no Cancel
+	-- sem esperar o evento disparar de novo.
+	local childAdded: Signal.FireableSignal<string> = Signal.new()
+	local capturedConnection: Signal.Connection? = nil
+
+	local handle = scheduler:Spawn(function()
+		local co = coroutine.running()
+		local connection = childAdded:Connect(function(_name: string) end)
+		capturedConnection = connection
+		ThreadBroker.RegisterCleanup(co, function()
+			connection:Disconnect()
+		end)
+		scheduler:Wait(10) -- mantém a thread suspensa, como o WakeAfter de WaitForChild faria
+	end)
+
+	assert(capturedConnection ~= nil, "a thread deveria ter conectado o listener antes do primeiro yield (Spawn roda síncrono até lá)")
+	assert((capturedConnection :: Signal.Connection).Connected, "listener deveria estar conectado antes do Cancel")
+
+	scheduler:Cancel(handle)
+
+	assert(
+		not (capturedConnection :: Signal.Connection).Connected,
+		"Cancel deveria ter desconectado o listener no PRÓPRIO momento do cancelamento, sem esperar childAdded disparar de novo"
+	)
+end)
+
+test("RunCleanups (via Cancel) isola erro entre múltiplas limpezas da mesma thread -- uma falhar não impede as demais nem propaga para quem chamou Cancel", function()
+	local scheduler = Scheduler.new()
+	local secondRan = false
+
+	local handle = scheduler:Spawn(function()
+		local co = coroutine.running()
+		ThreadBroker.RegisterCleanup(co, function()
+			error("limpeza 1 falhou de propósito")
+		end)
+		ThreadBroker.RegisterCleanup(co, function()
+			secondRan = true
+		end)
+		scheduler:Wait(10)
+	end)
+
+	local ok = pcall(function()
+		scheduler:Cancel(handle)
+	end)
+
+	assert(ok, "Cancel não pode propagar erro de uma limpeza que falhou")
+	assert(secondRan, "a segunda limpeza registrada para a mesma thread deveria rodar mesmo com a primeira falhando")
+end)
+
+test("ThreadBroker.RegisterCleanup devolve desregistro idempotente -- limpeza desregistrada antes do Cancel não roda mais", function()
+	local scheduler = Scheduler.new()
+	local ran = false
+	local unregister: (() -> ())? = nil
+
+	local handle = scheduler:Spawn(function()
+		local co = coroutine.running()
+		unregister = ThreadBroker.RegisterCleanup(co, function()
+			ran = true
+		end)
+		scheduler:Wait(10)
+	end)
+
+	assert(unregister ~= nil, "RegisterCleanup deveria ter devolvido a função de desregistro")
+	local doUnregister = unregister :: () -> ()
+	doUnregister()
+	-- Chamar de novo deveria ser no-op (idempotente), nunca erro nem duplicar a remoção.
+	doUnregister()
+
+	scheduler:Cancel(handle)
+
+	assert(not ran, "limpeza desregistrada antes do Cancel não deveria rodar quando a thread for cancelada")
+end)
+
+test("Cancel de uma thread sem nenhuma limpeza registrada continua no-op seguro (RunCleanups não exige registro prévio)", function()
+	local scheduler = Scheduler.new()
+	local handle = scheduler:Spawn(function()
+		scheduler:Wait(10)
+	end)
+
+	local ok = pcall(function()
+		scheduler:Cancel(handle)
+	end)
+
+	assert(ok, "Cancel de thread sem limpezas registradas nunca deveria lançar erro")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

@@ -25,6 +25,30 @@
 
 	NÃO reexportado por src/runtime/init.luau — é plumbing interno de `runtime`; `services`/
 	`cli` nunca o tocam nem sabem que existe.
+
+	task-runtime-011 (achado MÉDIO de task-runtime-008, ver
+	.claude/agents-memory/revisor-runtime-patch-threadbroker-2026-09-04.md): `Scheduler:Cancel`
+	só desfazia o bookkeeping do próprio Scheduler — uma Connection que a thread cancelada
+	tinha registrado num Signal alheio (ex: ChildAdded de um WaitForChild com timeout, ou o
+	listener interno de Signal:Wait) ficava pendurada até o evento disparar de novo (ou para
+	sempre). RegisterCleanup/RunCleanups (abaixo) fecham essa lacuna por identidade de thread,
+	com o MESMO padrão de mapa fraco já usado para `drivers`: quem cria uma Connection "em
+	nome" de uma thread gerida pode registrar aqui como desfazê-la, e o driver (hoje só
+	Scheduler:Cancel, mas também os pontos de poda por morte natural/erro em Scheduler.luau)
+	chama RunCleanups no momento em que a thread deixa de poder ser retomada — nunca espera o
+	evento disparar de novo.
+
+	PENDÊNCIA DECLARADA (regra 00 — divergência/limitação nunca silenciosa): esta tarefa
+	entrega o mecanismo dentro do território `Scheduler.luau`/`ThreadBroker.luau` e prova ele
+	com teste em Scheduler.spec.luau, mas os dois pontos de PRODUÇÃO que hoje vazam de verdade
+	— Instance.luau (WaitForChild ramo B, Connection de `data.childAdded:Connect`) e
+	Signal.luau (`Wait`, listener interno) — estão fora do território desta tarefa e por isso
+	NÃO foram alterados para chamar `ThreadBroker.RegisterCleanup`. O mecanismo está pronto,
+	testado e não quebra nada existente (é no-op para qualquer thread que nunca registrar uma
+	limpeza, que é o caso de 100% do código de produção hoje) — mas só fecha de fato o
+	vazamento relatado pelo revisor quando uma tarefa de acompanhamento, com permissão para
+	tocar Instance.luau/Signal.luau, ligar os dois pontos de criação de Connection a este
+	registro. Ver relatório de task-runtime-011.
 ]]
 
 -- Argumentos empacotados (mesmo formato interno que Scheduler.luau já usa em Delay/Defer).
@@ -121,6 +145,64 @@ function ThreadBroker.ReportError(co: thread, message: string): boolean
 		return true
 	end
 	return false
+end
+
+-- Registro de limpeza por thread (task-runtime-011, ver comentário de topo do módulo) —
+-- independente de `drivers`: funciona mesmo para uma thread sem driver (uso standalone de
+-- Signal.luau), e sobrevive à ordem em que `Release`/`Adopt` são chamados. Mapa fraco por
+-- chave, mesmo padrão de `drivers` acima: uma thread sem referência externa pode ser
+-- coletada junto com sua lista de limpezas, sem precisar de RunCleanups explícito para não
+-- vazar.
+local cleanups: { [thread]: { () -> () } } =
+	(setmetatable({}, { __mode = "k" }) :: unknown) :: { [thread]: { () -> () } }
+
+-- Registra `cleanup` para rodar quando `co` deixar de poder ser retomada (ver RunCleanups).
+-- Devolve um desregistro IDEMPOTENTE: quem registrou (ex: Instance.luau desconectando a
+-- própria Connection pelo caminho normal, antes de qualquer cancelamento) pode chamá-lo para
+-- remover a própria limpeza da lista, evitando um Disconnect duplicado (inofensivo, mas
+-- redundante) quando a thread terminar por outro caminho depois.
+function ThreadBroker.RegisterCleanup(co: thread, cleanup: () -> ()): () -> ()
+	local list = cleanups[co]
+	if list == nil then
+		list = {}
+		cleanups[co] = list
+	end
+	table.insert(list, cleanup)
+
+	local unregistered = false
+	return function()
+		if unregistered then
+			return
+		end
+		unregistered = true
+		local currentList = cleanups[co]
+		if currentList == nil then
+			return
+		end
+		local index = table.find(currentList, cleanup)
+		if index then
+			table.remove(currentList, index)
+		end
+	end
+end
+
+-- Executa e descarta todas as limpezas pendentes de `co`. Chamado pelo driver no momento em
+-- que a thread deixa de poder ser retomada (Cancel; e, por simetria/rede de segurança, morte
+-- natural ou por erro — ver resumeThread/IsAlive em Scheduler.luau) — nunca espera o evento
+-- de origem da limpeza disparar de novo. Cada limpeza roda isolada por pcall individual: erro
+-- numa NUNCA impede as demais nem propaga para quem chamou RunCleanups (mesma disciplina de
+-- Signal.Fire/resumeThread — limpeza jamais derruba quem a invoca). No-op silencioso se `co`
+-- nunca registrou nenhuma limpeza (o caso de toda thread de produção hoje, ver PENDÊNCIA
+-- DECLARADA no topo do módulo).
+function ThreadBroker.RunCleanups(co: thread): ()
+	local list = cleanups[co]
+	if list == nil then
+		return
+	end
+	cleanups[co] = nil
+	for _, cleanup in list do
+		pcall(cleanup)
+	end
 end
 
 return ThreadBroker
