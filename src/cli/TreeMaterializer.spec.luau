@@ -344,6 +344,37 @@ test("Materialize: erro de $properties inválido não vaza caminho absoluto de d
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-cli-018 (Decisão 15, Parte 2): $properties da raiz de TOPO (InstancePlan.RootProperties,
+-- campo ADITIVO -- antes descartado em silêncio por TreePlanner.planProjectTree, que só devolvia
+-- ClassName) é aplicado no `game` -- prova de integração real TreePlanner.Plan -> Materialize,
+-- não um InstancePlan montado à mão.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties da raiz de TOPO (InstancePlan.RootProperties) é aplicado no game (task-cli-018)", function()
+	local plan, planBag = planFixture("root-properties")
+	assert(plan ~= nil, `fixture 'root-properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+	assert(next(plan.RootProperties) ~= nil, "InstancePlan.RootProperties deveria conter o \"$properties\" da raiz de topo (não descartado em silêncio)")
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(not bag:HasErrors(), `materialização não deveria produzir erro (bag: {#bag:All()} diagnostic(s))`)
+
+	-- `game` (DataModel) nunca tem ClassSchema instalado (DataModel.luau -- construído à mão, nunca
+	-- via ClassRegistry.new/SetClassSchema) -- permanece LENIENTE (Instance.luau, comentário de
+	-- `ClassSchema`), então a leitura por acesso de ponto funciona igual a qualquer propriedade
+	-- genérica (ao contrário de `Source`, que é gravado fora do schema via SetPropertyRaw e por
+	-- isso É ilegível por acesso normal -- não é o caso aqui: "$properties" sempre vai pela via
+	-- pública).
+	local gameDot = (game :: unknown) :: { [string]: unknown }
+	assert(gameDot["archivable"] == false, "'archivable' deveria ter sido aplicado no game via $properties da raiz de topo")
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Raiz com $className != DataModel -> erro dedicado (Decisão 14) -- InstancePlan montado à mão,
 -- porque TreePlanner nunca valida isto (ele só resolve ClassName, não decide se serve pra `game`).
 --------------------------------------------------------------------------------------------------
@@ -353,6 +384,7 @@ test("Materialize: raiz com RootClassName != 'DataModel' produz Diagnostic dedic
 		ProjectName = "FakePackageProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "Model",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "SomeChild",
@@ -394,6 +426,7 @@ test("Materialize: Service com Name != ClassName produz Diagnostic e não cria o
 		ProjectName = "FakeMismatchProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "NotWorkspace",
@@ -430,6 +463,7 @@ test("Materialize: IsServiceRoot numa classe que não é Service produz Diagnost
 		ProjectName = "FakeNotAServiceProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "Folder",
@@ -466,6 +500,7 @@ test("Materialize: Service tag do dump ainda não simulado ('Teams') produz Diag
 		ProjectName = "FakeTeamsProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "Teams",
@@ -503,6 +538,7 @@ test("Materialize: \"$className\" apontando para uma classe inexistente produz D
 		ProjectName = "FakeTypoProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "ReplicatedStorage",
@@ -559,6 +595,7 @@ test("Materialize: erro de \"$className\" inválido não vaza caminho absoluto d
 		ProjectName = "FakeTypoProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "ReplicatedStorage",
@@ -870,6 +907,7 @@ test("Materialize: 'materialize/fixed-child-missing' quando o filho pré-criado 
 		ProjectName = "FakeFixedChildMissingProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "StarterPlayer",
@@ -934,6 +972,7 @@ test("Materialize: 'materialize/fixed-child-class-mismatch' quando a instância 
 		ProjectName = "FakeFixedChildMismatchProject",
 		ProjectPath = "fake/default.project.json",
 		RootClassName = "DataModel",
+		RootProperties = {},
 		Roots = {
 			{
 				Name = "StarterPlayer",

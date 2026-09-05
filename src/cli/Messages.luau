@@ -283,6 +283,16 @@ function Messages.PlanNestedProjectClassNameIgnored(nodePath: string, ignoredCla
 	return `"{nodePath}" has both an explicit "$className" ("{ignoredClassName}") and a "$path" that resolves to a nested project -- only the nested project's own root class is used; the explicit "$className" was ignored.`
 end
 
+-- task-cli-018 (Decisão 15 "Parte 2"): único canto em que um `Source` resolvido pela raiz do
+-- projeto não tem onde ser aplicado -- a raiz explícita é "DataModel" (que não tem a propriedade
+-- "Source" no dump real), mas o "$path" da própria raiz também produziu código (arquivo simples
+-- ou pasta com "init.*"). Diferente de `PlanNestedProjectChildrenIgnored`/
+-- `PlanNestedProjectClassNameIgnored` (informação do usuário descartada por um MERGE que escolhe
+-- um lado), aqui não existe pra onde aplicar -- por isso "was ignored", nunca "foi sobrescrito".
+function Messages.PlanRootSourceIgnored(nodePath: string, sourcePath: string): string
+	return `the project root at "{nodePath}" resolved to "DataModel", but its "$path" also produced script source from "{sourcePath}" -- a DataModel has no "Source" property, so the file's contents were ignored.`
+end
+
 function Messages.PlanMetaClassNameConflict(nodePath: string, actualKind: string): string
 	return `"init.meta.json" for "{nodePath}" sets "className", but the directory already resolved to {actualKind} (via an init.* file) -- "className" may only override a plain Folder.`
 end

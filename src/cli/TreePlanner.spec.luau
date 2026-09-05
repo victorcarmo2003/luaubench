@@ -438,6 +438,152 @@ test("Plan: $className explícito + $path de projeto aninhado usa a classe do pr
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-cli-018 (Decisão 15, Parte 1 -- BUG ALTO): a raiz de TODO projeto aninhado (todo pacote
+-- Wally com default.project.json próprio -- ProfileStore, Jecs, Promise, Sera, Fusion) perdia o
+-- próprio Source/SourcePath/Properties em silêncio (`planProjectTree` só devolvia `ClassName`).
+-- Cobre as TRÊS formas reais de raiz de projeto aninhado encontradas nos pacotes do usuário
+-- (arquiteto-cli-2026-09-05.md, Decisão 15, tabela de $path real por pacote).
+--------------------------------------------------------------------------------------------------
+
+test("Plan: raiz de projeto aninhado -- forma 1/3, raiz É O PRÓPRIO ARQUIVO ($path: 'Mod.luau') -> ModuleScript COM Source (task-cli-018)", function()
+	local plan, bag = planFixture("nested-project-root-is-file")
+	assert(plan ~= nil, "fixture 'nested-project-root-is-file' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "fixture válida não deveria produzir nenhum erro")
+
+	local pkg = findRootByName(plan, "Pkg")
+	assert(pkg ~= nil, "deveria haver uma root 'Pkg' (o nó cujo $path aponta pro projeto aninhado)")
+	if pkg == nil then
+		return
+	end
+
+	assert(pkg.ClassName == "ModuleScript", `Pkg (raiz É o arquivo) deveria ser ModuleScript, recebeu {pkg.ClassName}`)
+	local expectedSource = require("@lune/fs").readFile(fixturePath("nested-project-root-is-file") .. "/pkg/Mod.luau")
+	assert(pkg.Source == expectedSource, "Pkg.Source deveria ser o CONTEÚDO REAL de Mod.luau -- ANTES desta correção era nil (bug ALTO: pacote Wally materializava vazio)")
+	assert(pkg.SourcePath ~= nil and string.find(pkg.SourcePath, "Mod.luau", 1, true) ~= nil, "Pkg.SourcePath deveria citar 'Mod.luau'")
+	assert(#pkg.Children == 0, "raiz-arquivo não tem filhos (não é diretório)")
+end)
+
+test("Plan: raiz de projeto aninhado -- forma 2/3, raiz é DIRETÓRIO COM init.* ($path: 'src', src/init.luau) -> ModuleScript COM Source e com os irmãos como filhos (task-cli-018)", function()
+	local plan, bag = planFixture("nested-project-root-is-init-dir")
+	assert(plan ~= nil, "fixture 'nested-project-root-is-init-dir' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "fixture válida não deveria produzir nenhum erro")
+
+	local pkg = findRootByName(plan, "Pkg")
+	assert(pkg ~= nil, "deveria haver uma root 'Pkg'")
+	if pkg == nil then
+		return
+	end
+
+	assert(pkg.ClassName == "ModuleScript", `Pkg (pasta com init.luau) deveria ser ModuleScript, recebeu {pkg.ClassName}`)
+	local expectedSource = require("@lune/fs").readFile(fixturePath("nested-project-root-is-init-dir") .. "/pkg/src/init.luau")
+	assert(pkg.Source == expectedSource, "Pkg.Source deveria ser o CONTEÚDO REAL de src/init.luau")
+	assert(pkg.SourcePath ~= nil and string.find(pkg.SourcePath, "init.luau", 1, true) ~= nil, "Pkg.SourcePath deveria citar 'init.luau'")
+
+	local sibling = findChildByName(pkg, "Sibling")
+	assert(sibling ~= nil, "Pkg deveria ter um filho 'Sibling' (irmão de init.luau, descoberto no filesystem da PRÓPRIA raiz do projeto aninhado)")
+	if sibling ~= nil then
+		assert(sibling.ClassName == "ModuleScript", "'Sibling.luau' deveria materializar como ModuleScript")
+	end
+end)
+
+test("Plan: raiz de projeto aninhado -- forma 3/3, raiz é diretório SEM init.* ($path: 'src') -> Folder, Source continua nil (task-cli-018)", function()
+	local plan, bag = planFixture("nested-project-root-is-plain-folder")
+	assert(plan ~= nil, "fixture 'nested-project-root-is-plain-folder' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "fixture válida não deveria produzir nenhum erro")
+
+	local pkg = findRootByName(plan, "Pkg")
+	assert(pkg ~= nil, "deveria haver uma root 'Pkg'")
+	if pkg == nil then
+		return
+	end
+
+	assert(pkg.ClassName == "Folder", `Pkg (pasta SEM init.*) deveria ser Folder, recebeu {pkg.ClassName}`)
+	assert(pkg.Source == nil, "Pkg.Source deveria continuar nil -- uma pasta sem init.* nunca tem Source, com ou sem a correção")
+	assert(pkg.SourcePath == nil, "Pkg.SourcePath deveria continuar nil pelo mesmo motivo")
+
+	local sibling = findChildByName(pkg, "Sibling")
+	assert(sibling ~= nil, "Pkg (Folder) deveria ter um filho 'Sibling'")
+	if sibling ~= nil then
+		assert(sibling.ClassName == "ModuleScript", "'Sibling.luau' deveria materializar como ModuleScript")
+	end
+end)
+
+test("Plan: $properties da raiz do projeto aninhado é aplicado, e o $properties do nó EXTERNO vence em chave repetida (task-cli-018)", function()
+	local plan, bag = planFixture("nested-project-root-properties-merge")
+	assert(plan ~= nil, "fixture 'nested-project-root-properties-merge' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "fixture válida não deveria produzir nenhum erro")
+
+	local pkg = findRootByName(plan, "Pkg")
+	assert(pkg ~= nil, "deveria haver uma root 'Pkg'")
+	if pkg == nil then
+		return
+	end
+
+	assert(pkg.Properties["FromPackage"] == true, "'FromPackage' (só declarado na raiz do projeto aninhado) deveria sobreviver -- ANTES desta correção a tabela começava vazia e isto se perdia")
+	assert(pkg.Properties["FromOuter"] == true, "'FromOuter' (só declarado no nó externo) deveria continuar aplicado, como já era antes")
+	assert(pkg.Properties["Shared"] == "fromOuter", "'Shared' está nos dois lados -- o nó EXTERNO deveria vencer (comportamento já shipado, preservado por esta correção)")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-018 (Decisão 15, Parte 2): $properties da raiz de TOPO é aplicado (InstancePlan.
+-- RootProperties, testado do lado de TreeMaterializer.spec.luau -- aqui só confirma que
+-- TreePlanner.Plan preenche o campo); Source de uma raiz DataModel explícita não tem onde ser
+-- aplicado -> warning plan/root-source-ignored em vez de silêncio.
+--------------------------------------------------------------------------------------------------
+
+test("Plan: InstancePlan.RootProperties é preenchido com o $properties da raiz de TOPO (task-cli-018)", function()
+	local plan, bag = planFixture("properties-and-attributes")
+	assert(plan ~= nil, "fixture 'properties-and-attributes' deveria produzir um InstancePlan válido")
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "fixture já coberta por outro teste -- não deveria produzir erro")
+	-- Esta fixture não declara $properties NA RAIZ (só em 'ReplicatedStorage') -- confirma que o
+	-- campo novo existe e fica vazio quando não há nada pra preencher, sem quebrar nada existente.
+	assert(next(plan.RootProperties) == nil, "RootProperties deveria ficar vazio quando a raiz de topo não declara $properties")
+end)
+
+test("Plan: raiz explícita \"DataModel\" cujo \"$path\" também produz Source -- Source fica sem destino, warning 'plan/root-source-ignored' (task-cli-018, Decisão 15)", function()
+	local plan, bag = planFixture("root-source-ignored")
+	assert(plan ~= nil, `fixture 'root-source-ignored' deveria produzir um InstancePlan válido (bag: {#bag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+	assert(not bag:HasErrors(), "Source perdido na raiz é warning, nunca erro")
+	assert(plan.RootClassName == "DataModel", `RootClassName deveria continuar 'DataModel' (a classe explícita vence), recebeu '{plan.RootClassName}'`)
+
+	-- ACHADO (task-cli-018): sem uma exceção estreita (isRoot + $className "DataModel" explícito)
+	-- na checagem PRÉ-EXISTENTE "$className + $path só é legal se $path resolver pra Folder"
+	-- (`plan/class-name-conflict`), este warning seria CÓDIGO MORTO -- nenhum "$path" que produz
+	-- Source (Script/LocalScript/ModuleScript) jamais resolve pra "Folder". Ver comentário em
+	-- `resolveCore`, TreePlanner.luau, e o relatório desta task para o arquiteto revisar a
+	-- exceção (é uma leitura de comportamento sobre uma guarda já testada, fora do "sem mudança de
+	-- contrato" literal da Parte 1).
+	assert(findByCode(bag, "plan/class-name-conflict") == nil, "NÃO deveria haver 'plan/class-name-conflict' aqui -- a exceção da raiz deveria ter evitado esse erro")
+
+	local diagnostic = findByCode(bag, "plan/root-source-ignored")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/root-source-ignored'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "Source perdido na raiz deveria ser Severity 'warning', nunca erro nem silêncio")
+		assert(diagnostic.Field == "$path", "Diagnostic deveria nomear o campo '$path'")
+		assert(string.find(diagnostic.Message, "DataModel", 1, true) ~= nil, "Message deveria citar 'DataModel' (a classe que não tem onde aplicar Source)")
+		assert(string.find(diagnostic.Message, "algo.lua", 1, true) ~= nil, "Message deveria citar o arquivo cujo conteúdo foi ignorado ('algo.lua')")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Meta files: <nome>.meta.json adjacente aplica properties; init.meta.json aplica properties E
 -- className (só quando a pasta é Folder puro)
 --------------------------------------------------------------------------------------------------

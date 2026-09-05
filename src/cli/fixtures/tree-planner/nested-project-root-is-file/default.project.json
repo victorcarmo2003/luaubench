@@ -1,0 +1,9 @@
+{
+  "name": "NestedProjectRootIsFileOuter",
+  "tree": {
+    "$className": "DataModel",
+    "Pkg": {
+      "$path": "pkg"
+    }
+  }
+}

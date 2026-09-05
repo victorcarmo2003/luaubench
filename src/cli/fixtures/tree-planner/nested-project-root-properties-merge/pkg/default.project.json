@@ -1,0 +1,10 @@
+{
+  "name": "PkgRootProperties",
+  "tree": {
+    "$path": "Mod.luau",
+    "$properties": {
+      "FromPackage": true,
+      "Shared": "fromPackage"
+    }
+  }
+}

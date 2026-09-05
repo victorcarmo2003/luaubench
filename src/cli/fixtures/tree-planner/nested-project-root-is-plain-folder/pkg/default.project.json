@@ -1,0 +1,6 @@
+{
+  "name": "PkgRootIsPlainFolder",
+  "tree": {
+    "$path": "src"
+  }
+}

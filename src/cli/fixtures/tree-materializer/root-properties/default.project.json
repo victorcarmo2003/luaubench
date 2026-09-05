@@ -1,0 +1,9 @@
+{
+  "name": "RootPropertiesProject",
+  "tree": {
+    "$className": "DataModel",
+    "$properties": {
+      "archivable": false
+    }
+  }
+}

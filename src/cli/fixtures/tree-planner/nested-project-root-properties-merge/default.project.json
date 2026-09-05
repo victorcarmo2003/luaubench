@@ -1,0 +1,13 @@
+{
+  "name": "NestedProjectRootPropertiesMergeOuter",
+  "tree": {
+    "$className": "DataModel",
+    "Pkg": {
+      "$path": "pkg",
+      "$properties": {
+        "FromOuter": true,
+        "Shared": "fromOuter"
+      }
+    }
+  }
+}

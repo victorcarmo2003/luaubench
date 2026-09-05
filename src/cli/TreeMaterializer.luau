@@ -211,15 +211,22 @@ end
 -- protegido). Ordem alfabética das chaves: `PlanNode.Properties` é um mapa Lua sem ordem própria,
 -- e diagnósticos em ordem determinística são o que torna um teste com múltiplas propriedades
 -- inválidas no mesmo nó reproduzível.
-local function applyProperties(instance: Runtime.Instance, node: TreePlanner.PlanNode, bag: Diagnostics.Bag): ()
+--
+-- task-cli-018 (Decisão 15, Parte 2): assinatura muda de `(instance, node: PlanNode, bag)` pra
+-- `(instance, properties, nodePath, bag)` -- `properties`/`nodePath` soltos, não mais lidos de
+-- dentro de um `PlanNode` -- porque `InstancePlan.RootProperties` (novo) não pertence a nenhum
+-- `PlanNode` (a raiz nunca vira um `PlanNode`, Decisão 3) e `Materialize` precisa reusar esta
+-- MESMA função pra aplicar `$properties` da raiz de topo no `game`, com o mesmo caminho de
+-- `Diagnostic` (`materialize/invalid-property`) que qualquer outro nó já usa.
+local function applyProperties(instance: Runtime.Instance, properties: { [string]: TreePlanner.PlanPropertyValue }, nodePath: string, bag: Diagnostics.Bag): ()
 	local propertyNames: { string } = {}
-	for key in node.Properties do
+	for key in properties do
 		table.insert(propertyNames, key)
 	end
 	table.sort(propertyNames)
 
 	for _, key in propertyNames do
-		local value = node.Properties[key]
+		local value = properties[key]
 
 		-- Cast de fronteira (Decisão 7): `Runtime.Instance` é um tipo de campos
 		-- NOMEADOS (o schema de cada classe concreta é uma interseção fechada, decidida por
@@ -238,8 +245,8 @@ local function applyProperties(instance: Runtime.Instance, node: TreePlanner.Pla
 			bag:Add({
 				Severity = "error",
 				Code = "materialize/invalid-property",
-				Message = Messages.MaterializePropertyAssignmentFailed(node.NodePath, key, stripEngineErrorLocation(tostring(err))),
-				NodePath = node.NodePath,
+				Message = Messages.MaterializePropertyAssignmentFailed(nodePath, key, stripEngineErrorLocation(tostring(err))),
+				NodePath = nodePath,
 				Field = key,
 			})
 		end
@@ -397,7 +404,7 @@ local function materializeNode(node: TreePlanner.PlanNode, parent: Runtime.Insta
 
 	-- $properties (Decisão 7) -- via pública, um Diagnostic por propriedade que falhar, nunca
 	-- interrompe o resto do nó nem da árvore.
-	applyProperties(instance, node, bag)
+	applyProperties(instance, node.Properties, node.NodePath, bag)
 
 	if SCRIPT_CLASS_NAMES[node.ClassName] then
 		table.insert(scripts, {
@@ -428,6 +435,16 @@ function TreeMaterializer.Materialize(plan: TreePlanner.InstancePlan, game: Runt
 		})
 		return { Game = game, Scripts = {} }
 	end
+
+	-- task-cli-018 (Decisão 15, Parte 2): `$properties` da raiz de TOPO -- antes descartado em
+	-- silêncio (`TreePlanner.planProjectTree` só devolvia `ClassName`). Reusa a MESMA
+	-- `applyProperties` que qualquer `PlanNode` já usa (mesmo caminho de `Diagnostic`
+	-- `materialize/invalid-property` pra nome inválido/propriedade somente-leitura) -- direto no
+	-- `game` (já confirmado `DataModel` pela checagem acima), ANTES de materializar os `Roots`.
+	-- `nodePath` fixo em "tree": é o valor que `ProjectFile.Read`/`TreePlanner` sempre usam pra
+	-- nomear a raiz de um projeto de TOPO (`parseNode(treeObject, "tree", ...)`), o mesmo já usado
+	-- pelo warning `plan/root-source-ignored` (`TreePlanner.Plan`).
+	applyProperties(game, plan.RootProperties, "tree", bag)
 
 	local scripts: { MaterializedScript } = {}
 	for _, root in plan.Roots do

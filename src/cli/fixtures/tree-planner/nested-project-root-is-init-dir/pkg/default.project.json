@@ -1,0 +1,6 @@
+{
+  "name": "PkgRootIsInitDir",
+  "tree": {
+    "$path": "src"
+  }
+}

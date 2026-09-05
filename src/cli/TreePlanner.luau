@@ -92,6 +92,12 @@ export type InstancePlan = {
 	ProjectName: string,
 	ProjectPath: string,
 	RootClassName: string,
+	-- Campo ADITIVO (task-cli-018, Decisão 15 "Parte 2"): `$properties` da raiz de TOPO do
+	-- projeto -- antes desta correção era descartado em silêncio (`planProjectTree` só devolvia
+	-- `ClassName`). `TreeMaterializer.Materialize` aplica isto no `game` pela via pública de
+	-- escrita já existente (`applyProperties`), logo após confirmar que a raiz é mesmo um
+	-- `DataModel`.
+	RootProperties: { [string]: PlanPropertyValue },
 	Roots: { PlanNode },
 	Diagnostics: { Diagnostics.Diagnostic },
 }
@@ -128,6 +134,19 @@ type CoreResolution = {
 	FsChildBaseDir: string?,
 	FsChildEntries: { string }?,
 	FsInitFileName: string?,
+}
+
+-- O que a raiz de UM `Project` (de topo ou aninhado) resolve, além dos filhos -- task-cli-018,
+-- arquiteto-cli-2026-09-05.md, Decisão 15. Existe porque a raiz NÃO vira um `PlanNode` (Decisão
+-- 3) e portanto precisava de um carona para `Source`/`SourcePath`/`Properties`, que antes eram
+-- descartados em `planProjectTree` (devolvia só `ClassName`) -- bug ALTO: a raiz de TODO projeto
+-- aninhado (ou seja, todo pacote Wally com `default.project.json` próprio) perdia o próprio
+-- `Source` em silêncio (`require(ServerPackages.ProfileStore)` devolvia módulo vazio).
+type RootResolution = {
+	ClassName: string,
+	Source: string?,
+	SourcePath: string?,
+	Properties: { [string]: PlanPropertyValue },
 }
 
 -- Um candidato a filho, antes de ser resolvido: pode ter vindo do JSON (`JsonNode`), do
@@ -253,6 +272,19 @@ local function copyStringList(list: { string }): { string }
 	local copy: { string } = table.create(#list)
 	for _, value in list do
 		table.insert(copy, value)
+	end
+	return copy
+end
+
+-- task-cli-018 (Decisão 15): usado pra semear `nestedProperties` com uma CÓPIA do `$properties`
+-- já resolvido pela raiz de um projeto aninhado, antes de aplicar o `$properties` do nó EXTERNO
+-- por cima -- cópia, nunca a mesma tabela, porque `RootResolution.Properties` pode ser
+-- referenciada por mais de uma chamada (ex.: dois nós irmãos apontando pro mesmo pacote
+-- vendorizado) e `applyProperties` muta o destino que recebe.
+local function copyPlanProperties(properties: { [string]: PlanPropertyValue }): { [string]: PlanPropertyValue }
+	local copy: { [string]: PlanPropertyValue } = {}
+	for key, value in properties do
+		copy[key] = value
 	end
 	return copy
 end
@@ -578,7 +610,7 @@ local planProjectTree: (
 	cycleGuard: { [string]: boolean },
 	cycleChain: { string },
 	ctx: PlanContext
-) -> (string?, { PlanNode })
+) -> (RootResolution?, { PlanNode })
 
 resolveCore = function(
 	jsonNode: ProjectFile.ProjectNode?,
@@ -838,8 +870,8 @@ resolveCore = function(
 		local newCycleChain = copyStringList(cycleChain)
 		table.insert(newCycleChain, nestedProjectFilePath)
 
-		local nestedRootClassName, nestedChildren = planProjectTree(nestedProject, newCycleGuard, newCycleChain, ctx)
-		if nestedRootClassName == nil then
+		local nestedRoot, nestedChildren = planProjectTree(nestedProject, newCycleGuard, newCycleChain, ctx)
+		if nestedRoot == nil then
 			-- Erro já reportado dentro da resolução da raiz do projeto aninhado.
 			return nil
 		end
@@ -869,17 +901,27 @@ resolveCore = function(
 			})
 		end
 
-		local nestedProperties: { [string]: PlanPropertyValue } = {}
+		-- task-cli-018 (Decisão 15, Parte 1): a cópia começa a partir do `$properties` que a
+		-- PRÓPRIA raiz do projeto aninhado já resolveu (`nestedRoot.Properties`) -- não de uma
+		-- tabela vazia -- e só ENTÃO aplica o `$properties` do nó EXTERNO por cima. O nó externo
+		-- continua vencendo em chave repetida (`applyProperties` sobrescreve `destination[key]`) --
+		-- comportamento já shipado, é o único jeito do consumidor de um pacote Wally sobrescrever
+		-- um default que o próprio pacote declarou na raiz.
+		local nestedProperties: { [string]: PlanPropertyValue } = copyPlanProperties(nestedRoot.Properties)
 		if jsonNode ~= nil then
 			applyProperties(nestedProperties, jsonNode.Properties, nodePath, currentProjectFilePath, bag)
 			warnAttributesIfAny(jsonNode.Attributes, nodePath, currentProjectFilePath, bag)
 		end
 
 		return {
-			ClassName = nestedRootClassName,
+			ClassName = nestedRoot.ClassName,
 			IsServiceRoot = false,
-			Source = nil,
-			SourcePath = nil,
+			-- CORREÇÃO (bug ALTO, task-cli-018): antes, os dois eram `nil` literais aqui -- a raiz
+			-- de TODO projeto aninhado (ou seja, todo pacote Wally com `default.project.json`
+			-- próprio: ProfileStore, Jecs, Promise, Sera, Fusion) perdia o próprio `Source` em
+			-- silêncio. `planProjectTree`, acima, já resolveu os dois de verdade -- só repassar.
+			Source = nestedRoot.Source,
+			SourcePath = nestedRoot.SourcePath,
 			Properties = nestedProperties,
 			IsNestedProject = true,
 			NestedChildren = nestedChildren,
@@ -911,7 +953,20 @@ resolveCore = function(
 
 	local finalClassName: string? = nil
 	if explicitClassName ~= nil then
-		if pathClassName ~= nil and pathClassName ~= "Folder" then
+		-- ACHADO/EXCEÇÃO (task-cli-018, Decisão 15 "Parte 2" -- `plan/root-source-ignored`):
+		-- descoberto ao implementar o warning de `TreePlanner.Plan`, mais abaixo, que ele seria
+		-- CÓDIGO MORTO sem esta exceção. A regra geral ("só é legal se $path resolver pra Folder")
+		-- fica INTACTA pra qualquer outro nó -- `class-name-conflict.spec` continua cobrindo isso.
+		-- Só na RAIZ (`isRoot`) com `"$className": "DataModel"` explícito -- a ÚNICA classe que só
+		-- é legal bem na raiz -- "a classe explícita vence" (texto literal da Decisão 15): em vez
+		-- de `plan/class-name-conflict`, o `Source`/`SourcePath` que o `$path` produziu (que
+		-- `DataModel` não tem onde receber -- não existe no dump) fica sem destino, e
+		-- `TreePlanner.Plan` avisa com `plan/root-source-ignored` em vez de descartar em silêncio
+		-- ou barrar com um erro de conflito que a Decisão 15 não previa pra este canto. Reportado
+		-- no relatório desta task para revisão do arquiteto -- é uma leitura de comportamento, não
+		-- uma mudança de contrato de tipo (`PlanNode`/`InstancePlan` continuam os mesmos).
+		local rootDataModelSourceException = isRoot and explicitClassName == "DataModel"
+		if pathClassName ~= nil and pathClassName ~= "Folder" and not rootDataModelSourceException then
 			bag:Add({
 				Severity = "error",
 				Code = "plan/class-name-conflict",
@@ -1151,7 +1206,7 @@ planChildNode = function(
 	}
 end
 
-planProjectTree = function(project: ProjectFile.Project, cycleGuard: { [string]: boolean }, cycleChain: { string }, ctx: PlanContext): (string?, { PlanNode })
+planProjectTree = function(project: ProjectFile.Project, cycleGuard: { [string]: boolean }, cycleChain: { string }, ctx: PlanContext): (RootResolution?, { PlanNode })
 	local core = resolveCore(
 		project.Tree,
 		"<root>",
@@ -1171,7 +1226,19 @@ planProjectTree = function(project: ProjectFile.Project, cycleGuard: { [string]:
 	end
 
 	local children = planChildrenOf(core, project.Tree, project.FolderPath, project.Tree.NodePath, core.ClassName, cycleGuard, cycleChain, project.FilePath, ctx)
-	return core.ClassName, children
+
+	-- task-cli-018 (Decisão 15): devolve o registro inteiro (`Source`/`SourcePath`/`Properties`
+	-- inclusos), não só o `ClassName` -- é isto que permite ao ramo de projeto aninhado de
+	-- `resolveCore` (acima) repassar o `Source`/`Properties` da raiz aninhada em vez de descartá-
+	-- los, e ao `TreePlanner.Plan` (abaixo) preencher `InstancePlan.RootProperties`/avisar sobre
+	-- `Source` perdido na raiz de topo.
+	local rootResolution: RootResolution = {
+		ClassName = core.ClassName,
+		Source = core.Source,
+		SourcePath = core.SourcePath,
+		Properties = core.Properties,
+	}
+	return rootResolution, children
 end
 
 --------------------------------------------------------------------------------------------------
@@ -1192,7 +1259,7 @@ function TreePlanner.Plan(project: ProjectFile.Project, options: PlanOptions, ba
 	local cycleGuard: { [string]: boolean } = { [normalizedProjectFilePath] = true }
 	local cycleChain: { string } = { normalizedProjectFilePath }
 
-	local rootClassName, roots = planProjectTree(project, cycleGuard, cycleChain, ctx)
+	local rootResolution, roots = planProjectTree(project, cycleGuard, cycleChain, ctx)
 
 	if bag:HasErrors() then
 		return nil
@@ -1209,17 +1276,45 @@ function TreePlanner.Plan(project: ProjectFile.Project, options: PlanOptions, ba
 		projectName = ""
 	end
 
+	-- task-cli-018 (Decisão 15, Parte 2): `resolvedRootClassName`/`rootProperties` vêm do MESMO
+	-- registro agora -- antes só o `ClassName` sobrevivia até aqui.
 	local resolvedRootClassName: string
-	if rootClassName ~= nil then
-		resolvedRootClassName = rootClassName
+	local rootProperties: { [string]: PlanPropertyValue }
+	if rootResolution ~= nil then
+		resolvedRootClassName = rootResolution.ClassName
+		rootProperties = rootResolution.Properties
 	else
 		resolvedRootClassName = ""
+		rootProperties = {}
+	end
+
+	-- task-cli-018 (Decisão 15, Parte 2): único canto em que um `Source` resolvido pela raiz de
+	-- TOPO não tem onde ser aplicado -- a raiz é um `DataModel` explícito (não tem a propriedade
+	-- `Source` no dump) mas o próprio "$path" da raiz também produziu código (só possível com a
+	-- exceção estreita de `resolveCore`, ver comentário lá, "plan/class-name-conflict"). Fora
+	-- deste canto, um `Source` de raiz sempre tem destino: uma raiz que resolve pra
+	-- Script/LocalScript/ModuleScript sem "$className" explícito já erra em
+	-- `materialize/root-not-datamodel` (TreeMaterializer) -- nada silencioso. Avisar em vez de
+	-- descartar em silêncio (regra 00).
+	if rootResolution ~= nil and rootResolution.Source ~= nil and resolvedRootClassName == "DataModel" then
+		local rootSourcePath = rootResolution.SourcePath
+		if rootSourcePath ~= nil then
+			bag:Add({
+				Severity = "warning",
+				Code = "plan/root-source-ignored",
+				Message = Messages.PlanRootSourceIgnored(project.Tree.NodePath, rootSourcePath),
+				NodePath = project.Tree.NodePath,
+				Field = "$path",
+				FilePath = rootSourcePath,
+			})
+		end
 	end
 
 	return {
 		ProjectName = projectName,
 		ProjectPath = project.FilePath,
 		RootClassName = resolvedRootClassName,
+		RootProperties = rootProperties,
 		Roots = roots,
 		Diagnostics = bag:All(),
 	}
