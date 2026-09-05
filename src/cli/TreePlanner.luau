@@ -102,8 +102,15 @@ export type InstancePlan = {
 	Diagnostics: { Diagnostics.Diagnostic },
 }
 
+-- task-cli-024 (arquiteto-cli-2026-09-05.md, Decisão 17, "Contrato entre territórios (delta)"):
+-- `IsEngineFixedChild`/`IsEngineOnlyClass` entram por INJEÇÃO, como `IsServiceClass` já fazia --
+-- este módulo continua sem requerer o território `services` (cabeçalho do arquivo, "NÃO REQUER
+-- runtime nem services"), testável com fixture em disco e função falsa. As duas são PURAS e
+-- SEGURAS de chamar antes de `Services.Bootstrap` (mesma garantia documentada em `services/init.luau`).
 export type PlanOptions = {
 	IsServiceClass: (className: string) -> boolean,
+	IsEngineFixedChild: (parentClassName: string, name: string, className: string) -> boolean,
+	IsEngineOnlyClass: (className: string) -> boolean,
 }
 
 local TreePlanner = {}
@@ -1057,6 +1064,11 @@ resolveCore = function(
 		pathOrInferredClassName = metaClassNameOverride
 	end
 
+	-- Içado para fora do ramo `explicitClassName ~= nil` (task-cli-024, Decisão 17: "expressão
+	-- pura, sem mudança de comportamento") -- a guarda `plan/engine-only-class`, mais abaixo, também
+	-- precisa desta condição, e ela não depende de `explicitClassName` nenhuma das duas vezes.
+	local isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath
+
 	local finalClassName: string? = nil
 	if explicitClassName ~= nil then
 		-- ACHADO/EXCEÇÃO (task-cli-018, Decisão 15 "Parte 2" -- `plan/root-source-ignored`):
@@ -1071,7 +1083,6 @@ resolveCore = function(
 		-- vez de descartar em silêncio ou barrar com um erro de conflito que a Decisão 15 não
 		-- previa pra este canto. Ver Decisão 16 (task-cli-020): a exceção NÃO vale pra raiz de um
 		-- projeto aninhado qualquer (`isRoot` também é `true` ali) -- só pra raiz do plano inteiro.
-		local isOutermostRoot = isRoot and normalizePath(currentProjectFilePath) == ctx.OutermostProjectFilePath
 		local rootDataModelSourceException = isOutermostRoot and explicitClassName == "DataModel"
 		if pathClassName ~= nil and pathClassName ~= "Folder" and not rootDataModelSourceException then
 			bag:Add({
@@ -1116,7 +1127,7 @@ resolveCore = function(
 	-- filho. A checagem abaixo continua restrita a `options.IsServiceClass(finalClassName)` de
 	-- propósito -- generalizá-la pra "teve inferência" marcaria esses três como Service por
 	-- engano.
-	local isServiceRoot = false
+	local isServiceRoot: boolean = false
 	if parentClassName == "DataModel" and options.IsServiceClass(finalClassName) then
 		if name == finalClassName then
 			isServiceRoot = true
@@ -1130,6 +1141,41 @@ resolveCore = function(
 			})
 			return nil
 		end
+	end
+
+	-- task-cli-024 (arquiteto-cli-2026-09-05.md, Decisão 17): antecipa, uma fase antes, a MESMA
+	-- escolha de ramo que `TreeMaterializer.createInstance` já faz --
+	--   ramo 1 (game:GetService)   -> isServiceRoot (acima)
+	--   ramo 2 (adotar filho fixo) -> options.IsEngineFixedChild(parentClassName, name, finalClassName)
+	--   ramo 3 (Services.new)      -> tudo o mais  <- só este pode falhar por NotCreatable
+	-- As quatro condições abaixo espelham EXATAMENTE os três ramos de `createInstance` mais a raiz
+	-- do plano (que nunca passa por `Services.new` -- vira `game` direto, ver `TreeMaterializer`):
+	-- sem as exclusões de `isOutermostRoot`/`isServiceRoot`/`isEngineFixedChild`, todo Service e
+	-- todo filho fixo do motor (ambos `IsAbstract == true` no dump, ver Decisão 17 "A armadilha que
+	-- quase invalidou (b)") virariam falso positivo. `isEngineFixedChild` só é avaliada quando
+	-- `parentClassName ~= nil` (a raiz de projeto é chamada com `parentClassName = nil`, e não faria
+	-- sentido perguntar "é filho fixo de quem?"). `Field = "$className"` só quando a classe veio de
+	-- um `$className` explícito (Decisão 17, "Guarda decidida") -- inferência de `$path`/Service
+	-- nunca aponta pra um campo que o usuário não escreveu.
+	local isEngineFixedChild = parentClassName ~= nil and options.IsEngineFixedChild(parentClassName, name, finalClassName)
+	-- Combinado numa variável separada (em vez de `not isServiceRoot`/`not isEngineFixedChild`
+	-- soltos na condição do `if`) -- achado de tooling do luau-lsp 1.69.0 (mesma família do
+	-- comentário em `Messages.luau`, "indexação por união de literais"): referenciar `isServiceRoot`
+	-- dentro da condição de um `if` que termina em `return` faz o analisador estreitar o tipo do
+	-- campo `IsServiceRoot` do `CoreResolution` devolvido logo abaixo para `boolean | false` (em vez
+	-- de `boolean`), rejeitando a própria tabela de retorno da função. Isolar a conjunção aqui evita
+	-- o falso-positivo sem mudar o comportamento.
+	local isEligibleForEngineOnlyGuard = not isOutermostRoot and not isServiceRoot and not isEngineFixedChild
+	if isEligibleForEngineOnlyGuard and options.IsEngineOnlyClass(finalClassName) then
+		bag:Add({
+			Severity = "error",
+			Code = "plan/engine-only-class",
+			Message = Messages.PlanEngineOnlyClass(nodePath, finalClassName),
+			NodePath = nodePath,
+			Field = if explicitClassName ~= nil then "$className" else nil,
+			FilePath = currentProjectFilePath,
+		})
+		return nil
 	end
 
 	-- 6) `$properties` (meta + próprio nó -- o nó vence em conflito) e `$attributes` (warning,

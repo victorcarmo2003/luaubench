@@ -1,0 +1,11 @@
+{
+  "name": "EngineOnlyClassInstance",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Bad": {
+        "$className": "Instance"
+      }
+    }
+  }
+}

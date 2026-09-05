@@ -1,0 +1,9 @@
+{
+  "name": "NestedRootEngineOnlyClassOuter",
+  "tree": {
+    "$className": "DataModel",
+    "Something": {
+      "$path": "pkg"
+    }
+  }
+}

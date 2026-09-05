@@ -322,6 +322,28 @@ function Messages.PlanIoError(nodePath: string, path: string, ioError: string): 
 	return `Could not read "{path}" (for "{nodePath}"): {ioError}`
 end
 
+-- task-cli-024 (arquiteto-cli-2026-09-05.md, Decisão 17): `TreePlanner` antecipa, uma fase antes
+-- de `TreeMaterializer`, que este nó vai cair no ramo `Services.new` e que essa chamada não pode
+-- dar certo -- a classe é `NotCreatable` no Roblox API Dump E este build sabe simulá-la
+-- (`Services.IsEngineOnlyClass`). Mensagem ORIGINAL do LuauBench (não há Rojo real pra imitar --
+-- o Rojo nunca valida posição de classe, ver o cabeçalho de `TreePlanner.luau`), por isso cita o
+-- dump como justificativa em vez de fingir ser um erro do próprio Rojo.
+--
+-- A frase extra pra "DataModel" fica DENTRO desta função (uma condição, um só `Code` na guarda de
+-- `TreePlanner`) de propósito -- Decisão 17, "Não criar `Code` separado para `DataModel`": é o
+-- caso observado na prática (`task-cli-022`, `.project.json` aninhado com `$className: DataModel`
+-- fora da raiz mais externa) e merece o ponteiro exato, mas continua sendo a MESMA família de erro
+-- que "Instance"/"Workspace mal posicionado"/etc.
+function Messages.PlanEngineOnlyClass(nodePath: string, className: string): string
+	local message = `"{nodePath}" declares the class "{className}", which the Roblox API Dump tags as NotCreatable -- `
+		.. "only the engine creates instances of it, never a project node. A service is only valid as a direct "
+		.. 'child of the project\'s root, named exactly like its class; for a plain container, use "Folder".'
+	if className == "DataModel" then
+		message = message .. ' "DataModel" is only valid as the root of the outermost project.'
+	end
+	return message
+end
+
 --------------------------------------------------------------------------------------------------
 -- TreeMaterializer (InstancePlan -> DataModel real) -- task-cli-004, arquiteto-cli-2026-09-05.md,
 -- Decisões 4, 5 e 7.

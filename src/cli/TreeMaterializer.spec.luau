@@ -68,10 +68,17 @@ local function countByCode(bag: Diagnostics.Bag, code: string): number
 	return count
 end
 
--- `Services.IsServiceClass` REAL (nunca a função falsa de TreePlanner.spec.luau) -- este território
--- exercita a integração de verdade entre `TreePlanner` e `services`.
+-- `Services.IsServiceClass`/`IsEngineFixedChild`/`IsEngineOnlyClass` REAIS (nunca as funções falsas
+-- de TreePlanner.spec.luau) -- este território exercita a integração de verdade entre `TreePlanner`
+-- e `services`. `IsEngineFixedChild`/`IsEngineOnlyClass` entraram na task-cli-024 (Decisão 17) --
+-- ver "VERIFICAR" no comentário de cabeçalho: com elas reais, `TreePlanner.Plan` agora barra ANTES
+-- (`plan/engine-only-class`) alguns casos que antes só o `Materialize` pegava
+-- (`materialize/invalid-class`) -- os testes de defesa em profundidade, abaixo, continuam
+-- alcançáveis porque montam o `InstancePlan`/`PlanNode` À MÃO, nunca via `TreePlanner.Plan`.
 local REAL_PLAN_OPTIONS: TreePlanner.PlanOptions = {
 	IsServiceClass = Services.IsServiceClass,
+	IsEngineFixedChild = Services.IsEngineFixedChild,
+	IsEngineOnlyClass = Services.IsEngineOnlyClass,
 }
 
 -- Planeja um fixture em disco (TreePlanner de verdade) -- usado pelos testes de caminho feliz.
@@ -795,14 +802,51 @@ end)
 -- Nó com Name divergente do trio exigido ("MyScripts" com $className "StarterPlayerScripts" sob
 -- StarterPlayer) NÃO é adotado -- Services.IsEngineFixedChild exige Name E ClassName batendo, então
 -- cai no ramo normal (Services.new) e erra a família Roblox real, igual ao Roblox faria.
+--
+-- MUDANÇA DE FASE (task-cli-024, arquiteto-cli-2026-09-05.md, Decisão 17, seção "Riscos" -- este é
+-- exatamente o teste ":812 (ramo normal Services.new)" que a Decisão previu que mudaria): com
+-- `Services.IsEngineFixedChild`/`IsEngineOnlyClass` REAIS agora injetadas em `REAL_PLAN_OPTIONS`
+-- (acima), `TreePlanner.Plan` passou a barrar este MESMO cenário mais cedo, com
+-- 'plan/engine-only-class' -- o teste abaixo ("Plan: ...") prova isso. O teste ORIGINAL, aqui embaixo,
+-- FOI ADAPTADO (não removido) pra continuar provando que a defesa em profundidade do PRÓPRIO
+-- `TreeMaterializer` (o `pcall(Services.new)` no ramo normal) segue intacta e alcançável -- com um
+-- `InstancePlan` MONTADO À MÃO, nunca via `TreePlanner.Plan` de verdade (mesma disciplina já usada
+-- pelas defesas em profundidade acima, ex.: "$className" -> "Frmae"). Decisão 17, "O que
+-- deliberadamente NÃO fazer agora": "não mover a guarda para TreeMaterializer nem remover de lá a
+-- defesa em profundidade -- as duas camadas coexistem como já coexistem para service-name-mismatch".
 --------------------------------------------------------------------------------------------------
 
-test("Materialize: \"$className\" explícito com Name divergente ('MyScripts') sob StarterPlayer NÃO é adotado -- erra via Services.new normal, família Roblox real", function()
-	local plan, planBag = planFixture("fixed-child-name-mismatch")
-	assert(plan ~= nil, `fixture 'fixed-child-name-mismatch' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
-	if plan == nil then
-		return
-	end
+test("Materialize (defesa em profundidade -- InstancePlan montado à mão): \"$className\" explícito com Name divergente ('MyScripts') sob StarterPlayer NÃO é adotado -- erra via Services.new normal, família Roblox real", function()
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeFixedChildNameMismatch",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		RootProperties = {},
+		Roots = {
+			{
+				Name = "StarterPlayer",
+				ClassName = "StarterPlayer",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						Name = "MyScripts",
+						ClassName = "StarterPlayerScripts",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {},
+						Children = {},
+						NodePath = "tree.StarterPlayer.MyScripts",
+					},
+				},
+				NodePath = "tree.StarterPlayer",
+			},
+		},
+		Diagnostics = {},
+	}
 
 	local game = newGame()
 	local bag = Diagnostics.newBag()
@@ -824,6 +868,23 @@ test("Materialize: \"$className\" explícito com Name divergente ('MyScripts') s
 	if starterPlayer ~= nil then
 		assert(starterPlayer:FindFirstChild("MyScripts") == nil, "'MyScripts' nunca deveria ter sido criado")
 	end
+end)
+
+test("Plan: \"$className\" explícito com Name divergente ('MyScripts') sob StarterPlayer é barrado em TreePlanner.Plan -- 'plan/engine-only-class' (task-cli-024, muda de fase em relação ao teste acima)", function()
+	local plan, planBag = planFixture("fixed-child-name-mismatch")
+	assert(plan == nil, "'MyScripts' com $className 'StarterPlayerScripts' deveria impedir TreePlanner.Plan de devolver um InstancePlan -- a guarda nova (Decisão 17) dispara ANTES de Materialize")
+
+	local diagnostic = findByCode(planBag, "plan/engine-only-class")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/engine-only-class'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "classe só-do-motor em posição de nó deveria ser Severity 'error'")
+		assert(diagnostic.NodePath == "tree.StarterPlayer.MyScripts", "Diagnostic deveria nomear o nó exato")
+		assert(diagnostic.Field == "$className", "Diagnostic deveria nomear o CAMPO ($className)")
+		assert(string.find(diagnostic.Message, "StarterPlayerScripts", 1, true) ~= nil, "Message deveria citar a classe 'StarterPlayerScripts'")
+		assert(string.find(diagnostic.Message, "NotCreatable", 1, true) ~= nil, "Message deveria citar a tag 'NotCreatable' do Roblox API Dump como justificativa")
+	end
+
+	assert(findByCode(planBag, "materialize/invalid-class") == nil, "NÃO deveria haver 'materialize/invalid-class' -- 'plan/engine-only-class' já retornou nil antes de Materialize sequer rodar")
 end)
 
 --------------------------------------------------------------------------------------------------

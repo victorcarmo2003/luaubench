@@ -1,0 +1,7 @@
+{
+  "name": "NestedRootEngineOnlyClassInner",
+  "tree": {
+    "$className": "DataModel",
+    "$path": "plain-folder"
+  }
+}

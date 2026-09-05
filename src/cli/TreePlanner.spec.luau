@@ -48,9 +48,46 @@ local FAKE_SERVICE_CLASSES: { [string]: boolean } = {
 	StarterPlayer = true,
 }
 
+-- task-cli-024 (Decisão 17): filhos fixos do motor fingidos pra este spec -- espelha o par
+-- (pai, nome, classe) que `services/EngineFixedChildren.luau` de verdade declara, exigindo os TRÊS
+-- baterem (não só a classe) pela mesma razão do real: `"MyScripts": {"$className":
+-- "StarterPlayerScripts"}` (nome errado) precisa DEVOLVER `false` aqui, pra cair no caminho normal
+-- e a guarda `plan/engine-only-class` disparar -- exatamente o bug que esta task fecha.
+local function fakeIsEngineFixedChild(parentClassName: string, name: string, className: string): boolean
+	if parentClassName == "StarterPlayer" then
+		return name == className and (className == "StarterPlayerScripts" or className == "StarterCharacterScripts")
+	elseif parentClassName == "Workspace" then
+		return name == className and className == "Terrain"
+	end
+	return false
+end
+
+-- task-cli-024 (Decisão 17): classes "só o motor cria, e este build sabe simular" fingidas pra
+-- este spec -- os quatro Services fake acima (excluídos pela guarda via `isServiceRoot`),
+-- StarterPlayerScripts/StarterCharacterScripts (excluídos via `isEngineFixedChild`) e
+-- "Instance"/"DataModel" (nunca legítimos num nó de projeto). "Terrain" fica DE FORA de propósito,
+-- espelhando o recorte real de `Services.IsEngineOnlyClass` (`Covered == false` pra "Terrain" no
+-- manifesto real -- Decisão 17, "A armadilha nº 2") -- é o que garante, em qualquer parentesco
+-- errado que uma fixture futura venha a testar, que "Terrain" continue caindo na mensagem "not
+-- simulated yet" do `Materialize`, nunca em `plan/engine-only-class`.
+local FAKE_ENGINE_ONLY_CLASSES: { [string]: boolean } = {
+	ReplicatedStorage = true,
+	ServerScriptService = true,
+	Workspace = true,
+	StarterPlayer = true,
+	StarterPlayerScripts = true,
+	StarterCharacterScripts = true,
+	Instance = true,
+	DataModel = true,
+}
+
 local FAKE_OPTIONS: TreePlanner.PlanOptions = {
 	IsServiceClass = function(className: string): boolean
 		return FAKE_SERVICE_CLASSES[className] == true
+	end,
+	IsEngineFixedChild = fakeIsEngineFixedChild,
+	IsEngineOnlyClass = function(className: string): boolean
+		return FAKE_ENGINE_ONLY_CLASSES[className] == true
 	end,
 }
 
@@ -1003,21 +1040,32 @@ end)
 -- REFERÊNCIA (nunca no nome real em disco -- NTFS proíbe dois nomes que só diferem em case no
 -- mesmo diretório), cada uma apontando "de volta" pra outra via "$path" com "..".
 --
--- IMPORTANTE (documentado aqui pra não virar surpresa em revisão): com EXATAMENTE duas pastas
--- reais envolvidas, este cenário SEMPRE converge sozinho via o `cycleGuard` PRÉ-EXISTENTE (não
--- precisa do limite de profundidade novo) -- é estrutural, não sorte desta fixture específica:
--- cada arquivo de projeto tem um "$path" FIXO (conteúdo estático) referenciando o outro, e um
--- ".." sempre REESCREVE por completo o último segmento do caminho (o `stack` de
--- `normalizePath` descarta o segmento errado, não importa o case usado pra chegar até ele) --
--- então a partir da segunda vez que o MESMO arquivo real é revisitado, a string produzida é
--- IDÊNTICA a uma visita anterior, e o `cycleGuard` (chave = string exata) sempre fecha o ciclo em
--- poucos saltos. Reproduz o que o revisor mediu manualmente (4 saltos, cadeia com o nome errado
--- no meio) -- prova que o comportamento não regrediu com a task-cli-008. O teste ACIMA (cadeia de
--- pastas comuns) é quem prova o limite de profundidade em si, pro vetor que o `cycleGuard` de
--- fato NÃO cobre (pasta comum, sem "$path" repetido nenhum -- ver comentário completo ali).
+-- MUDANÇA DE CÓDIGO (achado ao rodar esta suite pra task-cli-024, nunca assumido -- ver "Rode você
+-- mesmo lune run" no board): antes da guarda `plan/engine-only-class` (Decisão 17), este cenário
+-- convergia em ~4 saltos via o `cycleGuard` PRÉ-EXISTENTE (comentário antigo, preservado no
+-- histórico do git). Com a guarda nova, ele converge ANTES disso, em só 2 saltos, e com um
+-- Diagnostic DIFERENTE: `isOutermostRoot` (`TreePlanner.luau`, `resolveCore`) compara a forma
+-- NORMALIZADA de `currentProjectFilePath` contra `ctx.OutermostProjectFilePath` por IGUALDADE DE
+-- STRING -- `normalizePath` NÃO faz lowercase (limitação JÁ DECLARADA no cabeçalho do arquivo,
+-- "não cobre... diferença de maiúscula/minúscula em path case-insensitive do Windows"). Na segunda
+-- vez que "CaseA" é visitado (via "../casea", em minúsculas, dentro de "CaseB/Back"), o caminho
+-- resultante aponta pro MESMO arquivo físico, mas como STRING difere de `ctx.OutermostProjectFilePath`
+-- (que guardou a forma com maiúscula, da chamada ORIGINAL) -- `isOutermostRoot` dá `false` pra essa
+-- segunda visita. Essa segunda raiz declara `"$className": "DataModel"` (é o MESMO `default.
+-- project.json` de "CaseA"), e "DataModel" fora da raiz mais externa é EXATAMENTE o que
+-- `plan/engine-only-class` existe pra pegar (é o mesmo mecanismo do bug original, task-cli-022) --
+-- a guarda dispara e devolve `nil` ANTES de "CaseA" (revisitado) sequer chegar a expandir seu
+-- filho "Vendor" de novo, que é o passo que precisaria de mais 2 saltos pra fechar o ciclo via
+-- `cycleGuard` como antes. NÃO é uma regressão de comportamento -- é um resultado tecnicamente
+-- válido (ainda impede o hang, ainda como `error`), só que MAIS CEDO e com um código diferente;
+-- documentado aqui, e no relatório da task-cli-024, por ser um efeito colateral que a Decisão 17
+-- não previu explicitamente (só nomeou "TreeMaterializer.spec.luau:812" como teste que mudaria de
+-- fase). O teste ACIMA (cadeia de pastas comuns) continua provando o limite de profundidade em si,
+-- pro vetor que nem o `cycleGuard` nem `plan/engine-only-class` cobrem (pasta comum, sem "$path"
+-- repetido nenhum).
 --------------------------------------------------------------------------------------------------
 
-test("Plan: duas pastas diferindo só em maiúscula/minúscula (Windows) apontando uma pra outra não trava -- termina via o cycleGuard existente, não precisa do limite de profundidade", function()
+test("Plan: duas pastas diferindo só em maiúscula/minúscula (Windows) apontando uma pra outra não trava -- converge via 'plan/engine-only-class' (task-cli-024), mais cedo que o cycleGuard de antes", function()
 	local startClock = os.clock()
 	local plan, bag = planFixture("nested-project-cycle-case-insensitive/CaseA")
 	local elapsedSeconds = os.clock() - startClock
@@ -1025,16 +1073,86 @@ test("Plan: duas pastas diferindo só em maiúscula/minúscula (Windows) apontan
 	assert(plan == nil, "ciclo via case-insensitivity deveria impedir Plan de devolver um InstancePlan")
 	assert(elapsedSeconds < 10, `Plan não deveria demorar mais que alguns segundos -- levou {elapsedSeconds}s (indício de hang)`)
 
-	-- Ainda é o `plan/nested-project-cycle` PRÉ-EXISTENTE que fecha este caso (ver comentário
-	-- grande acima) -- nunca `plan/max-depth-exceeded` (esse cenário nem chega perto do limite).
-	local cycleDiagnostic = findByCode(bag, "plan/nested-project-cycle")
-	assert(cycleDiagnostic ~= nil, "deveria haver um Diagnostic 'plan/nested-project-cycle' -- o cycleGuard existente deveria fechar este ciclo sozinho")
-	assert(findByCode(bag, "plan/max-depth-exceeded") == nil, "este cenário NÃO deveria alcançar o limite de profundidade -- só duas pastas reais, sempre converge antes")
+	-- Ver comentário grande acima: a guarda nova (`plan/engine-only-class`) agora fecha este caso
+	-- ANTES do `cycleGuard` pré-existente (`plan/nested-project-cycle`) ter a chance de disparar --
+	-- nunca `plan/max-depth-exceeded` (esse cenário nem chega perto do limite, converge em 2 saltos).
+	local engineOnlyDiagnostic = findByCode(bag, "plan/engine-only-class")
+	assert(engineOnlyDiagnostic ~= nil, "deveria haver um Diagnostic 'plan/engine-only-class' -- a guarda nova (task-cli-024) fecha este caso mais cedo que o cycleGuard pré-existente")
+	assert(findByCode(bag, "plan/nested-project-cycle") == nil, "NÃO deveria mais haver 'plan/nested-project-cycle' aqui -- 'plan/engine-only-class' dispara ANTES, na segunda visita a 'CaseA' (revisitado com case diferente)")
+	assert(findByCode(bag, "plan/max-depth-exceeded") == nil, "este cenário NÃO deveria alcançar o limite de profundidade -- converge em poucos saltos")
 
-	if cycleDiagnostic ~= nil then
-		assert(cycleDiagnostic.Severity == "error", "ciclo deveria ser Severity 'error'")
-		assert(string.find(cycleDiagnostic.Message, "->", 1, true) ~= nil, "Message deveria listar a CADEIA (separador '->')")
+	if engineOnlyDiagnostic ~= nil then
+		assert(engineOnlyDiagnostic.Severity == "error", "classe só-do-motor em posição de nó deveria ser Severity 'error'")
+		assert(string.find(engineOnlyDiagnostic.Message, "DataModel", 1, true) ~= nil, "Message deveria citar a classe 'DataModel' -- é o mesmo default.project.json de 'CaseA', revisitado")
 	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-024 (arquiteto-cli-2026-09-05.md, Decisão 17): 'plan/engine-only-class' -- o `Plan`
+-- antecipa que `TreeMaterializer.createInstance` cairia no ramo `Services.new` pra um nó cuja
+-- classe é `NotCreatable` no dump E que este build sabe simular ("this build" = `FAKE_OPTIONS`,
+-- não `services` de verdade -- ver comentário de `FAKE_ENGINE_ONLY_CLASSES`, acima).
+--------------------------------------------------------------------------------------------------
+
+test("Plan: raiz de projeto ANINHADO com \"$className\": \"DataModel\" + pasta sem init.* -> 'plan/engine-only-class' citando o .project.json ANINHADO (o bug original, task-cli-022)", function()
+	local plan, bag = planFixture("nested-project-root-engine-only-class")
+	assert(plan == nil, "raiz de projeto aninhado resolvendo pra 'DataModel' deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostic = findByCode(bag, "plan/engine-only-class")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/engine-only-class'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "classe só-do-motor em posição de nó deveria ser Severity 'error'")
+		assert(diagnostic.NodePath == "tree", "Diagnostic deveria nomear a raiz DO PROJETO ANINHADO ('tree' -- NodePath da raiz de qualquer arquivo de projeto lido isoladamente)")
+		assert(diagnostic.Field == "$className", "Diagnostic deveria nomear o CAMPO ($className) -- a classe veio de um $className explícito")
+		assert(
+			diagnostic.FilePath ~= nil and string.find(diagnostic.FilePath, "nested-project-root-engine-only-class/pkg", 1, true) ~= nil,
+			`FilePath deveria citar o .project.json ANINHADO ('pkg/default.project.json'), não o da raiz do plano -- é o ganho real sobre 'materialize/invalid-class' (só tem NodePath). FilePath: {tostring(diagnostic.FilePath)}`
+		)
+		assert(string.find(diagnostic.Message, "DataModel", 1, true) ~= nil, "Message deveria citar a classe 'DataModel'")
+		assert(string.find(diagnostic.Message, "outermost", 1, true) ~= nil, "Message deveria ter a frase extra pra 'DataModel' (Decisão 17: só dentro de Messages.PlanEngineOnlyClass, um Code só)")
+	end
+end)
+
+test("Plan: \"$className\": \"Instance\" num nó comum (não é raiz, Service, nem filho fixo) -> 'plan/engine-only-class'", function()
+	local plan, bag = planFixture("engine-only-class-instance")
+	assert(plan == nil, "'$className': 'Instance' num nó comum deveria impedir Plan de devolver um InstancePlan")
+
+	local diagnostic = findByCode(bag, "plan/engine-only-class")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'plan/engine-only-class'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "'Instance' em posição de nó deveria ser Severity 'error'")
+		assert(diagnostic.NodePath == "tree.ReplicatedStorage.Bad", "Diagnostic deveria nomear o nó exato")
+		assert(diagnostic.Field == "$className", "Diagnostic deveria nomear o CAMPO ($className)")
+		assert(string.find(diagnostic.Message, "Instance", 1, true) ~= nil, "Message deveria citar a classe 'Instance'")
+		assert(string.find(diagnostic.Message, "NotCreatable", 1, true) ~= nil, "Message deveria citar a tag 'NotCreatable' do Roblox API Dump como justificativa")
+		assert(string.find(diagnostic.Message, "outermost", 1, true) == nil, "Message NÃO deveria ter a frase extra de 'DataModel' -- essa classe é 'Instance', não 'DataModel'")
+	end
+end)
+
+test("Plan: REGRESSÃO -- Service como filho direto da raiz ('basic') e StarterPlayerScripts/Terrain ('fixed-children') continuam SEM 'plan/engine-only-class'", function()
+	local basicPlan, basicBag = planFixture("basic")
+	assert(basicPlan ~= nil, "fixture 'basic' deveria continuar produzindo um InstancePlan válido")
+	assert(findByCode(basicBag, "plan/engine-only-class") == nil, "Service ('ReplicatedStorage') como filho direto da raiz NUNCA deveria disparar 'plan/engine-only-class' -- é a exclusão isServiceRoot")
+
+	local fixedPlan, fixedBag = planFixture("fixed-children")
+	assert(fixedPlan ~= nil, "fixture 'fixed-children' deveria continuar produzindo um InstancePlan válido")
+	assert(not fixedBag:HasErrors(), "fixture 'fixed-children' NÃO deveria produzir nenhum erro -- é o repro exato do bug real (17/17 projetos do usuário)")
+	assert(findByCode(fixedBag, "plan/engine-only-class") == nil, "StarterPlayerScripts/StarterCharacterScripts/Terrain (filhos fixos do motor) NUNCA deveriam disparar 'plan/engine-only-class' -- é a exclusão isEngineFixedChild")
+end)
+
+test("Plan: REGRESSÃO -- raiz de TOPO 'DataModel' + pasta sem init.* ('root-source-ignored') continua passando SEM 'plan/engine-only-class', só o warning de sempre", function()
+	local plan, bag = planFixture("root-source-ignored")
+	assert(plan ~= nil, "fixture 'root-source-ignored' deveria continuar produzindo um InstancePlan válido")
+	assert(not bag:HasErrors(), "raiz de TOPO com 'DataModel' explícito NUNCA deveria produzir erro -- é a exclusão isOutermostRoot")
+	assert(findByCode(bag, "plan/engine-only-class") == nil, "raiz de TOPO NUNCA deveria disparar 'plan/engine-only-class' -- é a exclusão isOutermostRoot")
+	assert(findByCode(bag, "plan/root-source-ignored") ~= nil, "deveria continuar emitindo só o warning 'plan/root-source-ignored' de sempre (task-cli-018)")
+end)
+
+test("Plan: REGRESSÃO -- raiz de projeto aninhado 'DataModel' + \"$path\" de ARQUIVO continua 'plan/class-name-conflict' (Decisão 16 dispara ANTES da guarda nova)", function()
+	local plan, bag = planFixture("nested-project-root-datamodel-conflict")
+	assert(plan == nil, "raiz de projeto aninhado com DataModel + $path de Source deveria continuar impedindo Plan de devolver um InstancePlan")
+	assert(findByCode(bag, "plan/class-name-conflict") ~= nil, "deveria continuar 'plan/class-name-conflict' -- guarda pré-existente (Decisão 16) dispara e retorna nil ANTES de chegar na guarda nova (task-cli-024)")
+	assert(findByCode(bag, "plan/engine-only-class") == nil, "NÃO deveria haver 'plan/engine-only-class' aqui -- 'plan/class-name-conflict' já retornou nil antes")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

@@ -138,7 +138,15 @@ local function locateAndPlan(options: RunOptions, bag: Diagnostics.Bag): TreePla
 		return nil
 	end
 
-	local plan = TreePlanner.Plan(project, { IsServiceClass = Services.IsServiceClass }, bag)
+	-- task-cli-024: as três funções são injetadas (nunca `require("../services")` dentro de
+	-- `TreePlanner` -- ver cabeçalho do módulo). `IsEngineFixedChild`/`IsEngineOnlyClass` já são
+	-- puras e seguras de chamar aqui, ANTES de `Services.Bootstrap` (passo 7, mais abaixo) --
+	-- arquiteto-cli-2026-09-05.md, Decisão 17, "Contrato entre territórios (delta)".
+	local plan = TreePlanner.Plan(project, {
+		IsServiceClass = Services.IsServiceClass,
+		IsEngineFixedChild = Services.IsEngineFixedChild,
+		IsEngineOnlyClass = Services.IsEngineOnlyClass,
+	}, bag)
 	if plan == nil or bag:HasErrors() then
 		return nil
 	end
