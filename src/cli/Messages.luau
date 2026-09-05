@@ -346,4 +346,44 @@ function Messages.MaterializePropertyAssignmentFailed(nodePath: string, property
 	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {engineError}`
 end
 
+--------------------------------------------------------------------------------------------------
+-- UnsimulatedGlobals (Vector3/CFrame/Color3/Enum/...) -- task-cli-005, arquiteto-cli-2026-09-05.md,
+-- Decisão 12, "Globais de valor não simulados: erro nomeado, nunca nil".
+--------------------------------------------------------------------------------------------------
+
+-- Prefixo `[LuauBench]` OBRIGATÓRIO (regra 00/03): não tem contraparte real (no Roblox `Vector3`
+-- funciona normalmente) -- é o LuauBench que ainda não simula tipos de valor (leva 3), nunca uma
+-- lacuna do Roblox. String fixada verbatim pelo desenho -- não reformular por classe.
+function Messages.UnsimulatedGlobal(name: string): string
+	return `[LuauBench] {name} is not simulated by LuauBench yet (planned: value-types wave)`
+end
+
+--------------------------------------------------------------------------------------------------
+-- ModuleLoader (o `require` simulado) -- task-cli-005, arquiteto-cli-2026-09-05.md, Decisão 5.
+--
+-- As três primeiras são família Roblox (inglês, SEM prefixo `[LuauBench]`) -- aproximação de
+-- boa-fé, string NÃO confirmada byte-a-byte contra o Roblox real (task-cli-007 pesquisou a
+-- pergunta -- ver .claude/agents-memory/pesquisa-cli-lune-build-2026-09-05.md), mesmo protocolo já
+-- usado por `Services.new`/`Instance.luau` para mensagem de família Roblox não confirmada.
+--------------------------------------------------------------------------------------------------
+
+function Messages.RequireRecursedSameThread(): string
+	return "Requested module was required recursively"
+end
+
+function Messages.RequireDidNotReturnOneValue(): string
+	return "Module code did not return exactly one value"
+end
+
+function Messages.RequireInvalidArgument(): string
+	return "Attempted to call require with invalid argument(s)."
+end
+
+-- SEM contraparte real (no Roblox, `require` por asset id funciona, buscando o asset via rede) --
+-- prefixo `[LuauBench]` OBRIGATÓRIO, motivo é local-first (regra 00, invariante 6): o LuauBench
+-- nunca faz chamada de rede para buscar asset do usuário.
+function Messages.RequireAssetIdNotSupported(): string
+	return "[LuauBench] require by asset id is not supported (LuauBench runs offline)"
+end
+
 return Messages
