@@ -1,0 +1,13 @@
+{
+  "name": "RunE2EBasic",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Modules": { "$path": "shared/Modules" },
+      "NotRun": { "$path": "shared/NotRun.server.lua" }
+    },
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

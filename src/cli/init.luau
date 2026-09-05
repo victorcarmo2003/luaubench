@@ -14,29 +14,39 @@
 	por `src/cli/init`. Isso desloca a base de resolução dos `require` relativos ESCRITOS AQUI
 	DENTRO em um nível: por isso os `require` abaixo usam `./cli/Args`/`./cli/Messages` (não
 	`./Args`/`./Messages`) para alcançar os arquivos irmãos, e `./services` (não `../services`)
-	para alcançar `src/services`. De FORA de `src/cli/` (um módulo de nome normal, ex.: uma
-	futura `RunCommand.luau` chamando de volta, ou um teste em `tests/scenarios/`), o caminho é o
-	óbvio: `require("../cli")`.
+	para alcançar `src/services`. De FORA de `src/cli/` (um módulo de nome normal, ex.: um teste em
+	`tests/scenarios/`), o caminho é o óbvio: `require("../cli")`.
 
 	NUNCA `require("./init")`/`require("./init.luau")` de um irmão -- confirmado empiricamente
 	pelo mesmo mecanismo já registrado em `runtime`/`services`: só a forma "estilo diretório"
 	resolve.
 
-	ESCOPO DESTA TAREFA (task-cli-001, "esqueleto do território"): só os cinco módulos de base
-	existem ainda -- `ProjectFile`/`TreePlanner`/`TreeMaterializer`/`ScriptRunner`/`RunCommand`
-	(o pipeline real de `luaubench run`) são tarefas seguintes (task-cli-002 em diante, ver
-	arquiteto-cli-2026-09-05.md, "Pipeline do `luaubench run [caminho]`"). Por isso `Cli.Main`
-	JÁ reconhece e valida o comando "run" via `Args.Parse`, mas ainda não tem como executá-lo de
-	verdade -- devolve `Messages.RunPipelineNotImplementedYet()` em vez de fingir sucesso (regra
-	00: nunca "tudo concluído" silencioso). `Cli.RunProject` (citado no desenho do arquiteto,
-	"Módulos" -> "init.luau") NÃO é adicionado aqui de propósito: sua assinatura documentada
-	referencia `RunCommand.RunOptions`, um tipo de um módulo que ainda não existe neste território
-	-- será acrescentado quando `RunCommand.luau` existir (task-cli-006), não antes.
+	PIPELINE REAL LIGADO (task-cli-006; arquiteto-cli-2026-09-05.md, "Pipeline do `luaubench run
+	[caminho]`" e Decisões 11/13). `Cli.Main` não implementa nada do pipeline por conta própria --
+	traduz o `Command` de `Args.Parse` num `RunCommand.RunOptions` e delega inteiramente a
+	`RunCommand.Execute` (`ProjectFile`/`TreePlanner`/`TreeMaterializer`/`ScriptRunner`/
+	`OutputFormatter` já existem, território de `coder-cli` nas tarefas anteriores). `Cwd` vem de
+	`process.cwd` (`RunCommand` nunca lê `process` diretamente -- só quem monta as `RunOptions`).
+	`UseColor` resolve `--no-color` (`command.NoColor`) E a variável de ambiente `NO_COLOR`
+	(Decisão 13 do desenho: "cor ligada por padrão, desligada por --no-color e pela env var
+	NO_COLOR" -- presença da variável desliga a cor independente do valor, convenção de facto
+	<https://no-color.org>, `process.env.NO_COLOR ~= nil` já cobre isso).
+
+	`Cli.RunProject` (citado no desenho do arquiteto, "Módulos" -> "init.luau") existe agora que
+	`RunCommand.luau` existe -- é o caminho que `tests/scenarios/` (território do `testador`) usa
+	pra rodar um projeto de ponta a ponta com `RunOptions` já montadas (sem precisar reconstruir
+	argv), sem disparar processo.
+
+	`Messages.RunPipelineNotImplementedYet()` (Messages.luau) fica sem uso a partir desta tarefa --
+	NÃO removida do arquivo (regra do board: Messages.luau é append-only) nem do módulo `Messages`
+	em si (nenhuma linha apagada), só deixou de ser chamada aqui.
 ]]
 
 local Args = require("./cli/Args")
 local Messages = require("./cli/Messages")
+local RunCommand = require("./cli/RunCommand")
 local Services = require("./services")
+local process = require("@lune/process")
 local stdio = require("@lune/stdio")
 
 -- Versão do próprio LuauBench (distinta da versão do Roblox API Dump, que vem de
@@ -55,11 +65,19 @@ export type MainResult = {
 local Cli = {}
 
 -- Exit codes fixados no desenho ("Pipeline do `luaubench run [caminho]`"): 0 sucesso; 1 o
--- script do usuário levantou erro não tratado; 2 erro de projeto ou de uso. Nesta tarefa só o
--- código 2 é alcançável (uso inválido via Args, ou o placeholder de "run" ainda não implementado)
--- -- 0 (help/version) e 1 (erro do script do usuário) ficam para quando o pipeline real existir.
+-- script do usuário levantou erro não tratado; 2 erro de projeto ou de uso. Os três agora são
+-- alcançáveis de verdade: 0/1 vêm de `RunCommand.Execute` (pipeline real, task-cli-006); 2
+-- continua cobrindo tanto uso inválido (`Args`) quanto erro de projeto (`RunCommand`).
 local EXIT_OK = 0
 local EXIT_USAGE_OR_PROJECT_ERROR = 2
+
+-- Decisão 13 do desenho: cor ligada por padrão, desligada por `--no-color` OU pela variável de
+-- ambiente `NO_COLOR` -- convenção de facto (<https://no-color.org>): a MERA PRESENÇA da
+-- variável desliga a cor, independente do valor que ela carrega (mesmo "" ou "0"), por isso o
+-- teste é `~= nil`, nunca uma comparação de valor.
+local function resolveUseColor(noColorFlag: boolean, noColorEnvValue: string?): boolean
+	return not noColorFlag and noColorEnvValue == nil
+end
 
 function Cli.Main(argv: { string }): MainResult
 	local command = Args.Parse(argv)
@@ -82,10 +100,26 @@ function Cli.Main(argv: { string }): MainResult
 		return { ExitCode = EXIT_USAGE_OR_PROJECT_ERROR, ErrorCount = 1, WarningCount = 0 }
 	end
 
-	-- `command.Kind == "run"` é a única variante restante do union `Args.Command` -- ver nota de
-	-- escopo no cabeçalho deste arquivo.
-	stdio.ewrite(Messages.RunPipelineNotImplementedYet() .. "\n")
-	return { ExitCode = EXIT_USAGE_OR_PROJECT_ERROR, ErrorCount = 1, WarningCount = 0 }
+	-- `command.Kind == "run"` é a única variante restante do union `Args.Command`. Traduz o
+	-- `Command` já parseado em `RunCommand.RunOptions` e delega o pipeline inteiro -- `Cli.Main`
+	-- não decide nada sobre `.project.json`/DataModel/scripts por conta própria (regra 01: um
+	-- módulo, uma responsabilidade).
+	return RunCommand.Execute({
+		ProjectPath = command.ProjectPath,
+		Cwd = process.cwd,
+		Timeout = command.Timeout,
+		UseColor = resolveUseColor(command.NoColor, process.env.NO_COLOR),
+		Verbose = command.Verbose,
+	})
+end
+
+-- Citada no desenho do arquiteto ("Módulos" -> "init.luau") desde a task-cli-001, mas só
+-- adicionada agora que `RunCommand.luau` (e o tipo `RunCommand.RunOptions` que sua assinatura
+-- referencia) existe de verdade (task-cli-006). Caminho programático de `tests/scenarios/`
+-- (território do `testador`) para rodar um projeto de ponta a ponta com `RunOptions` já
+-- montadas, sem reconstruir argv nem disparar processo.
+function Cli.RunProject(options: RunCommand.RunOptions): MainResult
+	return RunCommand.Execute(options)
 end
 
 return Cli

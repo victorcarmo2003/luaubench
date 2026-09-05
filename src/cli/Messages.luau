@@ -386,4 +386,58 @@ function Messages.RequireAssetIdNotSupported(): string
 	return "[LuauBench] require by asset id is not supported (LuauBench runs offline)"
 end
 
+--------------------------------------------------------------------------------------------------
+-- OutputFormatter (OutputRecord -> stdout/stderr) -- task-cli-006, arquiteto-cli-2026-09-05.md,
+-- Decisão 13 ("Formato do output e idioma").
+--------------------------------------------------------------------------------------------------
+
+-- `record.scriptName` é `string?` no tipo de `runtime` (OutputRecord) -- na prática sempre
+-- preenchido por `Sandbox.Run`/`Sandbox.Load`/`ModuleLoader`, mas o formatter trata o caso `nil`
+-- de forma honesta em vez de indexar uma string vazia sem explicação nenhuma.
+function Messages.UnknownScriptName(): string
+	return "<unknown script>"
+end
+
+function Messages.OutputPrintLine(scriptName: string, message: string): string
+	return `{scriptName}: {message}`
+end
+
+-- "warn  " (duas espaços) alinha visualmente com "error " (um espaço) -- as duas etiquetas somam
+-- 6 caracteres, então a coluna de `scriptName` começa na mesma posição nas duas linhas (Decisão
+-- 13 do desenho, exemplo verbatim de saída).
+function Messages.OutputWarnLine(scriptName: string, message: string): string
+	return `warn  {scriptName}: {message}`
+end
+
+function Messages.OutputErrorLine(scriptName: string, line: number?, message: string): string
+	if line == nil then
+		return `error {scriptName}: {message}`
+	end
+	return `error {scriptName}:{line}: {message}`
+end
+
+-- Reatribuição de linha (Decisão 13): um erro que se originou dentro de um `ModuleScript`
+-- requerido é renderizado citando o MÓDULO que de fato errou (nome + linha), mas também o Script
+-- que originou a cadeia de `require` (`originScriptName`, o `scriptName` de `OutputRecord`, que
+-- continua sendo o Script de topo -- ver OutputFormatter.luau).
+function Messages.OutputErrorLineFromModule(moduleName: string, moduleLine: number?, message: string, originScriptName: string): string
+	if moduleLine == nil then
+		return `error {moduleName}: {message} (required by {originScriptName})`
+	end
+	return `error {moduleName}:{moduleLine}: {message} (required by {originScriptName})`
+end
+
+--------------------------------------------------------------------------------------------------
+-- RunCommand (orquestração do pipeline `luaubench run`) -- task-cli-006, arquiteto-cli-2026-09-
+-- 05.md, seção "Pipeline do `luaubench run [caminho]`".
+--------------------------------------------------------------------------------------------------
+
+function Messages.SummaryLine(executed: number, skippedLocalScripts: number, skippedByContainer: number, skippedDisabled: number): string
+	return `{executed} Script(s) executed, {skippedLocalScripts} LocalScript(s) not executed (LuauBench runs as a server), {skippedByContainer} Script(s) skipped (not under a configured server container), {skippedDisabled} Script(s) skipped (Enabled = false).`
+end
+
+function Messages.DiagnosticCountLine(errorCount: number, warningCount: number): string
+	return `{errorCount} error(s), {warningCount} warning(s).`
+end
+
 return Messages

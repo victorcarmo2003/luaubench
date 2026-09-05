@@ -1,0 +1,9 @@
+{
+  "name": "RunE2ETimeout",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

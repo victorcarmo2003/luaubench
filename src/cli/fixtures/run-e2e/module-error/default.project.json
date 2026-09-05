@@ -1,0 +1,12 @@
+{
+  "name": "RunE2EModuleError",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Modules": { "$path": "shared/Modules" }
+    },
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}
