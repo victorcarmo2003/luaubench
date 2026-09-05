@@ -1,0 +1,17 @@
+{
+  "source": "Roblox/creator-docs",
+  "path": "content/en-us/scripting/capabilities.md",
+  "url": "https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/scripting/capabilities.md",
+  "fetchedAt": "2026-09-05",
+  "grantable": [
+    "AccessOutsideWrite", "Animation", "AssetCreateUpdate", "AssetManagement", "AssetRead", "Audio",
+    "AvatarAppearance", "AvatarBehavior", "Basic", "CSG", "CapabilityControl", "Capture", "Chat",
+    "Consequences", "CreateInstances", "DataStore", "DynamicGeneration", "Environment", "Groups",
+    "Input", "LegacySound", "LoadOwnedAsset", "LoadString", "LoadUnownedAsset", "Logging", "Material",
+    "Monetization", "Network", "Physics", "PlatformAvatarEditing", "Players", "PromptExternalPurchase",
+    "RemoteEvent", "RunClientScript", "RunServerScript", "ScriptGlobals", "SensitiveInput",
+    "ServerCommunication", "Social", "Teleport", "UI"
+  ],
+  "reserved": ["InternalTest", "PluginOrOpenCloud", "RemoteCommand"],
+  "note": "grantable = capabilities que a doc oficial enumera como concedíveis a um container sandboxed; um script NÃO sandboxed as detém todas (sistema all-or-nothing). reserved = nomes que aparecem no campo Capabilities do dump mas NÃO na doc -- portões de identidade/motor que nenhum script comum detém. Classificar um nome novo é decisão humana explícita: o gerador aborta em vez de adivinhar (ver tools/generate-services.luau)."
+}
