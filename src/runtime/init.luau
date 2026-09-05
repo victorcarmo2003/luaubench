@@ -39,8 +39,8 @@
 	identidade de chunk normal (`src/runtime/NomeDoArquivo`) e resolvem `./Vizinho` do jeito
 	óbvio, como os próprios specs deles já confirmam.
 
-	A superfície abaixo NÃO é o desenho original ao pé da letra: segue as duas correções
-	posteriores registradas no mesmo arquivo de arquitetura --
+	A superfície abaixo NÃO é o desenho original ao pé da letra: segue as três correções
+	posteriores registradas no mesmo arquivo de arquitetura e no desenho de `services` --
 
 	- "Revisão pós-integração 2026-09-04 (2)", subseção "Consequência: `Runtime.Instance.NewBase`
 	  sai da superfície pública": com `ClassRegistry.new` passando a criar a instância base e
@@ -54,6 +54,22 @@
 	  plumbing interno consumido só por `ClassRegistry.luau`, que já roda dentro do território de
 	  `runtime`. `ThreadBroker.luau` também não é reexportado (plumbing interno do `Scheduler`,
 	  ver seção "Revisão pós-integração 2026-09-04 — contrato Wait/resume").
+	- Desenho de `services` (task-runtime-022, `.claude/agents-memory/arquiteto-services-2026-09-05.md`,
+	  seção "Contrato entre territórios", subseção "`runtime` -> `services`"): `Instance.SetClassSchema`
+	  entra na MESMA lista de plumbing interno acima, pela MESMA razão -- `ClassRegistry.new` é o
+	  único chamador legítimo, na ordem que garante a validação (schema congelado + forma de cada
+	  `MemberDescriptor`, ver `Instance.luau`). Reexportá-lo aqui reabriria o mesmo buraco que
+	  `NewBase`/`SetClassChain`/`SetClassMethods` já fecham: uma instância com schema instalado por
+	  fora do fluxo que semeia os defaults e cria um `Signal` fresco por evento (`ClassRegistry.new`,
+	  "Decisão 6" do desenho de `services`). Em contrapartida, o MESMO desenho exige reexportar os
+	  TIPOS `MemberKind`/`MemberDescriptor`/`ClassSchema` (de `Instance.luau`, task-runtime-018) e
+	  `FireableSignal<T...>` (de `Signal.luau`, existente desde a task-runtime-001): `services`
+	  precisa declarar o tipo do schema que ele mesmo gera (`ClassDescriptor.Schema: ClassSchema?`,
+	  já em `ClassRegistry.luau`) e precisa estreitar o `unknown` que
+	  `Runtime.Instance.GetPropertyRaw(instance, "PlayerAdded")` devolve para disparar um evento de
+	  classe concreta (ex.: `Players.PlayerAdded`) sem recorrer a um cast cego para um tipo que
+	  `services` teria de redeclarar à mão. Só o TIPO `FireableSignal` é reexportado -- `Signal.new`
+	  continua sendo a única forma pública de CRIAR um `FireableSignal`, já exposta acima.
 
 	`Runtime.Instance.GetPropertyRaw`/`SetPropertyRaw` CONTINUAM expostos: é o caminho tipado de
 	leitura/escrita de propriedade genérica que `services` usa para propriedade somente-leitura
@@ -69,7 +85,13 @@ local SandboxModule = require("./runtime/Sandbox")
 
 export type Signal<T...> = SignalModule.Signal<T...>
 export type Connection = SignalModule.Connection
+-- Só o TIPO -- `Signal.new` (abaixo) continua sendo a única forma pública de criar um
+-- `FireableSignal` de verdade (ver cabeçalho deste arquivo, item novo do desenho de `services`).
+export type FireableSignal<T...> = SignalModule.FireableSignal<T...>
 export type Instance = InstanceModule.Instance
+export type MemberKind = InstanceModule.MemberKind
+export type MemberDescriptor = InstanceModule.MemberDescriptor
+export type ClassSchema = InstanceModule.ClassSchema
 export type ClassDescriptor = ClassRegistryModule.ClassDescriptor
 export type DataModel = DataModelModule.DataModel
 export type Scheduler = SchedulerModule.Scheduler
@@ -84,8 +106,8 @@ local Runtime = {
 		new = SignalModule.new,
 	},
 
-	-- Só GetPropertyRaw/SetPropertyRaw -- NewBase/SetClassChain/SetClassMethods ficam de fora
-	-- (ver cabeçalho deste arquivo).
+	-- Só GetPropertyRaw/SetPropertyRaw -- NewBase/SetClassChain/SetClassMethods/SetClassSchema
+	-- ficam de fora (ver cabeçalho deste arquivo).
 	Instance = {
 		GetPropertyRaw = InstanceModule.GetPropertyRaw,
 		SetPropertyRaw = InstanceModule.SetPropertyRaw,

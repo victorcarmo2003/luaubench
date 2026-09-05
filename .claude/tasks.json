@@ -485,7 +485,7 @@
       "id": "task-runtime-022",
       "title": "init.luau reexporta MemberKind/MemberDescriptor/ClassSchema e o tipo FireableSignal",
       "description": "Consequência de contrato do desenho de services (.claude/agents-memory/arquiteto-services-2026-09-05.md, seção 'Contrato entre territórios', subseção 'runtime -> services'). Escopo: src/runtime/init.luau + src/runtime/init.spec.luau, nenhum outro arquivo. (1) Reexportar os export type NOVOS que task-runtime-018 cria em Instance.luau: MemberKind, MemberDescriptor, ClassSchema. Sem eles, services não consegue declarar o tipo do schema que ele mesmo gera, e cairia em cast cego. (2) Reexportar o export type FireableSignal<T...> de Signal.luau — hoje init.luau só reexporta Signal<T...> (sem Fire). services PRECISA disparar eventos de classe concreta (ex.: Players.PlayerAdded) e alcança o sinal via Runtime.Instance.GetPropertyRaw(instance, 'PlayerAdded'), que devolve unknown; sem o tipo FireableSignal exportado, o estreitamento desse unknown seria um cast para um tipo que services teria de redeclarar à mão — divergência de tipo esperando para acontecer. Reexportar SÓ O TIPO: a função Signal.new já é exposta e continua sendo a única forma de criar. (3) NÃO reexportar Instance.SetClassSchema — mesma decisão e mesma razão de NewBase/SetClassChain/SetClassMethods, já registradas no cabeçalho de init.luau: ClassRegistry.new é o único chamador legítimo, na ordem que garante a validação. O cabeçalho de init.luau deve ganhar essa terceira entrada na lista de plumbing não exportado. (4) Atualizar o cabeçalho do arquivo citando o desenho de services como origem da mudança.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 9,
@@ -502,7 +502,9 @@
       ],
       "note": "Pequena e mecânica, mas é dependência dura de task-services-001 (o ClassBuilder e o Types.luau de services declaram esses tipos). Não pode ser feita antes de task-runtime-018 porque os três tipos de schema ainda não existem.",
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "result": "init.luau reexporta MemberKind/MemberDescriptor/ClassSchema (Instance) e FireableSignal (Signal). SetClassSchema confirmadamente NAO exportado. init.spec 5/5 (3+2 novos, incluindo uso real ponta a ponta com Signal disparado via FireableSignal estreitado). Regressao total nos 8 modulos intacta. Confirmou em diretorio-irmao com nome de arquivo normal que o bug de luau-lsp e especifico a init*, nao afeta consumo real por services.",
+      "reviewResult": "APROVADO, sem achados. Revisor reproduziu tudo independente: os 4 tipos acessiveis via require real em diretorio-irmao com nome normal, SetClassSchema confirmadamente sem vazar (grep exaustivo + probe dinamico), 3 testes originais intactos por diff (nao so ainda-passa), regressao nos 7 arquivos nao tocados intacta, bug de tooling init* mesma natureza sem regressao nova. RUNTIME 100% FECHADO -- task-services-001 desbloqueada."
     },
     {
       "id": "task-services-001",

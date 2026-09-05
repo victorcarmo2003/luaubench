@@ -43,6 +43,25 @@
 	nunca polling) -> um segundo script que erra de propósito, confirmando que o erro vira
 	`OutputRecord` e NUNCA derruba o processo do LuauBench (regra 00, invariante 7).
 
+	task-runtime-022 (.claude/agents-memory/arquiteto-services-2026-09-05.md, "Contrato entre
+	territórios", subseção "`runtime` -> `services`") acrescenta dois cenários: (a) uso real de
+	ponta a ponta dos quatro tipos que `init.luau` passou a reexportar -- `MemberKind`/
+	`MemberDescriptor`/`ClassSchema` (registrando uma classe com `Schema`, confirmando que
+	`ClassRegistry.new` semeia o `Default` de uma `Property` e cria um `Signal` fresco por entrada
+	`Kind == "Event"`) e `FireableSignal<T...>` (estreitando o `unknown` de `GetPropertyRaw` sem
+	cast cego, exatamente como `services` vai disparar `Players.PlayerAdded`); (b) o mesmo teste de
+	vazamento que a revisão de task-runtime-007 já tinha feito manualmente fora do repositório
+	(ver `.claude/agents-memory/revisor-runtime-init-2026-09-04.md`, seção 3) passa a viver aqui,
+	comitado, com `Instance.SetClassSchema` acrescentado à lista: `Runtime.Instance.NewBase`/
+	`SetClassChain`/`SetClassMethods`/`SetClassSchema` e `Runtime.ThreadBroker` continuam ausentes.
+	A verificação usa cast em duas etapas por `unknown` para indexação dinâmica (nunca acesso
+	estático a um campo que o tipo não declara -- isso faria o PRÓPRIO `luau-lsp analyze` reprovar
+	este arquivo, já que o objetivo é provar ausência, não presença). Reexportação dos quatro tipos
+	via `require("../runtime")` (a forma real que `services` usa) foi verificada à parte, em um
+	diretório-irmão temporário fora do repositório com `luau-lsp analyze` limpo -- mesmo protocolo
+	de verificação da revisão de task-runtime-007 -- e reportada como tal (não comitada: o escopo
+	desta tarefa é só `init.luau`/`init.spec.luau`).
+
 	Roda com `lune run src/runtime/init.spec.luau`.
 ]]
 
@@ -52,6 +71,12 @@ local Runtime = require("./")
 type Instance = Runtime.Instance
 type ClassDescriptor = Runtime.ClassDescriptor
 type OutputRecord = Runtime.OutputRecord
+
+-- Tipos novos de task-runtime-022 (reexportados de Instance.luau/Signal.luau via init.luau) --
+-- usados abaixo em anotação de tipo real, não só declarados aqui.
+type MemberKind = Runtime.MemberKind
+type MemberDescriptor = Runtime.MemberDescriptor
+type ClassSchema = Runtime.ClassSchema
 
 local passedCount = 0
 local totalCount = 0
@@ -79,6 +104,26 @@ Runtime.ClassRegistry.Register({
 	Initialize = function(instance: Instance)
 		Runtime.Instance.SetPropertyRaw(instance, "Label", CONTAINER_CLASS_NAME)
 	end,
+} :: ClassDescriptor)
+
+-- Segunda classe de teste, task-runtime-022: declara um `Schema` de verdade (uma `Property` com
+-- `Default` e um `Event`) para exercitar `MemberKind`/`MemberDescriptor`/`ClassSchema` em
+-- anotação de tipo real -- exatamente como `services` vai declarar o schema que o gerador emite
+-- (ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Decisão 3"). `table.freeze` é
+-- exigência de `Instance.SetClassSchema` (chamada por `ClassRegistry.new`, nunca direto aqui --
+-- a função não é reexportada, ver cabeçalho de `init.luau`).
+local SCHEMA_CLASS_NAME = "InitSpecSchemaContainer"
+local schemaContainerSchema: ClassSchema = {
+	Label = { Kind = "Property" :: MemberKind, Default = "default-label", ReadOnly = false } :: MemberDescriptor,
+	Added = { Kind = "Event" :: MemberKind, Default = nil, ReadOnly = true } :: MemberDescriptor,
+}
+table.freeze(schemaContainerSchema)
+Runtime.ClassRegistry.Register({
+	ClassName = SCHEMA_CLASS_NAME,
+	SuperClassName = nil,
+	IsAbstract = false,
+	IsService = false,
+	Schema = schemaContainerSchema,
 } :: ClassDescriptor)
 
 test("registro de classe + DataModel.new + ClassRegistry.new + hierarquia via .Parent", function()
@@ -189,6 +234,58 @@ test(
 			stillWorks = true
 		end)
 		assert(stillWorks, "o Scheduler deveria continuar funcionando normalmente depois do erro do script")
+	end
+)
+
+test(
+	"task-runtime-022: MemberKind/MemberDescriptor/ClassSchema em uso real -- ClassRegistry.new semeia Default de Property e cria Signal fresco por Event",
+	function()
+		local instance = Runtime.ClassRegistry.new(SCHEMA_CLASS_NAME, "SchemaInstance")
+
+		assert(
+			instance.Label == "default-label",
+			"uma entrada Kind == 'Property' do schema deveria semear o Default declarado na instância"
+		)
+
+		-- `services` alcança um evento de classe concreta (ex.: Players.PlayerAdded) exatamente
+		-- assim: GetPropertyRaw devolve `unknown`, estreitado para `Runtime.FireableSignal<T...>`
+		-- (reexportado nesta tarefa) sem cast cego para um tipo redeclarado à mão -- é o ganho de
+		-- expor o tipo `FireableSignal` que esta tarefa fecha.
+		local raw: unknown = Runtime.Instance.GetPropertyRaw(instance, "Added")
+		local addedSignal: Runtime.FireableSignal<string> = raw :: Runtime.FireableSignal<string>
+
+		local received: string? = nil
+		addedSignal:Connect(function(value: string)
+			received = value
+		end)
+		addedSignal:Fire("ok")
+
+		assert(
+			received == "ok",
+			"o Signal fresco que ClassRegistry.new cria para uma entrada Kind == 'Event' deveria disparar de ponta a ponta"
+		)
+	end
+)
+
+test(
+	"Runtime.Instance NÃO vaza NewBase/SetClassChain/SetClassMethods/SetClassSchema; Runtime.ThreadBroker não é reexportado",
+	function()
+		-- Cast em duas etapas por `unknown` (nunca `any`, regra 01): a existência do campo é
+		-- verificada por indexação DINÂMICA sobre um tipo indexável, nunca por acesso estático a
+		-- um campo que o tipo de `Runtime.Instance`/`Runtime` não declara -- acesso estático
+		-- reprovaria o próprio `luau-lsp analyze` deste arquivo, e o objetivo aqui é provar
+		-- ausência, não presença (mesmo padrão de cast usado em ThreadBroker.luau para storage).
+		local runtimeInstanceDict: { [string]: unknown } = (Runtime.Instance :: unknown) :: { [string]: unknown }
+		assert(runtimeInstanceDict["NewBase"] == nil, "Runtime.Instance.NewBase não deveria estar exposto")
+		assert(runtimeInstanceDict["SetClassChain"] == nil, "Runtime.Instance.SetClassChain não deveria estar exposto")
+		assert(runtimeInstanceDict["SetClassMethods"] == nil, "Runtime.Instance.SetClassMethods não deveria estar exposto")
+		assert(
+			runtimeInstanceDict["SetClassSchema"] == nil,
+			"Runtime.Instance.SetClassSchema não deveria estar exposto (task-runtime-022: ClassRegistry.new é o único chamador legítimo)"
+		)
+
+		local runtimeDict: { [string]: unknown } = (Runtime :: unknown) :: { [string]: unknown }
+		assert(runtimeDict["ThreadBroker"] == nil, "Runtime.ThreadBroker não deveria estar reexportado (plumbing interno do Scheduler)")
 	end
 )
 
