@@ -12,8 +12,9 @@
 	decidida explicitamente (DataModel -> ServiceProvider -> Instance, não o default de
 	`NewBase`); `GetService` cria o singleton na primeira chamada, parenteia direto sob a raiz
 	com Name == ClassName, e devolve o MESMO objeto em chamadas seguintes; `GetService` de uma
-	classe registrada com `IsService = false` erra claramente; `GetService` de uma classe nunca
-	registrada erra claramente; `FindService` nunca cria (nil antes da criação), só consulta
+	classe registrada com `IsService = false` devolve `nil`, sem erro (task-runtime-030, ver
+	abaixo); `GetService` de uma classe nunca registrada, sem resolvedor instalado, erra com
+	mensagem de engenharia interna; `FindService` nunca cria (nil antes da criação), só consulta
 	(mesmo singleton depois); GetService/FindService ficam protegidos contra sobrescrita
 	(mesma disciplina de SetClassMethods usada por classe de `services`, task-runtime-016).
 
@@ -29,12 +30,33 @@
 	ClassRegistry.new sobre o MESMO descriptor continua errando; (m) a forma StarterPlayerScripts
 	(IsAbstract=true, IsService=false) -- construível por NewEngineInstance, rejeitada por .new,
 	GetService continua errando por IsService==false.
+
+	MUDANÇAS da task-runtime-030 (ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md,
+	"Revisão pós-integração 2026-09-05 (5)"): `GetService` passa a devolver `Instance?`, não mais
+	`Instance` -- uma classe registrada com `IsService = false` não erra mais, devolve `nil` (é o
+	comportamento real do Roblox, confirmado por fonte primária). Isso inverte DOIS testes
+	pré-existentes, marcados abaixo como TESTE-GATILHO: o de `IsService = false` (era erro, agora
+	`nil`) e o de classe nunca registrada (o spec de `runtime` roda sem `services`, logo sem
+	`UnknownClassResolver` instalado -- o veredito não pode ser calculado e o erro muda para a
+	mensagem de engenharia interna que nomeia `Services.Bootstrap`). Um TERCEIRO teste
+	pré-existente também precisou ser ajustado por decorrência direta da mesma mudança de
+	comportamento -- não estava listado nominalmente na tarefa, mas é a MESMA forma
+	(`IsService = false`, registrada) do primeiro teste-gatilho, então infringiria a suíte se
+	deixado como estava: o teste (m) (`TestStarterPlayerScriptsShape`), cujo último bloco também
+	esperava erro e passa a esperar `nil`. Cobertura NOVA no final do arquivo: um resolvedor FALSO
+	instalado só a partir daquele ponto (por isso os testes-gatilho acima, que dependem de RODAR
+	sem resolvedor, continuam antes dele na ordem do arquivo) cobrindo os três vereditos de
+	`UnknownClassVerdict`, mais o teste de sequestro (`Folder` filho direto da raiz não é mais
+	devolvido por `GetService`/`FindService`).
 ]]
 
 local process = require("@lune/process")
 local InstanceModule = require("./Instance")
 local ClassRegistry = require("./ClassRegistry")
 local DataModel = require("./DataModel")
+local UnknownClassResolver = require("./UnknownClassResolver")
+
+type UnknownClassVerdict = UnknownClassResolver.UnknownClassVerdict
 
 type Instance = InstanceModule.Instance
 type ClassDescriptor = ClassRegistry.ClassDescriptor
@@ -112,32 +134,40 @@ test("GetService cria o singleton na primeira chamada e devolve o mesmo objeto e
 	assert(second == first, "chamadas seguintes de GetService deveriam devolver o MESMO objeto, não recriar")
 end)
 
-test("GetService de uma classe registrada com IsService = false erra claramente", function()
+-- TESTE-GATILHO (task-runtime-030): antes desta tarefa, esperava erro. Agora, igual ao Roblox
+-- real (fonte primária: doc oficial, "will return nil if the className parameter is an existing
+-- class, but the class is not a service") -- classe registrada, `IsService = false`, devolve
+-- `nil` SEM erro. A inversão deste teste é o sinal de que a correção pegou.
+test("GetService de uma classe registrada com IsService = false devolve nil, sem erro (igual ao Roblox real)", function()
 	ClassRegistry.Register(makeServiceDescriptor("TestNaoService", false))
 	local dataModel = DataModel.new()
 
-	local ok, err = pcall(function()
-		return dataModel:GetService("TestNaoService")
-	end)
-
-	assert(not ok, "GetService de uma classe com IsService = false deveria erro, nunca devolver silenciosamente")
-	assert(
-		string.find(tostring(err), "não é um Service") ~= nil,
-		`mensagem de erro deveria dizer que a classe não é um Service, recebeu: {err}`
-	)
+	local result = dataModel:GetService("TestNaoService")
+	assert(result == nil, `GetService de uma classe com IsService = false deveria devolver nil, recebeu: {result}`)
 end)
 
-test("GetService de uma classe nunca registrada erra claramente", function()
+-- TESTE-GATILHO (task-runtime-030): antes desta tarefa, esperava a mensagem "não registrada" em
+-- português. Este spec de `runtime` roda sem `services` carregado, logo SEM
+-- `UnknownClassResolver` instalado -- `GetService` de uma classe desconhecida agora passa pelo
+-- ramo "nenhum resolvedor instalado", erro de ENGENHARIA INTERNA que nomeia
+-- `Services.Register()`/`Services.Bootstrap()`. Precisa rodar ANTES de qualquer teste deste
+-- arquivo instalar um resolvedor falso (ver cobertura nova no final) -- depois disso a mensagem
+-- mudaria de novo, porque passaria a existir resolvedor.
+test("GetService de uma classe nunca registrada, sem resolvedor instalado, erra com mensagem de engenharia interna citando Services.Bootstrap", function()
 	local dataModel = DataModel.new()
 
 	local ok, err = pcall(function()
 		return dataModel:GetService("TestClasseInexistenteParaService")
 	end)
 
-	assert(not ok, "GetService de classe não registrada deveria erro, nunca devolver nil silenciosamente")
+	assert(not ok, "GetService de classe não registrada, sem resolvedor, deveria erro, nunca devolver nil silenciosamente")
 	assert(
-		string.find(tostring(err), "não registrada") ~= nil,
-		`mensagem de erro deveria dizer 'não registrada', recebeu: {err}`
+		string.find(tostring(err), "nenhum resolvedor de classe desconhecida instalado") ~= nil,
+		`mensagem de erro deveria dizer 'nenhum resolvedor de classe desconhecida instalado', recebeu: {err}`
+	)
+	assert(
+		string.find(tostring(err), "Services.Bootstrap") ~= nil,
+		`mensagem de erro deveria citar Services.Bootstrap, recebeu: {err}`
 	)
 end)
 
@@ -164,6 +194,7 @@ test("cada DataModel.new() é uma raiz independente -- GetService de uma não va
 	local dataModelB = DataModel.new()
 
 	local serviceA = dataModelA:GetService("TestServiceIsolamento")
+	assert(serviceA ~= nil, "GetService nunca deveria devolver nil para um Service válido")
 	assert(dataModelB:FindService("TestServiceIsolamento") == nil, "singleton de uma raiz não deveria aparecer na outra")
 	assert(serviceA.Parent == dataModelA, "singleton deveria continuar parenteado só sob a raiz que o criou")
 end)
@@ -231,10 +262,14 @@ test(
 )
 
 -- (m) Forma StarterPlayerScripts (IsAbstract=true, IsService=false): construível por
--- NewEngineInstance, rejeitada por .new, e GetService dela CONTINUA errando -- porque a guarda
--- de GetService é IsService, nunca IsAbstract.
+-- NewEngineInstance, rejeitada por .new. GetService dela NÃO erra mais (task-runtime-030) --
+-- devolve `nil`, igual a qualquer classe registrada com IsService=false, porque a guarda de
+-- GetService continua sendo IsService, nunca IsAbstract. AJUSTE task-runtime-030 (não estava
+-- listado nominalmente na tarefa como teste-gatilho, mas é a MESMA forma do teste-gatilho
+-- "IsService=false" acima -- deixar como estava quebraria a suíte): o bloco final passa de
+-- "espera erro" para "espera nil".
 test(
-	"forma StarterPlayerScripts (IsAbstract=true, IsService=false): NewEngineInstance constrói, .new rejeita, GetService continua errando por IsService==false",
+	"forma StarterPlayerScripts (IsAbstract=true, IsService=false): NewEngineInstance constrói, .new rejeita, GetService devolve nil (IsService==false, não erra mais)",
 	function()
 		ClassRegistry.Register(makeServiceDescriptor("TestStarterPlayerScriptsShape", false, true))
 		local dataModel = DataModel.new()
@@ -247,16 +282,103 @@ test(
 		end)
 		assert(not okNew, "ClassRegistry.new deveria rejeitar a forma StarterPlayerScripts -- é NotCreatable")
 
-		local okService, errService = pcall(function()
-			return dataModel:GetService("TestStarterPlayerScriptsShape")
-		end)
-		assert(not okService, "GetService de uma classe com IsService=false deveria continuar errando, mesmo sendo IsAbstract=true")
+		local service = dataModel:GetService("TestStarterPlayerScriptsShape")
 		assert(
-			string.find(tostring(errService), "não é um Service") ~= nil,
-			`mensagem de erro deveria dizer que a classe não é um Service (a guarda certa é IsService, não IsAbstract), recebeu: {errService}`
+			service == nil,
+			`GetService de uma classe com IsService=false deveria devolver nil, mesmo sendo IsAbstract=true, recebeu: {service}`
 		)
 	end
 )
+
+--[[
+	Cobertura NOVA da task-runtime-030 -- resolvedor FALSO instalado a partir DAQUI, de propósito
+	depois dos dois testes-gatilho acima (que dependem de rodar SEM resolvedor instalado). A
+	partir deste ponto do arquivo, toda classe desconhecida de `ClassRegistry` passa a ser
+	classificada por esta função em vez de cair no ramo "nenhum resolvedor instalado" -- não há
+	`UnknownClassResolver.Unset`, então a instalação vale para o resto do processo (mesma
+	invariante documentada no cabeçalho do módulo).
+
+	Pura e total (contrato obrigatório do resolvedor, ver UnknownClassResolver.luau): tabela fixa,
+	sem efeito colateral, sem `error()`, resposta para qualquer string (o `else` final cobre até
+	`""`).
+]]
+local FAKE_NOT_A_SERVICE: { [string]: boolean } = {
+	-- "Frame" é o próprio exemplo usado no desenho/pesquisa: classe real do dump, sem tag Service.
+	Frame = true,
+}
+local FAKE_NOT_SIMULATED: { [string]: string } = {
+	-- Mensagem arbitrária para fins de teste -- `runtime` nunca formata isto, só repassa
+	-- verbatim (ver GetService, ramo ServiceNotSimulated). O formato real vem de
+	-- `services/init.luau:unsimulatedClassMessage`, fora do território desta tarefa.
+	TestServiceAindaNaoSimulado = "[LuauBench] TestServiceAindaNaoSimulado exists in the Roblox API Dump but is not simulated by LuauBench yet",
+}
+
+UnknownClassResolver.Set(function(className: string): UnknownClassVerdict
+	if FAKE_NOT_A_SERVICE[className] then
+		return { Kind = "NotAService" } :: UnknownClassVerdict
+	end
+	local message = FAKE_NOT_SIMULATED[className]
+	if message ~= nil then
+		return { Kind = "ServiceNotSimulated", Message = message } :: UnknownClassVerdict
+	end
+	return { Kind = "NotAClass" } :: UnknownClassVerdict
+end)
+
+test("GetService com resolvedor instalado: veredito NotAClass erra com a família Roblox real ('X' is not a valid Service name)", function()
+	local dataModel = DataModel.new()
+
+	local ok, err = pcall(function()
+		return dataModel:GetService("TestNomeQueNaoExisteNoDump")
+	end)
+
+	assert(not ok, "GetService de um nome que não é classe nenhuma deveria erro")
+	assert(
+		string.find(tostring(err), "'TestNomeQueNaoExisteNoDump' is not a valid Service name", 1, true) ~= nil,
+		`mensagem de erro deveria ser exatamente a família Roblox real (aspas simples, sem prefixo), recebeu: {err}`
+	)
+end)
+
+test("GetService com resolvedor instalado: veredito NotAService devolve nil, sem erro (classe real do dump, sem tag Service)", function()
+	local dataModel = DataModel.new()
+
+	local result = dataModel:GetService("Frame")
+	assert(result == nil, `GetService('Frame') deveria devolver nil (classe real, sem Service), recebeu: {result}`)
+end)
+
+test("GetService com resolvedor instalado: veredito ServiceNotSimulated erra com a Message do veredito, verbatim", function()
+	local dataModel = DataModel.new()
+
+	local ok, err = pcall(function()
+		return dataModel:GetService("TestServiceAindaNaoSimulado")
+	end)
+
+	assert(not ok, "GetService de uma Service real ainda não simulada deveria erro")
+	assert(
+		string.find(tostring(err), FAKE_NOT_SIMULATED.TestServiceAindaNaoSimulado, 1, true) ~= nil,
+		`runtime deveria repassar a Message do veredito verbatim, sem reformatar, recebeu: {err}`
+	)
+end)
+
+-- Teste de SEQUESTRO (task-runtime-030): antes da reordenação, `GetService`/`FindService`
+-- devolviam o primeiro filho da raiz cujo CLASSNAME batesse, mesmo sem ser Service. Nomeado com
+-- Name diferente de "Folder" de propósito -- prova que o gate é por ClassName, nunca por Name.
+test("SEQUESTRO: um Folder filho direto da raiz não é devolvido por GetService nem por FindService", function()
+	ClassRegistry.Register(makeServiceDescriptor("Folder", false))
+	local dataModel = DataModel.new()
+
+	local folder = ClassRegistry.new("Folder", "QualquerCoisa")
+	folder.Parent = dataModel
+	assert(dataModel:FindFirstChild("QualquerCoisa") == folder, "sanity check: o Folder deveria mesmo estar parentado sob a raiz")
+
+	assert(
+		dataModel:GetService("Folder") == nil,
+		"GetService('Folder') deveria devolver nil -- nunca o Folder criado pelo usuário, mesmo ele existindo como filho direto da raiz"
+	)
+	assert(
+		dataModel:FindService("Folder") == nil,
+		"FindService('Folder') deveria devolver nil pelo mesmo motivo -- mesmo gate de GetService"
+	)
+end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

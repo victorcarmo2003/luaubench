@@ -105,6 +105,13 @@
 	requisito do `require` simulado que `cli` constrói em `ModuleLoader.luau` (desenho completo
 	em .claude/agents-memory/arquiteto-cli-2026-09-05.md, Decisão 5, e no cabeçalho de
 	Sandbox.luau). Nenhuma reexportação foi removida; `Runtime.Sandbox.Run` continua idêntico.
+
+	task-runtime-030 acrescenta `Runtime.UnknownClassResolver.Set` + os tipos `UnknownClassVerdict`/
+	`UnknownClassResolver` (ver desenho completo em UnknownClassResolver.luau e em
+	.claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão pós-integração
+	2026-09-05 (5)"). `UnknownClassResolver.Resolve` NÃO é reexportado -- mesmo precedente de
+	`NewBase`/`SetClassChain`/`SetClassMethods`/`SetClassSchema`: `services` só precisa instalar
+	o resolvedor (`Set`), nunca consultá-lo de volta; `cli` não tem uso legítimo nenhum para ele.
 ]]
 
 local SignalModule = require("./runtime/Signal")
@@ -113,6 +120,7 @@ local ClassRegistryModule = require("./runtime/ClassRegistry")
 local DataModelModule = require("./runtime/DataModel")
 local SchedulerModule = require("./runtime/Scheduler")
 local SandboxModule = require("./runtime/Sandbox")
+local UnknownClassResolverModule = require("./runtime/UnknownClassResolver")
 
 export type Signal<T...> = SignalModule.Signal<T...>
 export type Connection = SignalModule.Connection
@@ -132,6 +140,8 @@ export type SandboxResult = SandboxModule.SandboxResult
 export type SandboxChunkOptions = SandboxModule.SandboxChunkOptions
 export type OutputRecord = SandboxModule.OutputRecord
 export type OutputLevel = SandboxModule.OutputLevel
+export type UnknownClassVerdict = UnknownClassResolverModule.UnknownClassVerdict
+export type UnknownClassResolver = UnknownClassResolverModule.UnknownClassResolver
 
 local Runtime = {
 	Signal = {
@@ -170,6 +180,11 @@ local Runtime = {
 		-- cabeçalho de Sandbox.luau e em .claude/agents-memory/arquiteto-cli-2026-09-05.md,
 		-- Decisão 5).
 		Load = SandboxModule.Load,
+	},
+
+	-- task-runtime-030: só `Set` -- `Resolve` fica interno (ver cabeçalho deste arquivo).
+	UnknownClassResolver = {
+		Set = UnknownClassResolverModule.Set,
 	},
 }
 
