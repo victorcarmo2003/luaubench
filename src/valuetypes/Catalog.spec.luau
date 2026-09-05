@@ -1,0 +1,202 @@
+--!strict
+
+--[[
+	Teste da task-valuetypes-002 (Catalog.luau -- lista fechada de todo global de valor do
+	Roblox). Cobre: os 37 nomes esperados (23 originais + 14 da seção 0.8 do desenho), a flag
+	`HasGlobalConstructor = false` nos quatro sem construtor global, e a garantia de disjunção
+	entre `SimulatedNames()`/`UnsimulatedGlobalNames()` pedida pelo acceptance da task
+	("Catalog.UnsimulatedGlobalNames() não intersecta Catalog.SimulatedNames()").
+
+	Roda com `lune run src/valuetypes/Catalog.spec.luau`.
+]]
+
+local process = require("@lune/process")
+local Catalog = require("./Catalog")
+
+local passedCount = 0
+local totalCount = 0
+
+local function test(name: string, run: () -> ())
+	totalCount += 1
+	run()
+	passedCount += 1
+	print(`[PASS] {name}`)
+end
+
+local function toSet(names: { string }): { [string]: boolean }
+	local set: { [string]: boolean } = {}
+	for _, name in names do
+		set[name] = true
+	end
+	return set
+end
+
+-- Os 23 nomes originais de src/cli/UnsimulatedGlobals.luau (ver cabeçalho de Catalog.luau).
+local ORIGINAL_23: { string } = {
+	"Axes",
+	"BrickColor",
+	"CFrame",
+	"Color3",
+	"ColorSequence",
+	"DateTime",
+	"Enum",
+	"Faces",
+	"Font",
+	"NumberRange",
+	"NumberSequence",
+	"OverlapParams",
+	"PhysicalProperties",
+	"Random",
+	"Ray",
+	"RaycastParams",
+	"Rect",
+	"Region3",
+	"TweenInfo",
+	"UDim",
+	"UDim2",
+	"Vector2",
+	"Vector3",
+}
+
+-- Os 14 nomes novos da seção 0.8 do desenho, 10 com construtor global.
+local NEW_WITH_CONSTRUCTOR_10: { string } = {
+	"NumberSequenceKeypoint",
+	"ColorSequenceKeypoint",
+	"Vector3int16",
+	"Vector2int16",
+	"Region3int16",
+	"PathWaypoint",
+	"CatalogSearchParams",
+	"FloatCurveKey",
+	"RotationCurveKey",
+	"Path2DControlPoint",
+}
+
+-- Os 4 nomes novos SEM construtor global.
+local NEW_WITHOUT_CONSTRUCTOR_4: { string } = {
+	"SharedTable",
+	"Secret",
+	"Content",
+	"RaycastResult",
+}
+
+test("Catalog.All() devolve exatamente 37 entradas (23 originais + 14 da seção 0.8)", function()
+	local all = Catalog.All()
+	assert(#all == 37, `esperava 37 entradas, recebeu {#all}`)
+end)
+
+test("Catalog.All() não tem nomes duplicados", function()
+	local seen: { [string]: boolean } = {}
+	for _, entry in Catalog.All() do
+		assert(not seen[entry.Name], `nome duplicado no catálogo: {entry.Name}`)
+		seen[entry.Name] = true
+	end
+end)
+
+test("todos os 23 nomes originais estão presentes com HasGlobalConstructor = true", function()
+	local byName: { [string]: Catalog.CatalogEntry } = {}
+	for _, entry in Catalog.All() do
+		byName[entry.Name] = entry
+	end
+
+	for _, name in ORIGINAL_23 do
+		local entry = byName[name]
+		assert(entry ~= nil, `nome original ausente do catálogo: {name}`)
+		assert(entry.HasGlobalConstructor, `{name} deveria ter HasGlobalConstructor = true`)
+	end
+end)
+
+test("os 10 nomes novos COM construtor global estão presentes e marcados corretamente", function()
+	local byName: { [string]: Catalog.CatalogEntry } = {}
+	for _, entry in Catalog.All() do
+		byName[entry.Name] = entry
+	end
+
+	for _, name in NEW_WITH_CONSTRUCTOR_10 do
+		local entry = byName[name]
+		assert(entry ~= nil, `nome novo (com construtor) ausente do catálogo: {name}`)
+		assert(entry.HasGlobalConstructor, `{name} deveria ter HasGlobalConstructor = true`)
+	end
+end)
+
+test("os 4 nomes novos SEM construtor global estão presentes e marcados corretamente", function()
+	local byName: { [string]: Catalog.CatalogEntry } = {}
+	for _, entry in Catalog.All() do
+		byName[entry.Name] = entry
+	end
+
+	for _, name in NEW_WITHOUT_CONSTRUCTOR_4 do
+		local entry = byName[name]
+		assert(entry ~= nil, `nome novo (sem construtor) ausente do catálogo: {name}`)
+		assert(not entry.HasGlobalConstructor, `{name} deveria ter HasGlobalConstructor = false`)
+	end
+end)
+
+test("nesta leva, TODAS as entradas têm Simulated = false (nenhum types/*.luau existe ainda)", function()
+	for _, entry in Catalog.All() do
+		assert(not entry.Simulated, `{entry.Name} deveria ter Simulated = false nesta tarefa (só a fábrica existe)`)
+	end
+end)
+
+test("Catalog.SimulatedNames() está vazia nesta leva", function()
+	local names = Catalog.SimulatedNames()
+	assert(#names == 0, `esperava lista vazia, recebeu {#names} nomes`)
+end)
+
+test("Catalog.UnsimulatedGlobalNames() tem exatamente os 33 nomes com HasGlobalConstructor = true (23 + 10)", function()
+	local names = Catalog.UnsimulatedGlobalNames()
+	assert(#names == 33, `esperava 33 nomes, recebeu {#names}`)
+
+	local set = toSet(names)
+	for _, name in ORIGINAL_23 do
+		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
+	end
+	for _, name in NEW_WITH_CONSTRUCTOR_10 do
+		assert(set[name], `UnsimulatedGlobalNames() deveria conter {name}`)
+	end
+end)
+
+test("Catalog.UnsimulatedGlobalNames() NUNCA contém os 4 nomes sem construtor global", function()
+	local set = toSet(Catalog.UnsimulatedGlobalNames())
+	for _, name in NEW_WITHOUT_CONSTRUCTOR_4 do
+		assert(not set[name], `UnsimulatedGlobalNames() não deveria conter {name} (Roblox real não expõe como global)`)
+	end
+end)
+
+test("Catalog.UnsimulatedGlobalNames() não intersecta Catalog.SimulatedNames() (acceptance da task)", function()
+	local simulated = toSet(Catalog.SimulatedNames())
+	local unsimulated = toSet(Catalog.UnsimulatedGlobalNames())
+
+	for name in simulated do
+		assert(not unsimulated[name], `{name} aparece nos dois grupos -- violação da disjunção exigida`)
+	end
+	for name in unsimulated do
+		assert(not simulated[name], `{name} aparece nos dois grupos -- violação da disjunção exigida`)
+	end
+end)
+
+test("Catalog.All() devolve uma cópia nova a cada chamada (mutar o resultado não afeta o catálogo interno)", function()
+	local first = Catalog.All()
+	table.insert(first, { Name = "Fantasma", Simulated = true, HasGlobalConstructor = true })
+	assert(#first == 38, "sanity check: a cópia local deveria ter crescido pra 38")
+
+	local second = Catalog.All()
+	assert(#second == 37, `mutar a cópia anterior não deveria afetar chamadas seguintes, recebeu {#second}`)
+
+	local found = false
+	for _, entry in second do
+		if entry.Name == "Fantasma" then
+			found = true
+		end
+	end
+	assert(not found, "\"Fantasma\" não deveria vazar para uma nova chamada de Catalog.All()")
+end)
+
+test("cada CatalogEntry devolvida está congelada (defesa em profundidade)", function()
+	for _, entry in Catalog.All() do
+		assert(table.isfrozen(entry), `entrada de {entry.Name} deveria estar congelada`)
+	end
+end)
+
+print(`\n{passedCount}/{totalCount} testes passaram`)
+process.exit(0)
