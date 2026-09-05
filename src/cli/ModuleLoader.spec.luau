@@ -59,8 +59,15 @@ local function newHarness(scriptName: string): Harness
 	local scheduler = Runtime.Scheduler.new()
 	local game = Runtime.DataModel.new()
 	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+	-- `DataModel:GetService` passou de `-> Instance` para `-> Instance?` (task-runtime-030) --
+	-- "Workspace"/"ReplicatedStorage" estão sempre cobertas pelo `Bootstrap` acima, então o `nil`
+	-- é inalcançável aqui; `assert` (nunca `::`) é o narrowing padrão já usado no resto deste
+	-- arquivo de spec.
 	local workspace = game:GetService("Workspace")
 	local replicatedStorage = game:GetService("ReplicatedStorage")
+	assert(workspace ~= nil, "Workspace deveria estar sempre coberta pelo Bootstrap deste teste")
+	assert(replicatedStorage ~= nil, "ReplicatedStorage deveria estar sempre coberta pelo Bootstrap deste teste")
 
 	local records: { Runtime.OutputRecord } = {}
 	local cache = ModuleLoader.NewCache()

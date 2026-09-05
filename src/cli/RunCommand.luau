@@ -173,7 +173,33 @@ function RunCommand.Execute(options: RunOptions): Result
 	local tree = TreeMaterializer.Materialize(plan, game, bag)
 
 	local formatter = OutputFormatter.new(options.UseColor)
+
+	-- Ripple de tipo de task-runtime-030 (`DataModel:GetService` passou de `-> Instance` para
+	-- `-> Instance?` -- ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão
+	-- pós-integração 2026-09-05 (5)", subseção "Consequência de tipo"): o ramo `nil` abaixo é
+	-- INALCANÇÁVEL em produção -- o laço logo acima (passo 8: `for _, className in
+	-- Services.GetSimulatedServiceClasses() do game:GetService(className) end`) já criou o
+	-- singleton de TODA classe coberta por `services`, "Workspace" incluída (leva 1 de cobertura,
+	-- ver .claude/agents-memory/arquiteto-services-2026-09-05.md, "Prioridade de cobertura"). Se
+	-- isto disparar mesmo assim, é uma invariante interna de `services`/`ClassRegistry` quebrada
+	-- (ex.: "Workspace" deixou de estar registrada como Service coberta), nunca um erro do
+	-- `.project.json` do usuário -- por isso a mensagem é de ENGENHARIA INTERNA em português (mesmo
+	-- registro de `DataModel.GetService`/`Services.Context`), NUNCA um `Diagnostic` de projeto
+	-- (não há `NodePath` nenhum a citar) nem um `[LuauBench] ... not simulated yet` (não é falta de
+	-- cobertura declarada, é bug). NUNCA `::` para apagar o `nil`: o `if` abaixo é o único
+	-- estreitamento válido em `--!strict` sem `any`, e é ele que devolve `Runtime.Instance` de
+	-- verdade para `ScriptRunner.Options.Workspace` (não-opcional) logo adiante. Sem exit code
+	-- novo -- deixa o `error()` propagar cru, como qualquer outra invariante interna quebrada do
+	-- motor (ex.: `ClassRegistry.new` com classe não registrada). Nível padrão (1, omitido --
+	-- mesmo estilo de `ClassRegistry.luau`, "ciclo de herança detectado..."), não 0: aqui o
+	-- `error()` está formando a mensagem pela primeira vez (não re-lançando uma que já carrega
+	-- localização, como `ThreadBroker`/`Signal` fazem com `error(err, 0)`), então manter a
+	-- localização default aponta exatamente para esta linha de `RunCommand.luau`.
 	local workspaceInstance = game:GetService("Workspace")
+	if workspaceInstance == nil then
+		error("RunCommand: game:GetService(\"Workspace\") devolveu nil -- Workspace deveria estar sempre coberta por services e registrada como Service em ClassRegistry nesta altura do pipeline (depois do laço de GetSimulatedServiceClasses); isto é uma invariante interna quebrada, não um erro de projeto do usuário")
+	end
+
 	local globalTable: { [string]: unknown } = {}
 	local sharedTable: { [string]: unknown } = {}
 

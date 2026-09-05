@@ -671,8 +671,12 @@ test("Materialize: fixture 'fixed-children' ADOTA StarterPlayerScripts/StarterCh
 	end
 
 	-- Prova que ADOTOU, não criou: o MESMO objeto que game:GetService('StarterPlayer'):FindFirstChild(...) devolve (rawequal, não só ==).
-	assert(rawequal(starterPlayerScripts, game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")), "StarterPlayerScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
-	assert(rawequal(starterCharacterScripts, game:GetService("StarterPlayer"):FindFirstChild("StarterCharacterScripts")), "StarterCharacterScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
+	-- Reusa o `starterPlayer` já estreitado acima (via game:FindService, linha 644) em vez de
+	-- chamar `game:GetService("StarterPlayer")` de novo aqui -- é o MESMO singleton (StarterPlayer
+	-- só existe uma vez sob `game`), e evita reintroduzir um `Instance?` não estreitado
+	-- (DataModel:GetService passou de `-> Instance` para `-> Instance?`, task-runtime-030).
+	assert(rawequal(starterPlayerScripts, starterPlayer:FindFirstChild("StarterPlayerScripts")), "StarterPlayerScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
+	assert(rawequal(starterCharacterScripts, starterPlayer:FindFirstChild("StarterCharacterScripts")), "StarterCharacterScripts deveria ser o MESMO objeto pré-criado pelo motor (rawequal)")
 
 	assert(starterPlayerScripts.ClassName == "StarterPlayerScripts", "StarterPlayerScripts adotado deveria manter seu ClassName real")
 	assert(starterCharacterScripts.ClassName == "StarterCharacterScripts", "StarterCharacterScripts adotado deveria manter seu ClassName real")
@@ -709,7 +713,14 @@ test("Materialize: adoção de filho fixo do motor NÃO dispara ChildAdded/Child
 	-- Cria o singleton StarterPlayer (e os dois filhos fixos, via behavior/StarterPlayer.Initialize)
 	-- ANTES de conectar os eventos -- só nos interessa o que acontece durante a ADOÇÃO em
 	-- Materialize, nunca a criação inicial do motor no bootstrap.
+	-- `DataModel:GetService` passou de `-> Instance` para `-> Instance?` (task-runtime-030) --
+	-- "StarterPlayer" está sempre coberta pelo `Bootstrap` de `newGame()`, então o `nil` é
+	-- inalcançável aqui.
 	local starterPlayer = game:GetService("StarterPlayer")
+	assert(starterPlayer ~= nil, "sanity check: StarterPlayer deveria estar coberto pelo Bootstrap deste teste")
+	if starterPlayer == nil then
+		return
+	end
 	local starterPlayerScripts = starterPlayer:FindFirstChild("StarterPlayerScripts")
 	local starterCharacterScripts = starterPlayer:FindFirstChild("StarterCharacterScripts")
 	assert(starterPlayerScripts ~= nil and starterCharacterScripts ~= nil, "sanity check: StarterPlayer deveria já ter os dois filhos fixos pré-criados pelo motor")
@@ -840,7 +851,14 @@ end)
 
 test("Materialize: 'materialize/fixed-child-missing' quando o filho pré-criado pelo motor foi removido antes da adoção", function()
 	local game = newGame()
+	-- `DataModel:GetService` passou de `-> Instance` para `-> Instance?` (task-runtime-030) --
+	-- "StarterPlayer" está sempre coberta pelo `Bootstrap` de `newGame()`, então o `nil` é
+	-- inalcançável aqui.
 	local starterPlayer = game:GetService("StarterPlayer")
+	assert(starterPlayer ~= nil, "sanity check: StarterPlayer deveria estar coberto pelo Bootstrap deste teste")
+	if starterPlayer == nil then
+		return
+	end
 	local existing = starterPlayer:FindFirstChild("StarterPlayerScripts")
 	assert(existing ~= nil, "sanity check: StarterPlayer deveria nascer com StarterPlayerScripts pré-criado pelo motor")
 	if existing ~= nil then
@@ -892,7 +910,14 @@ end)
 
 test("Materialize: 'materialize/fixed-child-class-mismatch' quando a instância achada tem ClassName diferente do esperado", function()
 	local game = newGame()
+	-- `DataModel:GetService` passou de `-> Instance` para `-> Instance?` (task-runtime-030) --
+	-- "StarterPlayer" está sempre coberta pelo `Bootstrap` de `newGame()`, então o `nil` é
+	-- inalcançável aqui.
 	local starterPlayer = game:GetService("StarterPlayer")
+	assert(starterPlayer ~= nil, "sanity check: StarterPlayer deveria estar coberto pelo Bootstrap deste teste")
+	if starterPlayer == nil then
+		return
+	end
 	local existing = starterPlayer:FindFirstChild("StarterPlayerScripts")
 	assert(existing ~= nil, "sanity check: StarterPlayer deveria nascer com StarterPlayerScripts pré-criado pelo motor")
 	if existing ~= nil then

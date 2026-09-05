@@ -70,12 +70,22 @@ local function newHarness(): Harness
 	local game = Runtime.DataModel.new()
 	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
 
+	-- `DataModel:GetService` passou de `-> Instance` para `-> Instance?` (task-runtime-030) -- os
+	-- três nomes abaixo estão sempre cobertos pelo `Bootstrap` acima, então o `nil` é inalcançável
+	-- aqui; `assert` (nunca `::`) é o narrowing padrão já usado no resto deste arquivo de spec.
+	local workspaceInstance = game:GetService("Workspace")
+	local serverScriptService = game:GetService("ServerScriptService")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	assert(workspaceInstance ~= nil, "Workspace deveria estar sempre coberta pelo Bootstrap deste teste")
+	assert(serverScriptService ~= nil, "ServerScriptService deveria estar sempre coberta pelo Bootstrap deste teste")
+	assert(replicatedStorage ~= nil, "ReplicatedStorage deveria estar sempre coberta pelo Bootstrap deste teste")
+
 	return {
 		Scheduler = scheduler,
 		Game = game,
-		Workspace = game:GetService("Workspace"),
-		ServerScriptService = game:GetService("ServerScriptService"),
-		ReplicatedStorage = game:GetService("ReplicatedStorage"),
+		Workspace = workspaceInstance,
+		ServerScriptService = serverScriptService,
+		ReplicatedStorage = replicatedStorage,
 		Records = {},
 	}
 end

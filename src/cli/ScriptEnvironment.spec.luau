@@ -27,11 +27,18 @@ end
 
 -- Mesmo padrão de `TreeMaterializer.spec.luau`/`ModuleLoader.spec.luau` -- `Services.Bootstrap` é
 -- idempotente, seguro de chamar em todo teste, cada um com seu próprio Scheduler/DataModel.
-local function newGame(): (Runtime.Scheduler, Runtime.DataModel)
+-- Devolve também o `Workspace` já ESTREITADO: `DataModel:GetService` passou de `-> Instance` para
+-- `-> Instance?` (task-runtime-030), mas "Workspace" está sempre coberta pelo `Bootstrap` logo
+-- acima, então o `nil` é inalcançável aqui -- narrowing (`assert`, nunca `::`) num único lugar,
+-- em vez de repetir o mesmo `assert` em cada um dos 7 testes deste arquivo que precisam de um
+-- `EnvironmentContext.Workspace` (não-opcional).
+local function newGame(): (Runtime.Scheduler, Runtime.DataModel, Runtime.Instance)
 	local scheduler = Runtime.Scheduler.new()
 	local game = Runtime.DataModel.new()
 	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
-	return scheduler, game
+	local workspace = game:GetService("Workspace")
+	assert(workspace ~= nil, "Workspace deveria estar sempre coberta pelo Bootstrap deste teste")
+	return scheduler, game, workspace
 end
 
 local function noopRequire(_target: unknown): unknown
@@ -39,8 +46,7 @@ local function noopRequire(_target: unknown): unknown
 end
 
 test("Build() expõe game/workspace/script apontando para as Instances certas", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 	scriptInstance.Parent = game:GetService("ServerScriptService")
 
@@ -59,8 +65,7 @@ test("Build() expõe game/workspace/script apontando para as Instances certas", 
 end)
 
 test("Build() expõe Instance.new funcionando de ponta a ponta (cria uma Instance real via Services.new)", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 
 	local context: ScriptEnvironment.EnvironmentContext = {
@@ -79,8 +84,7 @@ test("Build() expõe Instance.new funcionando de ponta a ponta (cria uma Instanc
 end)
 
 test("Build() expõe require == context.Require (identidade -- Build nunca decide o require sozinho)", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 
 	local calledWith: unknown = nil
@@ -105,8 +109,7 @@ test("Build() expõe require == context.Require (identidade -- Build nunca decid
 end)
 
 test("_G e shared são tabelas SEPARADAS (correção task-cli-007) -- escrever numa não afeta a outra", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 
 	local globalTable: { [string]: unknown } = {}
@@ -130,8 +133,7 @@ test("_G e shared são tabelas SEPARADAS (correção task-cli-007) -- escrever n
 end)
 
 test("_G escrito por um script é lido por outro do mesmo run (mesma GlobalTable compartilhada)", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptA = Services.new("Script", "ScriptA")
 	local scriptB = Services.new("Script", "ScriptB")
 
@@ -166,8 +168,7 @@ test("_G escrito por um script é lido por outro do mesmo run (mesma GlobalTable
 end)
 
 test("Build() ainda expõe os UnsimulatedGlobals (Vector3 presente, mas errando ao usar)", function()
-	local _scheduler, game = newGame()
-	local workspace = game:GetService("Workspace")
+	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 
 	local context: ScriptEnvironment.EnvironmentContext = {

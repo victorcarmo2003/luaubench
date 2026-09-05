@@ -89,12 +89,23 @@
 	mensagem -- só remove o prefixo de localização interna e cita o `NodePath`.
 
 	Pela MESMA razão, o ramo `IsServiceRoot` valida `Services.IsServiceClass`/
-	`Services.IsSimulatedClass` ANTES de chamar `game:GetService` -- `DataModel.GetService`
-	(`runtime`) devolve erro em PORTUGUÊS voltado a quem programa o motor ("classe não registrada
-	em ClassRegistry"), nunca pensado para chegar a um usuário final; validar antes evita que esse
-	texto interno vaze para um `Diagnostic` e garante uma mensagem em inglês, na família
-	`[LuauBench] ... not simulated yet`, para uma Service real do dump só ainda não coberta por
-	esta leva (ex.: "Teams", "Chat" -- a leva 1 de `services` cobre só os 9 Services core, ver
+	`Services.IsSimulatedClass` ANTES de chamar `game:GetService` -- e CONTINUA validando depois de
+	task-runtime-030/task-cli-017 (`DataModel:GetService` passou de `-> Instance` para
+	`-> Instance?`, ver .claude/agents-memory/arquiteto-runtime-2026-09-04.md, seção "Revisão
+	pós-integração 2026-09-05 (5)", subseção "Riscos e decisões" -- ATUALIZAÇÃO DE COMENTÁRIO,
+	comportamento inalterado): o motivo NÃO É MAIS "`DataModel.GetService` erraria em português"
+	-- desde aquela tarefa, `GetService` para uma Service real do dump ainda não coberta já devolve
+	a própria mensagem `[LuauBench] ... not simulated yet` em inglês (via o
+	`UnknownClassResolver` que `services` instala em `Register()`), sem texto interno em português
+	vazando. A pré-validação fica por DUAS razões que continuam verdadeiras: (1) o `Diagnostic`
+	`materialize/service-not-simulated` cita o `NodePath` do nó no `.project.json` -- informação
+	que `GetService` não tem e não pode ter, e sem ela o usuário não sabe ONDE no projeto está a
+	Service não coberta; (2) sem a pré-validação, este ramo precisaria envolver
+	`game:GetService(node.ClassName)` num `pcall` e aplicar `stripEngineErrorLocation` (mesmo
+	tratamento do `pcall(Services.new(...))` logo abaixo) só para não derrubar `Materialize` com um
+	`error()` não tratado -- a pré-validação mantém este caminho um simples `if`/`nil`, sem
+	duplicar aquele padrão de `pcall`+strip por um segundo motivo. Cobertura de "Teams", "Chat" etc.
+	segue a leva 1 de `services` (só os 9 Services core, ver
 	`.claude/agents-memory/arquiteto-services-2026-09-05.md`, "Prioridade de cobertura"). O
 	`Name ~= ClassName`/`not IsServiceClass` continuam como defesa em profundidade pura (só
 	alcançáveis com um `InstancePlan` montado à mão, fora de `TreePlanner.Plan` -- ver comentário
@@ -267,8 +278,13 @@ local function createInstance(node: TreePlanner.PlanNode, parent: Runtime.Instan
 
 		-- Caso REAL e alcançável por um projeto de usuário legítimo: a classe É uma Service do
 		-- dump, mas esta leva de `services` ainda não a cobre (ex.: "Teams"). Validado ANTES de
-		-- chamar `game:GetService` de propósito -- `DataModel.GetService` erraria em português,
-		-- voltado a quem programa `runtime`, nunca pensado para chegar a um usuário final.
+		-- chamar `game:GetService` de propósito -- NÃO porque `GetService` erraria em português
+		-- (task-runtime-030 fechou isso: `GetService` já devolve `[LuauBench] ... not simulated
+		-- yet` em inglês para este caso, via `UnknownClassResolver`), mas porque (a) o `Diagnostic`
+		-- abaixo cita `node.NodePath`, informação que `GetService` não tem, e (b) sem a
+		-- pré-validação este ramo precisaria de `pcall` + `stripEngineErrorLocation` (como o
+		-- `pcall(Services.new(...))` mais abaixo) só para não derrubar `Materialize` -- ver o
+		-- cabeçalho deste arquivo, mesmo parágrafo, para a citação completa do desenho.
 		if not Services.IsSimulatedClass(node.ClassName) then
 			local dump = Services.GetDumpVersion()
 			bag:Add({
