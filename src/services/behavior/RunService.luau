@@ -29,10 +29,19 @@
 	string exata seja aproximação de boa-fé de bug trackers 2014-2024, não verificada ao vivo em
 	2026); LER a propriedade NÃO erra (devolve o objeto -- o motor real só checa na conexão, não
 	na leitura). `PreRender` (o nome moderno de RenderStepped, também presente no dump) NÃO
-	recebe este tratamento -- fica com o Signal seedado pelo schema, existe e nunca dispara,
-	porque não há evidência de que erre no servidor e errar sem confirmação falha por COMISSÃO
-	(quebraria código válido) -- o pior dos dois lados errados possíveis (arquiteto-services,
-	parte B.4).
+	recebe este tratamento -- fica com o Signal seedado pelo schema, existe e nunca dispara.
+	Decisão FECHADA (arquiteto-services-2026-09-05.md, parte B.5, fecho de task-services-008):
+	`PreRender` pertence ao balde de superfície client-only deliberadamente NÃO varrido por B.2
+	(`UserInputService`/`GuiService`/`Players.LocalPlayer` e afins) -- `RenderStepped` é a ÚNICA
+	exceção recortada desse balde, do tamanho exato da evidência (erro real em RCC) que a
+	sustenta; estender por semelhança de nome seria alargar a exceção por analogia, não aplicar a
+	regra existente. Motivo curto (B.5.3/B.5.4): `BindToRenderStep` carrega a MESMA frase de doc
+	client-only e falha em SILÊNCIO em produção real (DevForum 182636) -- frase de doc não implica
+	erro; e o custo de comissão é concreto -- um `ModuleScript` compartilhado que conecta
+	`PreRender` sem guarda e é `require`d do servidor crasharia NO MEIO do `require`, em cascata,
+	em código que roda limpo no Roblox real. Só reabre com citação ao vivo de
+	`PreRender:Connect()` num `Script` de servidor em RCC reportando erro -- pesquisa documental
+	já esgotada (B.5.6).
 
 	IsServer()->true / IsClient()->false / IsStudio()->false / IsRunning()->true: o LuauBench se
 	apresenta como SERVIDOR RODANDO -- escolha deliberada, não uma consulta a contexto nenhum
@@ -104,7 +113,8 @@ local RunServiceBehavior: Types.Behavior = {
 
 		-- Ver `../RejectingSignal.luau` para o mecanismo completo. Só RenderStepped recebe este
 		-- tratamento -- `PreRender` fica com o Signal seedado pelo schema (existe, nunca
-		-- dispara), ver cabeçalho deste arquivo.
+		-- dispara), decisão fechada em arquiteto-services-2026-09-05.md parte B.5 (ver cabeçalho
+		-- deste arquivo).
 		Runtime.Instance.SetPropertyRaw(instance, "RenderStepped", RejectingSignal.new(RENDER_STEPPED_MESSAGE))
 	end,
 }

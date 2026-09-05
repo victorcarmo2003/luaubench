@@ -129,7 +129,7 @@ test("RunService.PreRender continua conectável e NUNCA dispara sob N StepOnce -
 	local ok = pcall(function()
 		preRender:Connect(function() end)
 	end)
-	assert(ok, "conectar em RunService.PreRender NÃO deveria erro -- não há evidência de que erre no servidor (arquiteto-services-2026-09-05.md, parte B.4)")
+	assert(ok, "conectar em RunService.PreRender NÃO deveria erro -- decisão fechada (arquiteto-services-2026-09-05.md, parte B.5): PreRender fica no balde client-only não varrido, RenderStepped é a única exceção do tamanho da evidência que a sustenta")
 
 	local fired = false
 	preRender:Connect(function()
