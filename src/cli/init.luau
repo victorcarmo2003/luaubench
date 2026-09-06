@@ -115,6 +115,9 @@ function Cli.Main(argv: { string }): MainResult
 		-- desta chamada).
 		AllowHttp = command.AllowHttp,
 		AllowHttpLocal = command.AllowHttpLocal,
+		-- task-cli-030: espelha `Command.NoPersist` 1:1, mesma disciplina das duas flags acima --
+		-- `Cli.Main` não decide nada sobre persistência local do estado "cloud", só repassa.
+		NoPersist = command.NoPersist,
 	})
 end
 

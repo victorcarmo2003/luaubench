@@ -127,5 +127,35 @@ test("HttpRequestAuditLine interpola método + host, e NUNCA menciona corpo/head
 	assert(not contains(line, "Authorization"), "linha de auditoria nunca deveria conter cabeçalho/corpo")
 end)
 
+--------------------------------------------------------------------------------------------------
+-- Persistência local do estado "cloud" (task-cli-030, par de task-cli-029/task-services-031)
+--------------------------------------------------------------------------------------------------
+
+test("HelpText documenta --no-persist -- persistência ligada por padrão", function()
+	local text = Messages.HelpText()
+	assert(contains(text, "--no-persist"), "HelpText deveria citar --no-persist")
+	assert(contains(text, "DataStoreService"), "HelpText deveria mencionar o que --no-persist desliga")
+end)
+
+test("CloudStateDirectoryCreated cita o caminho e menciona git-ignored + como desfazer", function()
+	local message = Messages.CloudStateDirectoryCreated("/tmp/my-project/.luaubench")
+	assert(contains(message, "/tmp/my-project/.luaubench"), "deveria citar o caminho exato recebido")
+	assert(contains(message, "git-ignored"), "deveria deixar claro que o diretório é git-ignored por padrão")
+	assert(contains(message, ".gitignore"), "deveria citar como desfazer (apagar o .gitignore gerado)")
+end)
+
+test("CloudStateUnreadable cita o caminho e o erro subjacente, nunca inventa um motivo genérico", function()
+	local message = Messages.CloudStateUnreadable("/tmp/my-project/.luaubench/cloud/datastore.json", "unsupported SchemaVersion 99")
+	assert(contains(message, "/tmp/my-project/.luaubench/cloud/datastore.json"), "deveria citar o caminho exato do documento")
+	assert(contains(message, "unsupported SchemaVersion 99"), "deveria citar o erro subjacente recebido, sem reformular")
+end)
+
+test("CloudStateSaveFailed cita o caminho e o erro subjacente, e deixa claro que o script continua rodando", function()
+	local message = Messages.CloudStateSaveFailed("/tmp/my-project/.luaubench/cloud/datastore.json", "permission denied")
+	assert(contains(message, "/tmp/my-project/.luaubench/cloud/datastore.json"), "deveria citar o caminho exato do documento")
+	assert(contains(message, "permission denied"), "deveria citar o erro subjacente recebido, sem reformular")
+	assert(contains(message, "keeps running"), "deveria deixar claro que o script continua rodando com o estado em memória")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

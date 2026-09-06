@@ -61,6 +61,9 @@ function Messages.HelpText(): string
 		"    --allow-http-local    Also allow requests to loopback/link-local/private network destinations",
 		"                          (127.0.0.0/8, ::1, 169.254.0.0/16, 10/8, 172.16/12, 192.168/16), which are",
 		"                          otherwise refused even with --allow-http. Implies --allow-http.",
+		"    --no-persist          Disable local persistence of simulated cloud state (DataStoreService)",
+		"                          between runs. Persistence is ON by default; use this flag for CI, or to",
+		"                          reproduce a run from a clean slate without deleting .luaubench/.",
 		"    --watch               Recognized, but not supported yet -- see the error message for why.",
 		"    --help                Show this help text.",
 		"    --version             Show the LuauBench version and the Roblox API Dump version it targets.",
@@ -570,6 +573,40 @@ end
 
 function Messages.HttpRequestAuditLine(method: string, host: string): string
 	return `[http] {method} {host}`
+end
+
+--------------------------------------------------------------------------------------------------
+-- Persistência local do estado "cloud" (DataStoreService) -- task-cli-030, par de task-cli-029/
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seções 6, 9 e 10). `RunCommand`
+-- chama estas três a partir do gancho de flush coalescido por tique e do `onFirstCreate` que
+-- injeta em `CloudStore.Open` -- nunca formata uma string de persistência solta fora daqui (mesma
+-- regra do resto do arquivo).
+--------------------------------------------------------------------------------------------------
+
+-- Seção 9 do desenho: linha informativa, no stderr, UMA vez -- só quando ".luaubench/" nasce pela
+-- primeira vez (nunca a cada execução). Diz o que foi criado, que é git-ignored por padrão, e como
+-- desfazer isso para quem quiser versionar o estado como fixture de time.
+function Messages.CloudStateDirectoryCreated(path: string): string
+	return `luaubench: created "{path}" to persist simulated cloud state (DataStoreService) between runs of this project. `
+		.. `It is git-ignored by default -- delete "{path}/.gitignore" if you want to version this state as a team fixture.`
+end
+
+-- Política de erro (f) do desenho, "falha de LEITURA": erro de projeto claro apontando o arquivo,
+-- exit 2 -- o arquivo NUNCA é sobrescrito por esta falha (nem `CloudStore.Load` nem
+-- `Snapshot.DecodeDocument`, os dois pontos que podem lançar este erro, tocam o disco para
+-- escrita). `engineError` já vem sem stack trace cru (mesmo protocolo de `MaterializeInvalidClass`
+-- acima) -- este wrapper só garante que a mensagem final sempre cita o caminho exato do documento.
+function Messages.CloudStateUnreadable(path: string, engineError: string): string
+	return `Could not load the simulated cloud state (DataStoreService) from "{path}": {engineError} -- `
+		.. "the file was left untouched; fix or remove it manually if it is no longer needed."
+end
+
+-- Política de erro (f) do desenho, "falha de ESCRITA": UM warning por execução (nunca um por
+-- tique -- `RunCommand` garante isso, não este módulo), e o script continua rodando com o estado
+-- em memória -- perder persistência não deve derrubar a execução.
+function Messages.CloudStateSaveFailed(path: string, engineError: string): string
+	return `Could not save the simulated cloud state (DataStoreService) to "{path}": {engineError} -- `
+		.. "the script keeps running with the in-memory state, but this run's changes may not be persisted."
 end
 
 return Messages

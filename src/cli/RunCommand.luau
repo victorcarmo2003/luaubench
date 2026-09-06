@@ -26,7 +26,47 @@
 	  9. TreeMaterializer.Materialize(plan, game, bag)     -> MaterializedTree
 	 10. ScriptRunner.Run(tree, ctx)                       -> um Sandbox.Run por Script elegível
 	 11. scheduler:Run(shouldContinue)                      -- shouldContinue = deadline de --timeout
+	     E ALSO Services.FlushCloudState() (task-cli-030, ver abaixo)
 	 12. imprime sumário (warnings, LocalScripts não executados, erros) e devolve o exit code
+
+	PERSISTÊNCIA LOCAL DO ESTADO "CLOUD" (task-cli-030, par de task-cli-029/task-services-031;
+	arquiteto-persistencia-cloud-2026-09-06.md, seções 6, 9 e 10 -- LER antes de mexer nisto):
+	entre o passo 6 (scheduler/game recém-criados) e o passo 7 (`Services.Bootstrap`), este módulo
+	abre `cloud = if options.NoPersist then nil else CloudStore.Open(directoryOf(plan.ProjectPath),
+	onFirstCreate)` e repassa `CloudPersistence = cloud` em `Services.Bootstrap` -- é ali (dentro
+	de `services`) que o documento "datastore" é LIDO, antes de qualquer script rodar. Falha de
+	LEITURA propaga de `Services.Bootstrap` (por design, ver `services/init.luau`,
+	`loadCloudStateIfPresent`) -- este módulo captura via `pcall` e vira erro de projeto (exit 2,
+	política de erro (f) do desenho: "nunca recomeça do zero em silêncio").
+
+	FLUSH COALESCIDO POR TIQUE, não síncrono por escrita (seção 6 do desenho, medição que
+	justifica): `@lune/fs` não tem append, então toda escrita de `CloudStore.Save` é o arquivo
+	INTEIRO -- persistir a cada `SetAsync` tornaria um laço de N escritas O(N²) (medido: ~46s para
+	1000 escritas num store de 1000 chaves). Por isso `buildShouldContinue`, abaixo, TAMBÉM chama
+	`Services.FlushCloudState()` a cada consulta -- `Scheduler:Run` já consulta `shouldContinue`
+	DUAS VEZES POR TIQUE (`src/runtime/Scheduler.luau:449-470`, gancho que JÁ EXISTIA e JÁ É de
+	`cli`, nenhuma API nova de `runtime`). Usar um predicado consultado pelo VALOR DE RETORNO
+	também como gancho de EFEITO COLATERAL é legítimo aqui (`cli` é o dono dele) -- fica comentado
+	explicitamente em `buildShouldContinue` para nunca parecer um acidente. Trade-off DECLARADO: a
+	janela de durabilidade é UM TIQUE de scheduler (~16ms) -- um `kill -9` no meio de um tique
+	perde as escritas daquele tique.
+
+	FLUSH FORÇADO (síncrono, ignora a coalescência) em DOIS pontos de código -- que cobrem os TRÊS
+	"pontos" do desenho, porque o caminho de saída por `--timeout` NUNCA é um código separado desta
+	base: `--timeout` só faz `shouldContinue` devolver `false`, o que faz `scheduler:Run` RETORNAR
+	normalmente (mesmo `return` de "script terminou sozinho") -- não existe um segundo caminho de
+	saída para instrumentar:
+	  (1) imediatamente depois de `scheduler:Run(...)` retornar (cobre TANTO o script terminando
+	      sozinho QUANTO o `--timeout` expirando -- é o MESMO ponto de retorno nos dois casos);
+	  (2) imediatamente depois de `Runtime.DataModel.RunBindToCloseCallbacks(...)` (a gravação
+	      final de um `ProfileStore` dentro de `BindToClose`, se houver, precisa estar no disco
+	      antes do sumário -- task-cli-031 já garante que o callback TERMINOU antes desta linha).
+
+	POLÍTICA DE ERRO DE I/O (f): falha de LEITURA é erro de projeto (exit 2, arquivo nunca
+	sobrescrito -- ver acima). Falha de ESCRITA é UM warning por EXECUÇÃO INTEIRA (nunca um por
+	tique, mesmo que `Services.FlushCloudState()` seja chamada dezenas de vezes por segundo) e o
+	script CONTINUA rodando com o estado em memória -- ver `makeFlushCloudState`, abaixo, para a
+	guarda que garante isso.
 
 	"PASSOS 4 E 7 NA ORDEM CERTA" (citação direta do desenho): planejar (passo 4) ANTES de
 	registrar (passo 7) é de propósito -- um projeto inválido é recusado com o mundo ainda não
@@ -51,11 +91,11 @@
 	aqui de novo porque é este módulo que constrói o `shouldContinue`.
 
 	Depende de: `ProjectFile.luau`, `TreePlanner.luau`, `TreeMaterializer.luau`, `ScriptRunner.luau`,
-	`OutputFormatter.luau`, `ModuleLoader.luau`, `Diagnostics.luau`, `Messages.luau`, `../runtime`,
-	`../services`, `../valuetypes` (task-cli-025, item e -- só `Runtime.TypeNameResolver.Set(
-	ValueTypes.TypeNameOf)`). NUNCA `../services/generated/**`/`behavior/**` (regra 03) nem um
-	módulo interno de `runtime`/`valuetypes` por fora dos respectivos agregadores públicos (regra
-	02/regra 06).
+	`OutputFormatter.luau`, `ModuleLoader.luau`, `Diagnostics.luau`, `Messages.luau`, `CloudStore.luau`
+	(task-cli-030), `../runtime`, `../services`, `../valuetypes` (task-cli-025, item e -- só
+	`Runtime.TypeNameResolver.Set(ValueTypes.TypeNameOf)`). NUNCA `../services/generated/**`/
+	`behavior/**` (regra 03) nem um módulo interno de `runtime`/`valuetypes` por fora dos
+	respectivos agregadores públicos (regra 02/regra 06).
 
 	FLAGS DE REDE (task-cli-026, par de task-services-026 -- arquiteto-services-2026-09-05.md,
 	seção "L2.2 -- HttpService", L2.2.1/L2.2.4): `RunOptions.AllowHttp`/`AllowHttpLocal` espelham
@@ -75,6 +115,7 @@
 local Runtime = require("../runtime")
 local Services = require("../services")
 local ValueTypes = require("../valuetypes")
+local CloudStore = require("./CloudStore")
 local Diagnostics = require("./Diagnostics")
 local Messages = require("./Messages")
 local ModuleLoader = require("./ModuleLoader")
@@ -98,6 +139,12 @@ export type RunOptions = {
 	-- Args.luau, "--allow-http-local").
 	AllowHttp: boolean,
 	AllowHttpLocal: boolean,
+	-- task-cli-030 (arquiteto-persistencia-cloud-2026-09-06.md, "0. Resumo executivo", item 4):
+	-- espelha `Args.Command.NoPersist` 1:1, default `false` -- persistência local do estado
+	-- "cloud" (DataStoreService) LIGADA por padrão, comportamento natural. `true` desliga por
+	-- completo: nem lê nem escreve `.luaubench/` (ver `RunCommand.Execute`, "cloud = if
+	-- options.NoPersist then nil else CloudStore.Open(...)").
+	NoPersist: boolean,
 }
 
 -- Forma ESTRUTURALMENTE idêntica a `Cli.MainResult` (`src/cli/init.luau`) -- de propósito, NÃO um
@@ -170,15 +217,134 @@ local function parseBindToCloseThreadError(raw: string): (string?, number?, stri
 	return scriptName, tonumber(lineText), message
 end
 
--- `shouldContinue` de `--timeout` (ver cabeçalho, "Riscos e decisões"). `nil` (sem `--timeout`)
--- devolve `nil` -- `Scheduler:Run(nil)` roda até `IsAlive()` virar `false` por conta própria,
--- comportamento de sempre.
-local function buildShouldContinue(timeoutSeconds: number?): (() -> boolean)?
-	if timeoutSeconds == nil then
+-- Deriva o diretório que contém `filePath` -- mesma operação que `ProjectFile.splitPath` já faz
+-- para achar `Project.FolderPath`, deliberadamente NÃO compartilhada por `require` (mesma
+-- disciplina já registrada em `ProjectFile.luau`/`CloudStore.luau`: cada módulo mantém sua própria
+-- cópia local de dez linhas em vez de introduzir um acoplamento novo só para isto). Aceita "/" e
+-- "\" como separador (Windows/Unix). `filePath` aqui é sempre `plan.ProjectPath` -- o `.project.
+-- json` de TOPO resolvido por `ProjectFile.Locate` (nunca de um projeto aninhado -- `TreePlanner.
+-- Plan` só grava `ProjectPath` uma vez, na raiz da recursão, ver `TreePlanner.luau` fim da função
+-- `resolveCore` -- `ProjectPath = project.FilePath`), então o resultado ancora `CloudStore.Open`
+-- exatamente onde a seção 3 do desenho de persistência exige.
+local function directoryOf(filePath: string): string
+	for index = #filePath, 1, -1 do
+		local char = string.sub(filePath, index, index)
+		if char == "/" or char == "\\" then
+			return string.sub(filePath, 1, index - 1)
+		end
+	end
+	return "."
+end
+
+-- Caminho do documento "datastore" -- reconstituído AQUI só para citá-lo em mensagens de erro
+-- claras (política de erro (f) do desenho de persistência); NUNCA usado para tocar o disco por
+-- conta própria -- só `CloudStore.luau` faz I/O (ver o cabeçalho daquele módulo, "ponto ÚNICO de
+-- @lune/fs"). Layout fixo documentado em arquiteto-persistencia-cloud-2026-09-06.md, seção 3.
+local function cloudDatastorePath(projectFolder: string): string
+	return `{projectFolder}/.luaubench/cloud/datastore.json`
+end
+
+-- Corta a stack trace multi-linha que um erro nativo do Lune/Rust produz -- mesma disciplina já
+-- usada em `CloudStore.luau`/`Snapshot.luau`/`ProjectFile.luau` para o mesmo tipo de erro (regra
+-- 04: nunca stack trace cru). Usado só pelos dois pontos novos desta tarefa que cruzam a fronteira
+-- de `pcall` contra `services`/`CloudStore` (falha de leitura do bootstrap, abaixo).
+--
+-- CORREÇÃO (achado ALTO de revisão de task-cli-030): esta função SÓ cortava a primeira quebra de
+-- linha -- nunca removia o prefixo `<caminho absoluto>:<linha>: ` que `error(msg, <nível>)` do
+-- Luau antepõe (`CloudStore.load`/`CloudStore.save` levantam com nível padrão 1, apontando pra
+-- dentro de `CloudStore.luau`; `Snapshot.DecodeDocument` levanta com `error(msg, 2)`, apontando
+-- pro CALL SITE dentro de `services/init.luau`, `loadCloudStateIfPresent`) -- vazando o caminho de
+-- instalação do LuauBench em disco (ex.: `D:\...\src\services:335:`, `D:\...\CloudStore:227:`) nas
+-- mensagens `[cloud/state-unreadable]`/`[cloud/save-failed]`, exatamente a categoria de vazamento
+-- que `TreeMaterializer.stripEngineErrorLocation` já resolve para `applyProperties`/
+-- `createInstance` (task-cli-010/011). Reproduzido ao vivo com um documento "cloud" corrompido
+-- (`{ this is not valid json`) forçando `Snapshot.DecodeDocument` a errar, e com uma obstrução de
+-- `.luaubench/` (arquivo no lugar do diretório) forçando `CloudStore.Save` a errar -- as duas
+-- mensagens finais citavam o caminho absoluto de instalação antes desta correção.
+--
+-- Corrigido reusando a MESMA função já exportada por `TreeMaterializer` (`require`ido logo acima
+-- só para os tipos `PlanNode`/`InstancePlan` até agora) em vez de escrever uma segunda
+-- implementação (regra 01: duas cópias da mesma lógica é exatamente a divergência silenciosa que
+-- a regra 00 proíbe) -- `firstLineOf` (renomeado só nos comentários, mantido como nome local por
+-- não introduzir um alias extra) agora chama `TreeMaterializer.StripEngineErrorLocation` por
+-- dentro, o que cobre AMBOS os cortes (quebra de linha E prefixo de localização) numa função só.
+local function firstLineOf(err: unknown): string
+	return TreeMaterializer.StripEngineErrorLocation(tostring(err))
+end
+
+-- task-cli-030 (arquiteto-persistencia-cloud-2026-09-06.md, seção 6, "Política de erro de I/O"):
+-- fábrica do "gancho de flush" usado TANTO pelo `shouldContinue` (fronteira de tique, via
+-- `buildShouldContinue` abaixo) QUANTO pelos dois flushes FORÇADOS de `RunCommand.Execute`
+-- (depois de `scheduler:Run`, depois de `RunBindToCloseCallbacks`) -- a MESMA closure é
+-- compartilhada entre os três usos de propósito: a garantia de erro é "UM warning por EXECUÇÃO
+-- INTEIRA", nunca "um warning por chamador"/"um por tique", e só uma guarda `hasWarned`
+-- compartilhada consegue essa garantia sem coordenação extra entre os três pontos de chamada.
+--
+-- `(true, nil)` (gravou) e `(false, nil)` (nada sujo -- `Services.FlushCloudState` nem chega a
+-- serializar, ver o cabeçalho daquela função em `services/init.luau`) são os DOIS caminhos felizes
+-- -- NUNCA viram warning. Só `(false, err ~= nil)` é falha de escrita de verdade.
+-- CORREÇÃO (achado ALTO de revisão de task-cli-030, mesma raiz do `firstLineOf` acima):
+-- `Services.FlushCloudState()` (`src/services/init.luau`) já aplica o SEU PRÓPRIO `firstLineOf`
+-- interno antes de devolver `err` -- mas aquela cópia (fora do território desta correção pontual,
+-- `src/services/**`, reportado e não corrigido aqui) tem a MESMA falha: só corta a primeira quebra
+-- de linha, nunca o prefixo `<caminho absoluto>:<linha>: ` que `error()` antepõe (`CloudStore.save`
+-- levanta com nível padrão 1, apontando pra dentro de `CloudStore.luau`) -- então `err`, aqui,
+-- ainda pode carregar esse prefixo. `firstLineOf` (definido acima, já reusando
+-- `TreeMaterializer.StripEngineErrorLocation`) é aplicado de novo AQUI, na fronteira final antes de
+-- formatar `Messages.CloudStateSaveFailed` -- defesa em profundidade no lado de `cli` (o único lado
+-- que esta tarefa pode corrigir) para que o usuário NUNCA veja o caminho de instalação, mesmo
+-- enquanto o vazamento equivalente em `services/init.luau` não for corrigido.
+local function makeFlushCloudState(bag: Diagnostics.Bag, cloudPath: string): () -> ()
+	local hasWarned = false
+
+	return function()
+		local ok, err = Services.FlushCloudState()
+		if ok or err == nil then
+			return
+		end
+		if hasWarned then
+			return
+		end
+		hasWarned = true
+		bag:Add({
+			Severity = "warning",
+			Code = "cloud/save-failed",
+			Message = Messages.CloudStateSaveFailed(cloudPath, firstLineOf(err)),
+			FilePath = cloudPath,
+		})
+	end
+end
+
+-- `shouldContinue` de `--timeout` (ver cabeçalho, "Riscos e decisões") E do gancho de flush
+-- coalescido por tique (task-cli-030, ver cabeçalho do arquivo, "PERSISTÊNCIA LOCAL DO ESTADO
+-- 'CLOUD'"). `Scheduler:Run` consulta este predicado PELO VALOR DE RETORNO, duas vezes por tique
+-- (`src/runtime/Scheduler.luau:449-470`) -- usá-lo TAMBÉM como gancho de EFEITO COLATERAL
+-- (chamar `flushCloudState` a cada consulta) é LEGÍTIMO aqui, porque `cli` é o dono deste
+-- predicado (`RunCommand.buildShouldContinue` é quem o constrói) -- mas fica este comentário aqui
+-- de propósito, para nunca parecer um acidente de quem lê o código depois (arquiteto-persistencia-
+-- cloud-2026-09-06.md, seção 10: "usá-lo também como gancho de efeito colateral é legítimo aqui...
+-- mas precisa estar comentado no código, senão parece acidente").
+--
+-- `timeoutSeconds == nil` E `flushCloudState == nil` devolve `nil` -- preserva EXATAMENTE o
+-- comportamento de antes desta tarefa (`Scheduler:Run(nil)` roda até `IsAlive()` virar `false` por
+-- conta própria, sem NUNCA consultar este predicado -- nem para o efeito colateral). Qualquer um
+-- dos dois presentes força um predicado real: o flush coalescido por tique precisa rodar em TODA
+-- execução com persistência ligada, mesmo sem `--timeout` (é o caso comum -- a maioria das
+-- execuções de `luaubench run` não passa `--timeout`).
+local function buildShouldContinue(timeoutSeconds: number?, flushCloudState: (() -> ())?): (() -> boolean)?
+	if timeoutSeconds == nil and flushCloudState == nil then
 		return nil
 	end
-	local deadline = os.clock() + timeoutSeconds
+
+	local deadline: number? = if timeoutSeconds ~= nil then os.clock() + timeoutSeconds else nil
+
 	return function(): boolean
+		if flushCloudState ~= nil then
+			flushCloudState()
+		end
+		if deadline == nil then
+			return true
+		end
 		return os.clock() < deadline
 	end
 end
@@ -252,13 +418,71 @@ function RunCommand.Execute(options: RunOptions): Result
 		stdio.ewrite(Messages.HttpRequestAuditLine(method, host) .. "\n")
 	end
 
-	Services.Bootstrap({
-		scheduler = scheduler,
-		dataModel = game,
-		AllowHttp = options.AllowHttp,
-		AllowHttpLocal = options.AllowHttpLocal,
-		OnHttpRequest = onHttpRequest,
-	})
+	-- task-cli-030 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10, "Quem chama primeiro"):
+	-- ANTES do passo 7 (`Services.Bootstrap`, logo abaixo) -- é ele quem LÊ o documento "datastore"
+	-- ali dentro, antes de qualquer script rodar. `options.NoPersist` (`--no-persist`) devolve
+	-- `nil` sem sequer chamar `CloudStore.Open` -- uma execução com persistência desligada nunca
+	-- cria `.luaubench/`, nunca abre um `Store`, nunca passa perto do caminho de flush (ver
+	-- `buildShouldContinue`/os dois flushes forçados, abaixo -- todos gated em `cloud ~= nil`).
+	-- `directoryOf(plan.ProjectPath)` ancora no `.project.json` de TOPO resolvido por
+	-- `ProjectFile.Locate` (ver comentário de `directoryOf`), NUNCA em `options.Cwd`/`process.cwd`
+	-- -- mesma garantia que `CloudStore.luau` já documenta para `projectRoot`.
+	local projectFolder = directoryOf(plan.ProjectPath)
+	local cloudDocumentPath = cloudDatastorePath(projectFolder)
+	local cloud: CloudStore.Store? = nil
+	if not options.NoPersist then
+		cloud = CloudStore.Open(projectFolder, function(path: string)
+			-- Seção 9 do desenho: linha informativa, no stderr, UMA vez -- só quando
+			-- `CloudStore` de fato criou ".luaubench/" agora (nunca numa execução onde o
+			-- diretório já sobreviveu de uma execução anterior -- ver `CloudStore.Open`,
+			-- garantia de `onFirstCreate`).
+			stdio.ewrite(Messages.CloudStateDirectoryCreated(path) .. "\n")
+		end)
+	end
+
+	local function bootstrapServices(): ()
+		Services.Bootstrap({
+			scheduler = scheduler,
+			dataModel = game,
+			AllowHttp = options.AllowHttp,
+			AllowHttpLocal = options.AllowHttpLocal,
+			OnHttpRequest = onHttpRequest,
+			CloudPersistence = cloud,
+		})
+	end
+
+	if cloud == nil then
+		-- Sem persistência (--no-persist, ou nenhum port injetado): `services/init.luau`,
+		-- `loadCloudStateIfPresent` devolve cedo (`Context.GetCloudPersistence() == nil`) e NUNCA
+		-- lança por causa de estado "cloud" -- chama direto, SEM `pcall`, pra nunca mascarar uma
+		-- invariante interna quebrada de verdade (ex.: bug em `Services.Register()`) atrás da
+		-- mensagem `Messages.CloudStateUnreadable`, que não faria sentido nenhum aqui.
+		bootstrapServices()
+	else
+		-- `cloud ~= nil`: `Services.Bootstrap` propaga sem `pcall` (por design, `services/init.luau`,
+		-- `loadCloudStateIfPresent`) quando o documento "datastore" existe mas está
+		-- ilegível/corrompido/com `SchemaVersion` futuro -- política de erro (f): erro de projeto
+		-- claro apontando o arquivo, exit 2, ANTES de qualquer script rodar (nem `CloudStore.Load`
+		-- nem `Snapshot.DecodeDocument` tocam o disco para escrita, então o arquivo nunca é
+		-- sobrescrito por esta falha). `Register()`/`Context.Set()` (o resto do trabalho de
+		-- `Bootstrap`) são invariantes de config-time que não falham a partir de entrada do
+		-- usuário -- na prática, alcançar este `pcall` só acontece por causa do documento ilegível.
+		local bootstrapOk, bootstrapErr = pcall(bootstrapServices)
+		if not bootstrapOk then
+			bag:Add({
+				Severity = "error",
+				Code = "cloud/state-unreadable",
+				Message = Messages.CloudStateUnreadable(cloudDocumentPath, firstLineOf(bootstrapErr)),
+				FilePath = cloudDocumentPath,
+			})
+			printDiagnostics(bag, options.UseColor, options.Verbose)
+			return {
+				ExitCode = EXIT_PROJECT_ERROR,
+				ErrorCount = bag:CountOf("error"),
+				WarningCount = bag:CountOf("warning"),
+			}
+		end
+	end
 
 	-- task-cli-025 (item e, arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 4 do
 	-- desenho de valuetypes): `cli` é o composition root -- o ÚNICO lugar do projeto que ata
@@ -320,7 +544,24 @@ function RunCommand.Execute(options: RunOptions): Result
 		Policy = ScriptRunner.DefaultPolicy(),
 	})
 
-	scheduler:Run(buildShouldContinue(options.Timeout))
+	-- task-cli-030: `flushCloudState == nil` quando `cloud == nil` (--no-persist, ou nenhum
+	-- diretório de persistência resolvido) -- `buildShouldContinue(options.Timeout, nil)` então
+	-- preserva EXATAMENTE o comportamento de antes desta tarefa quando `options.Timeout` também é
+	-- `nil` (`Scheduler:Run(nil)`, ver comentário de `buildShouldContinue`). Só existe quando
+	-- `cloud ~= nil`, e a MESMA closure é reusada pelos dois flushes forçados abaixo (ver
+	-- `makeFlushCloudState`, "a MESMA closure é compartilhada entre os três usos de propósito").
+	local flushCloudState: (() -> ())? = if cloud ~= nil then makeFlushCloudState(bag, cloudDocumentPath) else nil
+
+	scheduler:Run(buildShouldContinue(options.Timeout, flushCloudState))
+
+	-- task-cli-030, FLUSH FORÇADO (1/2) -- ver cabeçalho do arquivo, "FLUSH FORÇADO": cobre TANTO
+	-- o script terminando sozinho (`IsAlive() == false`) QUANTO `--timeout` expirando -- os dois
+	-- fazem `scheduler:Run` retornar exatamente por AQUI, não existe um segundo caminho de saída
+	-- para instrumentar separadamente. `flushCloudState == nil` (persistência desligada) é um
+	-- no-op silencioso (nunca chama `Services.FlushCloudState`).
+	if flushCloudState ~= nil then
+		flushCloudState()
+	end
 
 	-- task-cli-031 (gap achado pelo arquiteto durante o desenho de persistência, INDEPENDENTE
 	-- dela -- ver cabeçalho de `DataModel.luau`, task-runtime-033, linhas 63-87, para a semântica
@@ -378,6 +619,15 @@ function RunCommand.Execute(options: RunOptions): Result
 	end)
 
 	Runtime.DataModel.RunBindToCloseCallbacks(game, scheduler)
+
+	-- task-cli-030, FLUSH FORÇADO (2/2) -- ver cabeçalho do arquivo, "FLUSH FORÇADO": a gravação
+	-- final de um `ProfileStore`/data manager real costuma acontecer dentro de `BindToClose` (é
+	-- exatamente o cenário que motivou `RunBindToCloseCallbacks` existir, task-cli-031) -- esta
+	-- chamada garante que essa última escrita chega ao disco ANTES do sumário final, mesmo que o
+	-- tique em que `BindToClose` rodou nunca tivesse chegado a consultar `shouldContinue` de novo.
+	if flushCloudState ~= nil then
+		flushCloudState()
+	end
 
 	bindToCloseErrorConnection:Disconnect()
 

@@ -2543,7 +2543,7 @@
       "id": "task-cli-030",
       "title": "Fiacao da persistencia em cli: --no-persist, flush por tique, flush final, mensagens",
       "description": "Amarra CloudStore ao pipeline. (a) src/cli/Args.luau + RunCommand.RunOptions: flag --no-persist (default false, ou seja persistencia LIGADA por padrao -- e o comportamento que o usuario descreveu como natural). E a UNICA flag nova justificada: CI, cenarios deterministicos do testador, e reproduzir do zero. NAO inventar --cloud-dir/--persist-format/--cloud-reset (apagar estado e rm -rf .luaubench/). (b) RunCommand: cloud = if options.NoPersist then nil else CloudStore.Open(dirOf(projectPath), onFirstCreate) ANTES do passo 7, e passa CloudPersistence = cloud em Services.Bootstrap (que LE o arquivo ali, antes de qualquer script). (c) FLUSH COALESCIDO POR TIQUE: buildShouldContinue passa a tambem chamar Services.FlushCloudState(). Scheduler:Run consulta shouldContinue DUAS VEZES POR TIQUE (src/runtime/Scheduler.luau linhas 449-470) -- e portanto um gancho de fronteira de tique que JA EXISTE e JA E DE CLI, sem nenhuma API nova de runtime. MEDICAO QUE JUSTIFICA A COALESCENCIA (nao adivinhe, esta no desenho secao 6): @lune/fs NAO tem append, entao toda escrita e o arquivo inteiro; snapshot inteiro custa 0.98ms (10 chaves) / 7.01ms (100) / 46.24ms (1000), dominado pelo serde.encode e nao pelo I/O. Persistir sincronamente a cada SetAsync tornaria um laco de N escritas O(N^2) -- 1000 escritas num store de 1000 chaves ~= 46 SEGUNDOS. Trade-off DECLARADO: a janela de durabilidade e um tique (~16ms); kill -9 no meio de um tique perde as escritas dele. USAR shouldContinue tambem como gancho de efeito colateral e legitimo (cli e o dono dele) mas PRECISA estar comentado no codigo, senao parece acidente. (d) FLUSH FORCADO em tres pontos: depois de scheduler:Run retornar; depois de RunBindToCloseCallbacks (task-cli-031); e no caminho de saida por --timeout. (e) src/cli/Messages.luau: linha informativa de primeira criacao do diretorio (dispara via onFirstCreate, UMA vez, stderr) dizendo o que foi criado, que e git-ignored por padrao, e como desfazer (apagar .luaubench/.gitignore) para quem quiser versionar como fixture de time. (f) POLITICA DE ERRO: falha de LEITURA e erro de projeto claro apontando o arquivo, exit 2, e o arquivo NAO e sobrescrito (nunca 'comeca do zero em silencio', que apagaria estado real). Falha de ESCRITA e UM warning por execucao (nunca um por tique) e o script continua rodando com o estado em memoria. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secoes 6, 9, 10.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 53,
@@ -2558,7 +2558,8 @@
         "task-services-031"
       ],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO COM RESSALVAS, depois achado ALTO corrigido e reverificado. Revisor confirmou 16/16 arquivos de cli, persistencia real entre processos separados (2 execucoes lune reais, nao so in-process), --no-persist nunca cria/le estado, custo zero quando limpo (660 tiques, hash/mtime inalterados), linha informativa 1x, arquivo corrompido intacto apos falha, 1 warning por execucao mesmo com dezenas de tentativas de flush, comentario sobre shouldContinue como gancho presente. 1 achado ALTO real: mensagens [cloud/state-unreadable]/[cloud/save-failed] vazavam caminho absoluto de instalacao do LuauBench -- corrigido reusando stripEngineErrorLocation ja existente em TreeMaterializer.luau (exportada, nao duplicada), reproduzido antes/depois em ambiente proprio pelo revisor (projeto novo fora do que o coder usou), 30/30 RunCommand.spec. Achado residual nao corrigido (fora do territorio, registrado): mesmo bug ainda existe em services/init.luau (copia propria de firstLineOf sem strip), hoje mitigado pela defesa em profundidade do cli -- registrado como task-services-033. Achado extra do revisor durante verificacao de estabilidade: teste http-audit (task-cli-026) e instavel, 3/5 falhas em rodadas repetidas (corrida entre net.serve local e requisicao do processo filho) -- registrado como task-cli-034. Relatorios: .claude/agents-memory/revisor-cli-task-cli-030-2026-09-06.md e revisor-cli-task-cli-030-fix-2026-09-06.md"
     },
     {
       "id": "task-test-cloud-001",
@@ -2617,6 +2618,44 @@
       ],
       "priority": "medium",
       "acceptance": "Erro que ocorre uma unica vez e contado uma unica vez no sumario/ErrorCount, mesmo quando timeout expira e BindToClose roda na sequencia. Cenarios existentes (erro normal de script, erro em BindToClose isolado) continuam corretos -- regressao de task-cli-031/032. Specs cobrindo o cenario de sobreposicao. --strict sem any.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-services-033",
+      "title": "Aplicar stripEngineErrorLocation em services/init.luau (mesmo vazamento de caminho, mitigado mas nao corrigido na fonte)",
+      "description": "Achado residual de task-cli-030 (fix do achado ALTO). src/services/init.luau linhas ~357-360 tem sua propria copia de firstLineOf (so corta na primeira quebra de linha, nao remove o prefixo caminho:linha: que error() antepoe), usada por Services.FlushCloudState ao envolver cloudPersistence.Save(...) em pcall. Hoje mitigado porque RunCommand.luau (cli) aplica o strip correto de novo por fora (defesa em profundidade) -- mas se outro chamador de Services.FlushCloudState nao fizer esse segundo strip, o vazamento de caminho absoluto de instalacao reaparece. TERRITORIO: so src/services/init.luau + spec. FIX: aplicar a mesma logica de stripEngineErrorLocation (services nao pode importar de src/cli/TreeMaterializer.luau -- teria que existir uma copia propria em services, ou avaliar se vale a pena extrair pra um modulo verdadeiramente compartilhado fora dos dois territorios; decida com bom senso dado que services/cli ja tem essa duplicacao ocorrendo organicamente, nao invente uma dependencia cruzada nova).",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 52,
+      "tags": [
+        "services",
+        "correcao-de-revisao",
+        "seguranca"
+      ],
+      "priority": "low",
+      "acceptance": "Mensagem de erro devolvida por Services.FlushCloudState/Bootstrap ao falhar nunca contem caminho absoluto de instalacao do LuauBench, mesmo quando chamada sem a defesa em profundidade que cli hoje aplica por fora. Specs cobrindo. --strict sem any. Suite de services sem regressao.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-034",
+      "title": "Teste http-audit (task-cli-026) instavel: 3/5 falhas em rodadas repetidas",
+      "description": "Achado do revisor durante verificacao de estabilidade do fix de task-cli-030 (nao relacionado a esse fix). RunCommand.spec.luau, teste na linha ~245 (fixture run-e2e/http-audit, task-cli-026): rodando o spec 5 vezes seguidas, 3 falharam -- aparenta corrida entre o net.serve local que o proprio teste sobe e a requisicao HTTP feita pelo processo filho (lune run src/cli/main.luau run <fixture> ...). TERRITORIO: so src/cli/RunCommand.spec.luau (e possivelmente a fixture run-e2e/http-audit/). Investigar causa raiz (timing de start do servidor vs spawn do processo filho, porta fixa colidindo entre rodadas, falta de retry/wait) antes de corrigir -- nao adicionar sleep arbitrario sem entender a causa.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 51,
+      "tags": [
+        "cli",
+        "teste",
+        "flakiness"
+      ],
+      "priority": "medium",
+      "acceptance": "lune run src/cli/RunCommand.spec.luau passa de forma estavel em pelo menos 10 execucoes consecutivas (nao so 1). Causa raiz da instabilidade documentada no codigo/relatorio. --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06"

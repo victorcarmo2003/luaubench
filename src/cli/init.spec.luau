@@ -114,6 +114,8 @@ test("Cli.RunProject(options) delega para RunCommand.Execute com as MESMAS RunOp
 		-- task-cli-026: default `false` nos dois, mesma semântica de `Args.Parse` sem as flags.
 		AllowHttp = false,
 		AllowHttpLocal = false,
+		-- task-cli-030: default `false` (persistência ligada), mesma semântica de `Args.Parse`.
+		NoPersist = false,
 	}
 	local viaRunProject = Cli.RunProject(options)
 	local viaExecuteDirectly = RunCommand.Execute(options)

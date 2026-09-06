@@ -225,6 +225,20 @@ end
 -- pela mesma razão. Se o padrão não casar (erro sem prefixo de localização reconhecível -- caso
 -- defensivo, não observado na prática), devolve `rawError` sem alteração: nunca esconde a mensagem
 -- real do motor por excesso de zelo.
+--
+-- Correção pontual (achado ALTO de revisão de task-cli-030): exportada como
+-- `TreeMaterializer.StripEngineErrorLocation` -- `RunCommand.luau` tinha um `firstLineOf` PRÓPRIO
+-- que só cortava a mensagem crua na primeira quebra de linha (mesma disciplina de
+-- `CloudStore.firstLineOf`/`services/init.luau firstLineOf`, que tratam da stack traceback
+-- multi-linha do Lune) mas NUNCA removia o prefixo `<caminho absoluto>:<linha>: ` que `error(msg,
+-- <nível>)` antepõe -- vazando o caminho de instalação do LuauBench (ex.:
+-- `D:\...\src\services:335:`, `D:\...\CloudStore:227:`) nas mensagens `[cloud/state-unreadable]`/
+-- `[cloud/save-failed]`. É a MESMA classe de vazamento que esta função já resolve para
+-- `applyProperties`/`createInstance` logo abaixo -- reusada em vez de duplicada (regra 01: uma
+-- função, não duas cópias que podem divergir em silêncio). Continua sendo chamada localmente pelo
+-- nome curto `stripEngineErrorLocation` nos dois pontos deste arquivo; a atribuição ao módulo é só
+-- para tornar a MESMA implementação alcançável de fora (`RunCommand.luau`, que já `require`s este
+-- módulo para os tipos `PlanNode`/`InstancePlan`).
 local function stripEngineErrorLocation(rawError: string): string
 	local rest = string.match(rawError, "^.-:%d+: (.*)$")
 	if rest == nil then
@@ -232,6 +246,7 @@ local function stripEngineErrorLocation(rawError: string): string
 	end
 	return rest
 end
+TreeMaterializer.StripEngineErrorLocation = stripEngineErrorLocation
 
 -- task-cli-025 (item b): resolve o `MemberDescriptor` de UMA propriedade -- é o que diz, pra um
 -- array/objeto bruto do JSON, qual `ValueType`/`ValueCategory` decodificar contra (a mesma

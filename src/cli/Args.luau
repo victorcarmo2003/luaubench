@@ -17,6 +17,14 @@
 	9 do desenho: Lune 0.10.5 não expõe observador de filesystem, regra 04 proíbe polling) --
 	nunca cai no ramo de "flag desconhecida".
 
+	`--no-persist` (task-cli-030, arquiteto-persistencia-cloud-2026-09-06.md, "0. Resumo
+	executivo" item 4 e seção 14, "O que deliberadamente NÃO fazer agora"): ÚNICA flag nova desta
+	tarefa -- persistência local do estado "cloud" (hoje: DataStoreService) fica LIGADA por
+	padrão (comportamento natural, sem exigir nenhuma flag) e esta a desliga. Justificativa
+	registrada no desenho: CI, cenários determinísticos do `testador`, reproduzir do zero --
+	NUNCA `--cloud-dir`/`--persist-format`/`--cloud-reset` (apagar estado é `rm -rf .luaubench/`,
+	não precisa de flag).
+
 	Depende só de `Messages.luau` (toda string de erro vem de lá).
 ]]
 
@@ -31,6 +39,8 @@ export type Command =
 		Verbose: boolean,
 		AllowHttp: boolean,
 		AllowHttpLocal: boolean,
+		-- task-cli-030: default `false` -- persistência local do estado "cloud" LIGADA por padrão.
+		NoPersist: boolean,
 	}
 	| { Kind: "version" }
 	| { Kind: "help" }
@@ -49,6 +59,7 @@ local function parseRunArgs(rest: { string }): Command
 	local verbose = false
 	local allowHttp = false
 	local allowHttpLocal = false
+	local noPersist = false
 
 	local index = 1
 	local count = #rest
@@ -86,6 +97,10 @@ local function parseRunArgs(rest: { string }): Command
 			allowHttp = true
 			allowHttpLocal = true
 			index += 1
+		elseif token == "--no-persist" then
+			-- task-cli-030: desliga a persistência local do estado "cloud" (default: ligada).
+			noPersist = true
+			index += 1
 		elseif token == "--watch" then
 			-- Decisão 9: reconhecida de propósito, nunca "flag desconhecida" -- o motivo é
 			-- técnico e real (ausência de API no Lune fixado), não falta de prioridade.
@@ -109,6 +124,7 @@ local function parseRunArgs(rest: { string }): Command
 		Verbose = verbose,
 		AllowHttp = allowHttp,
 		AllowHttpLocal = allowHttpLocal,
+		NoPersist = noPersist,
 	}
 end
 

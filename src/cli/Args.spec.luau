@@ -59,6 +59,7 @@ test("argv vazio vira Kind 'run' com ProjectPath nil (comando padrão, sem 'run'
 		assert(command.Verbose == false, "sem --verbose, Verbose deveria começar false")
 		assert(command.AllowHttp == false, "sem --allow-http, AllowHttp deveria começar false (rede desligada por padrão)")
 		assert(command.AllowHttpLocal == false, "sem --allow-http-local, AllowHttpLocal deveria começar false")
+		assert(command.NoPersist == false, "sem --no-persist, NoPersist deveria começar false (persistência LIGADA por padrão)")
 	end
 end)
 
@@ -129,6 +130,30 @@ test("caminho + as três flags juntos, em qualquer ordem em torno do caminho", f
 		assert(command.Timeout == 5, "deveria capturar --timeout mesmo depois do caminho")
 		assert(command.NoColor == true, "deveria capturar --no-color antes do caminho")
 		assert(command.Verbose == true, "deveria capturar --verbose depois de --timeout")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- --no-persist (task-cli-030, par de task-cli-029/task-services-031)
+--------------------------------------------------------------------------------------------------
+
+test("--no-persist seta NoPersist = true e não afeta as outras flags", function()
+	local command = Args.Parse({ "run", "--no-persist" })
+	assert(command.Kind == "run", "deveria continuar Kind 'run'")
+	if command.Kind == "run" then
+		assert(command.NoPersist == true, "--no-persist deveria setar NoPersist = true")
+		assert(command.AllowHttp == false, "--no-persist sozinho não deveria mexer em AllowHttp")
+		assert(command.Verbose == false, "--no-persist sozinho não deveria mexer em Verbose")
+	end
+end)
+
+test("--no-persist combina com caminho e outras flags em qualquer ordem", function()
+	local command = Args.Parse({ "run", "--no-persist", "./MyProject", "--timeout", "5" })
+	assert(command.Kind == "run", "deveria continuar Kind 'run'")
+	if command.Kind == "run" then
+		assert(command.NoPersist == true, "deveria capturar --no-persist")
+		assert(command.ProjectPath == "./MyProject", "deveria capturar o caminho no meio das flags")
+		assert(command.Timeout == 5, "deveria capturar --timeout mesmo com --no-persist presente")
 	end
 end)
 
