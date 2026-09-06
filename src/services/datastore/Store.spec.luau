@@ -4,13 +4,16 @@
 	Teste dedicado de `./Store.luau` (regra 01: teste na mesma tarefa da lógica que cobre). Cobre
 	o acceptance de task-services-017: "Store.luau cobre set/get/update/remove com versão e
 	tombstone" + "cópia profunda verificada (mutar o retorno não afeta o store, e vice-versa na
-	leitura)".
+	leitura)", e o acceptance de task-services-030: "Export/Import fazem round-trip correto",
+	"poda de 30 dias confirmada", "versionCounter restaurado corretamente após Import",
+	"marca-suja funciona".
 
 	Roda SEM `Services.Bootstrap`/`Runtime` -- `Store.luau` não conhece Instance (ver cabeçalho do
 	módulo). Roda com `lune run src/services/datastore/Store.spec.luau`.
 ]]
 
 local process = require("@lune/process")
+local DateTime = require("@lune/datetime")
 local Store = require("./Store")
 
 local passedCount = 0
@@ -21,6 +24,21 @@ local function test(name: string, run: () -> ())
 	run()
 	passedCount += 1
 	print(`[PASS] {name}`)
+end
+
+-- Mesmo padrão de `./Value.spec.luau` (`expectErrorContaining`) -- `table.pack(pcall(fn))` em vez
+-- de `local ok, err = pcall(fn)` porque `fn: () -> ()` (retorno vazio) faz o Luau tipar `pcall(fn)`
+-- como só 1 valor de retorno no caminho de SUCESSO; `table.pack` sobre o pack variádico contorna
+-- isso sem precisar de `any`.
+local function expectErrorContaining(fn: () -> (), fragment: string, context: string): ()
+	local results = table.pack(pcall(fn))
+	local ok = results[1] :: boolean
+	assert(not ok, `{context}: esperava erro, mas completou sem erro`)
+	local message = tostring(results[2])
+	assert(
+		string.find(message, fragment, 1, true) ~= nil,
+		`{context}: mensagem deveria conter "{fragment}", recebeu: {message}`
+	)
 end
 
 -- ================= Get/Set básicos =================
@@ -404,6 +422,416 @@ test("ListKeys INCLUI chave tombstoned (RemoveAsync) -- quem decide excluir é o
 	assert(#keys == 2, "ListKeys deveria continuar listando a chave removida -- filtro é responsabilidade do chamador")
 	local removedEntry = if keys[1].Key == "removed" then keys[1] else keys[2]
 	assert(removedEntry.Current.Tombstone == true, "a entrada da chave removida deveria refletir Tombstone == true na versão corrente")
+end)
+
+-- ================= Export/Import: round-trip básico (task-services-030) =================
+
+test("Export/Import: round-trip preserva histórico completo (Value, CreatedTime, UpdatedTime, UserIds, Metadata, Tombstone)", function()
+	local store = Store.new()
+	local metadata: { [string]: unknown } = { Source = "test" }
+	store:Set("s", "k", { Coins = 1 }, { 7 }, metadata)
+	store:Set("s", "k", { Coins = 2 })
+	store:Remove("s", "k")
+
+	local snapshot = store:Export()
+	local storeTwo = Store.new()
+	storeTwo:Import(snapshot)
+
+	local originalVersions = store:ListVersions("s", "k")
+	local importedVersions = storeTwo:ListVersions("s", "k")
+	assert(#importedVersions == #originalVersions, `esperava {#originalVersions} versões importadas, achou {#importedVersions}`)
+
+	for index, originalInfo in originalVersions do
+		local importedInfo = importedVersions[index]
+		assert(importedInfo.Version == originalInfo.Version, "Version deveria bater após round-trip")
+		assert(importedInfo.CreatedTime == originalInfo.CreatedTime, "CreatedTime deveria bater após round-trip")
+		assert(importedInfo.UpdatedTime == originalInfo.UpdatedTime, "UpdatedTime deveria bater após round-trip")
+		assert(importedInfo.Tombstone == originalInfo.Tombstone, "Tombstone deveria bater após round-trip")
+
+		local originalValue = store:GetVersion("s", "k", originalInfo.Version)
+		local importedValue = storeTwo:GetVersion("s", "k", originalInfo.Version)
+		assert(
+			(importedValue :: { Coins: number }).Coins == (originalValue :: { Coins: number }).Coins,
+			`Value da versão {index} deveria bater após round-trip`
+		)
+	end
+
+	local _value, keyInfo = storeTwo:GetVersion("s", "k", originalVersions[1].Version)
+	local info = keyInfo :: Store.VersionInfo
+	assert(#info.UserIds == 1 and info.UserIds[1] == 7, "UserIds deveria bater após round-trip")
+	assert(info.Metadata.Source == "test", "Metadata deveria bater após round-trip")
+end)
+
+test("Export/Import: chaves/storeIds vazios (Store.new() recém-criado) fazem round-trip trivial", function()
+	local store = Store.new()
+	local snapshot = store:Export()
+
+	local storeTwo = Store.new()
+	storeTwo:Import(snapshot)
+
+	local value = storeTwo:Get("s", "k")
+	assert(value == nil, "um Store vazio importado deveria continuar vazio")
+end)
+
+-- ================= Export: poda por idade de 30 dias (task-services-030) =================
+
+test("Export: poda versão NÃO-CORRENTE mais velha que 30 dias; versão RECENTE e a CORRENTE (mesmo velha) permanecem", function()
+	local now = DateTime.now().unixTimestampMillis
+	local thirtyOneDaysAgo = now - (31 * 24 * 60 * 60 * 1000)
+	local oneDayAgo = now - (1 * 24 * 60 * 60 * 1000)
+	local fortyDaysAgo = now - (40 * 24 * 60 * 60 * 1000)
+
+	-- Semeado via `Import` (não `Set`) para controlar `UpdatedTime` diretamente -- `Store.luau` só
+	-- conhece o relógio real, então não há como "esperar 30 dias de verdade" num teste. A CORRENTE
+	-- é deliberadamente colocada por ÚLTIMO no array com o timestamp MAIS velho dos três -- prova
+	-- que a poda decide "é a corrente?" por POSIÇÃO no array (mesma regra de `currentVersionOf`),
+	-- nunca por comparação de `UpdatedTime`.
+	local seed = {
+		s = {
+			k = {
+				CreatedTime = fortyDaysAgo,
+				Versions = {
+					{
+						Version = string.format("%013d-%010d", thirtyOneDaysAgo, 1),
+						Value = "too-old-non-current",
+						UpdatedTime = thirtyOneDaysAgo,
+						UserIds = {},
+						Metadata = {},
+						Tombstone = false,
+					},
+					{
+						Version = string.format("%013d-%010d", oneDayAgo, 2),
+						Value = "recent-non-current",
+						UpdatedTime = oneDayAgo,
+						UserIds = {},
+						Metadata = {},
+						Tombstone = false,
+					},
+					{
+						Version = string.format("%013d-%010d", fortyDaysAgo, 3),
+						Value = "old-current",
+						UpdatedTime = fortyDaysAgo,
+						UserIds = {},
+						Metadata = {},
+						Tombstone = false,
+					},
+				},
+			},
+		},
+	}
+
+	local store = Store.new()
+	store:Import((seed :: unknown) :: Store.Snapshot)
+
+	local exported = store:Export()
+	local exportedVersions = exported["s"]["k"].Versions
+	assert(#exportedVersions == 2, `esperava 2 versões após a poda (1 recente + 1 corrente antiga), achou {#exportedVersions}`)
+
+	local seenValues: { [string]: boolean } = {}
+	for _, version in exportedVersions do
+		seenValues[tostring(version.Value)] = true
+	end
+	assert(seenValues["too-old-non-current"] == nil, "versão NÃO-CORRENTE com mais de 30 dias deveria ter sido podada")
+	assert(seenValues["recent-non-current"] == true, "versão NÃO-CORRENTE recente NÃO deveria ser podada")
+	assert(seenValues["old-current"] == true, "a versão CORRENTE, mesmo velha, NUNCA deveria ser podada -- senão a chave inteira sumiria")
+end)
+
+test("Export: chave com só a versão CORRENTE (velha) sobrevive à poda inteira", function()
+	local now = DateTime.now().unixTimestampMillis
+	local fortyDaysAgo = now - (40 * 24 * 60 * 60 * 1000)
+
+	local seed = {
+		s = {
+			k = {
+				CreatedTime = fortyDaysAgo,
+				Versions = {
+					{
+						Version = string.format("%013d-%010d", fortyDaysAgo, 1),
+						Value = "only-and-current",
+						UpdatedTime = fortyDaysAgo,
+						UserIds = {},
+						Metadata = {},
+						Tombstone = false,
+					},
+				},
+			},
+		},
+	}
+
+	local store = Store.new()
+	store:Import((seed :: unknown) :: Store.Snapshot)
+
+	local exported = store:Export()
+	local exportedVersions = exported["s"]["k"].Versions
+	assert(#exportedVersions == 1, "a única versão (que também é a corrente) nunca deveria ser podada")
+	assert(exportedVersions[1].Value == "only-and-current", "o valor da versão sobrevivente deveria bater")
+end)
+
+-- ================= Import: restauração do versionCounter (task-services-030) =================
+
+test("Import restaura versionCounter: escrita pós-Import ordena DEPOIS de TODAS as importadas, mesmo forçando o mesmo milissegundo", function()
+	-- Fabrica um snapshot com um contador de versão bem acima de onde um `Store.new()` recém-
+	-- -criado começaria (1) -- se `Import` não restaurasse `versionCounter`, a PRÓXIMA escrita
+	-- usaria um contador pequeno e, caindo no MESMO milissegundo de uma versão importada (cenário
+	-- comum na prática -- ver cabeçalho do módulo), ordenaria ANTES dela, quebrando em silêncio a
+	-- garantia "ordem lexicográfica de Version == ordem de inserção". Captura `now` real e usa o
+	-- MESMO valor como `UpdatedTime` da versão importada -- como `Import` seguido de `Set` executa
+	-- em microssegundos, a escrita nova quase sempre cai no MESMO milissegundo real capturado
+	-- aqui, exercitando de verdade o caso de empate que só o contador resolve (não há como mockar
+	-- o relógio deste módulo sem mudar seu desenho -- ver cabeçalho, "CreatedTime/UpdatedTime").
+	local now = DateTime.now().unixTimestampMillis
+	local highCounterVersion = string.format("%013d-%010d", now, 5000000000)
+	local seed = {
+		s = {
+			k = {
+				CreatedTime = now,
+				Versions = {
+					{
+						Version = highCounterVersion,
+						Value = "imported",
+						UpdatedTime = now,
+						UserIds = {},
+						Metadata = {},
+						Tombstone = false,
+					},
+				},
+			},
+		},
+	}
+
+	local store = Store.new()
+	store:Import((seed :: unknown) :: Store.Snapshot)
+
+	local newVersion = store:Set("s", "k", "after-import")
+	assert(
+		newVersion > highCounterVersion,
+		`a versão nova ({newVersion}) deveria ordenar lexicograficamente DEPOIS da versão importada ({highCounterVersion})`
+	)
+end)
+
+test("Import restaura versionCounter no caminho natural Export -> novo Store -> Import -> Set", function()
+	local store = Store.new()
+	for i = 1, 5 do
+		store:Set("s", "k", i)
+	end
+	local originalVersions = store:ListVersions("s", "k")
+	local lastImportedVersion = originalVersions[#originalVersions].Version
+
+	local snapshot = store:Export()
+	local storeTwo = Store.new()
+	storeTwo:Import(snapshot)
+
+	local newVersion = storeTwo:Set("s", "k", "after-import")
+	assert(
+		newVersion > lastImportedVersion,
+		`a versão nova ({newVersion}) deveria ordenar DEPOIS da última versão importada ({lastImportedVersion})`
+	)
+end)
+
+-- ================= Import: recusa snapshot malformado, tudo-ou-nada (task-services-030) =================
+
+test("Import: recusa snapshot que não é uma tabela", function()
+	local store = Store.new()
+	expectErrorContaining(function()
+		store:Import((("not-a-table") :: unknown) :: Store.Snapshot)
+	end, "must be a table", "Import não-tabela")
+end)
+
+test("Import: recusa storeId não-string", function()
+	local store = Store.new()
+	local raw = { [1] = {} }
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "non-string storeId", "Import storeId numérico")
+end)
+
+test("Import: recusa quando o valor de um storeId não é uma tabela de chaves", function()
+	local store = Store.new()
+	local raw = { s = "not-a-table" }
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "must be a table of keys", "Import storeData não-tabela")
+end)
+
+test("Import: recusa key não-string dentro de um storeId", function()
+	local store = Store.new()
+	local raw = { s = { [1] = {} } }
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "non-string key", "Import key numérica")
+end)
+
+test("Import: recusa quando falta CreatedTime numa chave", function()
+	local store = Store.new()
+	local raw = {
+		s = {
+			k = {
+				Versions = {
+					{ Version = "0000000000001-0000000001", UpdatedTime = 1, UserIds = {}, Metadata = {}, Tombstone = false },
+				},
+			},
+		},
+	}
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "CreatedTime must be a number", "Import sem CreatedTime")
+end)
+
+test("Import: recusa Versions vazio (uma chave nunca tem zero versões)", function()
+	local store = Store.new()
+	local raw = { s = { k = { CreatedTime = 1, Versions = {} } } }
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "must not be empty", "Import Versions vazio")
+end)
+
+test("Import: recusa versão sem Version (string)", function()
+	local store = Store.new()
+	local raw = {
+		s = {
+			k = {
+				CreatedTime = 1,
+				Versions = {
+					{ UpdatedTime = 1, UserIds = {}, Metadata = {}, Tombstone = false },
+				},
+			},
+		},
+	}
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "Version must be a string", "Import sem Version")
+end)
+
+test("Import: recusa versão sem Tombstone (campo obrigatório ausente)", function()
+	local store = Store.new()
+	local raw = {
+		s = {
+			k = {
+				CreatedTime = 1,
+				Versions = {
+					{ Version = "0000000000001-0000000001", UpdatedTime = 1, UserIds = {}, Metadata = {} },
+				},
+			},
+		},
+	}
+	expectErrorContaining(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end, "Tombstone must be a boolean", "Import sem Tombstone")
+end)
+
+test("Import malformado NÃO altera o estado existente (tudo-ou-nada, sem estado parcial)", function()
+	local store = Store.new()
+	store:Set("s", "k", { Coins = 7 })
+
+	local raw = { s = "not-a-table" }
+	local ok = pcall(function()
+		store:Import((raw :: unknown) :: Store.Snapshot)
+	end)
+	assert(not ok, "Import malformado deveria ter falhado")
+
+	local value = store:Get("s", "k")
+	assert((value :: { Coins: number }).Coins == 7, "o estado anterior ao Import malformado deveria continuar intacto (nenhum estado parcial)")
+end)
+
+-- ================= IsDirty/ClearDirty: marca-suja (task-services-030) =================
+
+test("IsDirty começa false num Store recém-criado", function()
+	local store = Store.new()
+	assert(store:IsDirty() == false, "Store.new() deveria começar limpo")
+end)
+
+test("IsDirty vira true depois de Set", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	assert(store:IsDirty() == true, "Set deveria marcar o Store como sujo")
+end)
+
+test("ClearDirty zera a marca; IsDirty vira true de novo depois de um Update bem-sucedido", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	store:ClearDirty()
+	assert(store:IsDirty() == false, "ClearDirty deveria zerar a marca")
+
+	store:Update("s", "k", function(oldValue, _oldKeyInfo)
+		return (oldValue :: number) + 1, nil, nil
+	end)
+	assert(store:IsDirty() == true, "Update bem-sucedido deveria marcar o Store como sujo de novo")
+end)
+
+test("Update ABORTADO (transform devolve nil) NÃO marca o Store como sujo", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	store:ClearDirty()
+
+	store:Update("s", "k", function(_oldValue, _oldKeyInfo)
+		return nil, nil, nil
+	end)
+	assert(store:IsDirty() == false, "Update abortado não deveria marcar o Store como sujo -- nenhuma versão nova foi criada")
+end)
+
+test("IsDirty vira true depois de Remove bem-sucedido (criou tombstone)", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	store:ClearDirty()
+
+	store:Remove("s", "k")
+	assert(store:IsDirty() == true, "Remove bem-sucedido deveria marcar o Store como sujo")
+end)
+
+test("Remove NO-OP (chave já ausente/tombstoned) NÃO marca o Store como sujo", function()
+	local store = Store.new()
+	assert(store:IsDirty() == false, "Store recém-criado deveria começar limpo")
+
+	store:Remove("s", "chave-nunca-escrita")
+	assert(store:IsDirty() == false, "Remove NO-OP não deveria marcar o Store como sujo -- nenhuma versão nova foi criada")
+end)
+
+test("Export não altera a marca-suja -- só ClearDirty (ou Import) zera", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	assert(store:IsDirty() == true)
+
+	store:Export()
+	assert(store:IsDirty() == true, "Export não deveria zerar a marca-suja sozinho")
+end)
+
+test("Import zera a marca-suja (estado recém-carregado não tem mudança pendente)", function()
+	local store = Store.new()
+	store:Set("s", "k", 1)
+	assert(store:IsDirty() == true)
+
+	local snapshot = store:Export()
+	store:Import(snapshot)
+	assert(store:IsDirty() == false, "Import deveria zerar a marca-suja")
+end)
+
+-- ================= Deep copy em Export/Import (mesma disciplina do resto do módulo) =================
+
+test("Export: mutar um Value dentro do snapshot devolvido não afeta o Store", function()
+	local store = Store.new()
+	store:Set("s", "k", { Coins = 1 })
+
+	local snapshot = store:Export()
+	local exportedValue = snapshot["s"]["k"].Versions[1].Value :: { Coins: number }
+	exportedValue.Coins = 999
+
+	local stored = store:Get("s", "k") :: { Coins: number }
+	assert(stored.Coins == 1, "mutar o Value de uma versão do snapshot exportado não deveria afetar o Store")
+end)
+
+test("Import: mutar o snapshot ORIGINAL depois de Import não afeta o Store importado", function()
+	local store = Store.new()
+	store:Set("s", "k", { Coins = 1 })
+	local snapshot = store:Export()
+
+	local storeTwo = Store.new()
+	storeTwo:Import(snapshot)
+
+	local originalValue = snapshot["s"]["k"].Versions[1].Value :: { Coins: number }
+	originalValue.Coins = 999
+
+	local stored = storeTwo:Get("s", "k") :: { Coins: number }
+	assert(stored.Coins == 1, "mutar o snapshot original depois de Import não deveria afetar o Store importado")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

@@ -74,6 +74,38 @@
 	`OrderedDataStore.luau` (fora do território desta tarefa) -- por isso a API pública abaixo já
 	cobre `Set`/`Get`/`Update`/`Remove` com a forma que esses `behavior`s vão precisar, mesmo sem
 	existirem ainda.
+
+	EXPORT/IMPORT/MARCA-SUJA (task-services-030, desenho:
+	`.claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md`, seção 5) -- acrescenta bulk
+	e marca-suja para permitir persistência local do estado "cloud" entre execuções sucessivas do
+	LuauBench, SEM que este módulo passe a saber o que é JSON/arquivo/caminho (essa fronteira
+	continua exatamente como o resto do cabeçalho já declara -- `services` nunca chama `@lune/fs`,
+	ver `.claude/agents-memory/arquiteto-services-2026-09-05.md`, "L2.1.2").
+
+	- `Export`: devolve o estado inteiro DEEP-COPIADO como `Snapshot` (tipo abaixo), aplicando PODA
+	  POR IDADE de 30 dias -- retenção CONFIRMADA (não é número inventado, regra 00) por
+	  `.claude/agents-memory/pesquisa-datastore-2026-09-05.md`, linha 127: "versões antigas
+	  continuam acessíveis por 30 dias via `ListVersionsAsync`/`GetVersionAsync`". Toda versão
+	  NÃO-CORRENTE com `UpdatedTime` mais velho que 30 dias é descartada do snapshot; a versão
+	  CORRENTE nunca é podada, mesmo velha -- do contrário a chave inteira desapareceria do
+	  snapshot, o que não é "expirar histórico velho", é perder a chave.
+	- `Import`: substitui o estado inteiro. VALIDA a forma do snapshot ANTES de tocar em qualquer
+	  estado interno (tudo-ou-nada -- nunca aceita parcialmente, nunca deixa o `Store` num estado
+	  misto entre o antigo e o novo se o meio do snapshot for inválido). Recusa com mensagem clara
+	  apontando o `storeId`/`key`/campo problemático -- nunca um erro genérico de indexação.
+	  OBRIGATORIAMENTE restaura `versionCounter = max(contador de toda versão do snapshot) + 1`:
+	  sem isso, a garantia que este módulo já declara acima ("VERSION (string)": largura fixa para
+	  que ordem lexicográfica == ordem de inserção) quebraria em SILÊNCIO na 2ª execução do
+	  processo -- uma escrita nova no mesmo milissegundo de uma versão importada com contador maior
+	  ordenaria ANTES dela. O contador é extraído do próprio formato que `nextVersion` já produz
+	  (`"%013d-%010d"`, os 10 dígitos depois do `-`) -- nenhum formato novo, só parse do que este
+	  módulo mesmo escreve.
+	- `IsDirty`/`ClearDirty`: marca síncrona O(1), TRUE a cada escrita bem-sucedida que passa por
+	  `writeVersion` (`Set`, `Update` que não abortou, `Remove` que não foi no-op -- exatamente as
+	  três operações que criam uma versão nova de verdade). `Import` também zera a marca (o estado
+	  recém-carregado não tem "mudança não persistida" nenhuma). Este módulo NÃO persiste nada
+	  sozinho -- `IsDirty`/`ClearDirty` só sinalizam para quem CONSOME `Export` (fora deste módulo,
+	  tarefa futura) se vale a pena pagar o custo de serializar de novo.
 ]]
 
 local DateTime = require("@lune/datetime")
@@ -81,6 +113,11 @@ local DateTime = require("@lune/datetime")
 local Value = require("./Value")
 
 local Store = {}
+
+-- Retenção de histórico -- CONFIRMADA (não inventada, regra 00) por
+-- `.claude/agents-memory/pesquisa-datastore-2026-09-05.md`, linha 127. Usada só por `Store.Export`
+-- (ver cabeçalho, "EXPORT/IMPORT/MARCA-SUJA").
+local RETENTION_MILLIS = 30 * 24 * 60 * 60 * 1000
 
 -- ============================================================================================
 -- Tipos públicos
@@ -96,6 +133,32 @@ export type VersionInfo = {
 }
 
 export type Transform = (oldValue: unknown, oldKeyInfo: VersionInfo?) -> (unknown, { number }?, { [string]: unknown }?)
+
+-- ACRESCENTADO em task-services-030 (ver cabeçalho, "EXPORT/IMPORT/MARCA-SUJA") -- forma em memória
+-- de UMA versão dentro de um snapshot. Estruturalmente igual a `VersionRecord` (privado, abaixo),
+-- exposta com nome próprio porque é contrato PÚBLICO entre `Store.Export`/`Store.Import` e quem
+-- os consome -- nunca o mesmo tipo que o estado interno, mesmo que hoje tenham os mesmos campos
+-- (um puder divergir do outro sem quebrar a API pública).
+export type StoredVersion = {
+	Version: string,
+	Value: unknown, -- valor Luau cru, já deep-copiado; envelopar para JSON é responsabilidade de quem serializa (fora deste módulo)
+	UpdatedTime: number,
+	UserIds: { number },
+	Metadata: { [string]: unknown },
+	Tombstone: boolean,
+}
+
+-- Histórico de UMA chave dentro de um snapshot -- `Versions` já vem com a poda de 30 dias aplicada
+-- (ver `Store.Export`), em ordem cronológica crescente, sempre com pelo menos 1 elemento (a
+-- corrente nunca é podada).
+export type StoredKey = {
+	CreatedTime: number,
+	Versions: { StoredVersion },
+}
+
+-- Estado inteiro de um `Store`: `[storeId][key] -> StoredKey`. `storeId` continua opaco para este
+-- módulo (ver cabeçalho, "Território desta tarefa", item (b)).
+export type Snapshot = { [string]: { [string]: StoredKey } }
 
 export type Store = {
 	-- Devolve (valor deep-copiado, keyInfo) da versão CORRENTE, ou (nil, nil) se a chave nunca
@@ -155,6 +218,28 @@ export type Store = {
 	-- ordem determinística e testável é preferível a depender da ordem de iteração de `pairs`
 	-- (que não é estável entre execuções). `{}` se `storeId` nunca recebeu nenhuma escrita.
 	ListKeys: (self: Store, storeId: string) -> { { Key: string, Current: VersionInfo } },
+
+	-- ACRESCENTADO em task-services-030 -- ver cabeçalho, "EXPORT/IMPORT/MARCA-SUJA". Estado
+	-- inteiro, DEEP-COPIADO (mesma disciplina de "DEEP COPY" do cabeçalho -- mutar o snapshot
+	-- devolvido nunca afeta este `Store`), com a poda por idade de 30 dias já aplicada. Não
+	-- conhece JSON, arquivo ou caminho -- isso é responsabilidade de quem chama.
+	Export: (self: Store) -> Snapshot,
+
+	-- Substitui o estado inteiro. Valida a forma do snapshot ANTES de mudar qualquer estado
+	-- interno (tudo-ou-nada) e ERRA com mensagem clara apontando o campo problemático se malformado
+	-- -- nunca aceita parcialmente, nunca crasha genérico. Restaura `versionCounter` a partir do
+	-- maior contador visto em qualquer versão do snapshot (ver cabeçalho -- sem isso a garantia de
+	-- ordenação lexicográfica de `Version` quebra em silêncio numa 2ª execução). Zera a marca-suja
+	-- (o estado recém-carregado não tem mudança pendente nenhuma).
+	Import: (self: Store, snapshot: Snapshot) -> (),
+
+	-- `true` desde a última escrita bem-sucedida (Set/Update não-abortado/Remove não-no-op) até o
+	-- próximo `ClearDirty`/`Import`. `false` recém-`Store.new()`.
+	IsDirty: (self: Store) -> boolean,
+
+	-- Zera a marca-suja -- chamado por quem acabou de persistir o resultado de `Export`. Este
+	-- módulo nunca chama isto sozinho (não sabe quando uma persistência de verdade aconteceu).
+	ClearDirty: (self: Store) -> (),
 }
 
 -- ============================================================================================
@@ -180,6 +265,10 @@ function Store.new(): Store
 	-- "Território desta tarefa", item (b).
 	local data: { [string]: { [string]: KeyRecord } } = {}
 	local versionCounter = 0
+
+	-- Marca-suja (ver cabeçalho, "EXPORT/IMPORT/MARCA-SUJA") -- `true` desde a última escrita
+	-- bem-sucedida até o próximo `ClearDirty`/`Import`. `false` recém-`Store.new()`.
+	local dirty = false
 
 	-- Milissegundo real (ver cabeçalho, "CreatedTime/UpdatedTime") -- `@lune/datetime` (não
 	-- `os.time()`, que só dá granularidade de segundo).
@@ -271,7 +360,96 @@ function Store.new(): Store
 			Tombstone = tombstone,
 		}
 		table.insert(record.Versions, version)
+
+		-- Ponto ÚNICO de marca-suja -- toda escrita que passa por aqui É uma mutação de verdade
+		-- (Set sempre; Update só quando não abortou; Remove só quando não era no-op -- exatamente
+		-- as três chamam `writeVersion`). Ver cabeçalho, "EXPORT/IMPORT/MARCA-SUJA".
+		dirty = true
+
 		return record, version
+	end
+
+	-- Extrai o contador de `nextVersion` (os 10 dígitos depois do último `-`) -- usado só por
+	-- `Import` para restaurar `versionCounter` (ver cabeçalho). `nil` se `versionString` não bate
+	-- com o formato que este módulo mesmo produz (defensivo -- não deveria acontecer para um
+	-- snapshot que veio de `Export` deste módulo, mas nunca panica por causa disso).
+	local function parseVersionCounter(versionString: string): number?
+		local counterPart = string.match(versionString, "%-(%d+)$")
+		if counterPart == nil then
+			return nil
+		end
+		return tonumber(counterPart)
+	end
+
+	-- Valida a FORMA de um `Snapshot` recebido por `Import`, campo a campo, devolvendo a primeira
+	-- mensagem de erro encontrada (ou `nil` se válido). Não confia no tipo estático de `snapshot`
+	-- -- trata como dado externo desconhecido (pode ter vindo de um arquivo em disco, de fora deste
+	-- módulo) e valida em runtime, exatamente a disciplina que "recusa snapshot malformado" pede.
+	-- Não muda `data`/`versionCounter` -- só inspeciona; `Import` só aplica DEPOIS de validar tudo
+	-- (tudo-ou-nada, ver cabeçalho).
+	local function validateSnapshot(snapshot: Snapshot): string?
+		local rawSnapshot = snapshot :: unknown
+		if type(rawSnapshot) ~= "table" then
+			return `snapshot must be a table (got {type(rawSnapshot)})`
+		end
+
+		for storeId, storeData in rawSnapshot :: { [unknown]: unknown } do
+			if type(storeId) ~= "string" then
+				return `snapshot has a non-string storeId key ({tostring(storeId)})`
+			end
+			if type(storeData) ~= "table" then
+				return `snapshot["{storeId}"] must be a table of keys (got {type(storeData)})`
+			end
+
+			for key, rawKeyRecord in storeData :: { [unknown]: unknown } do
+				if type(key) ~= "string" then
+					return `snapshot["{storeId}"] has a non-string key ({tostring(key)})`
+				end
+				if type(rawKeyRecord) ~= "table" then
+					return `snapshot["{storeId}"]["{key}"] must be a table (got {type(rawKeyRecord)})`
+				end
+
+				local keyRecord = rawKeyRecord :: { [string]: unknown }
+				if type(keyRecord.CreatedTime) ~= "number" then
+					return `snapshot["{storeId}"]["{key}"].CreatedTime must be a number`
+				end
+				if type(keyRecord.Versions) ~= "table" then
+					return `snapshot["{storeId}"]["{key}"].Versions must be a table (array)`
+				end
+
+				local versions = keyRecord.Versions :: { unknown }
+				if #versions == 0 then
+					return `snapshot["{storeId}"]["{key}"].Versions must not be empty (a key with no versions cannot exist)`
+				end
+
+				for index, rawVersion in versions do
+					if type(rawVersion) ~= "table" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}] must be a table (got {type(rawVersion)})`
+					end
+
+					local version = rawVersion :: { [string]: unknown }
+					if type(version.Version) ~= "string" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}].Version must be a string`
+					end
+					if type(version.UpdatedTime) ~= "number" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}].UpdatedTime must be a number`
+					end
+					if type(version.UserIds) ~= "table" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}].UserIds must be a table (array)`
+					end
+					if type(version.Metadata) ~= "table" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}].Metadata must be a table`
+					end
+					if type(version.Tombstone) ~= "boolean" then
+						return `snapshot["{storeId}"]["{key}"].Versions[{index}].Tombstone must be a boolean`
+					end
+					-- `Value` pode ser qualquer coisa, inclusive `nil` -- este módulo não valida
+					-- serializabilidade (ver cabeçalho, "FRONTEIRA DE RESPONSABILIDADE").
+				end
+			end
+		end
+
+		return nil
 	end
 
 	local self: Store = {} :: Store
@@ -391,6 +569,103 @@ function Store.new(): Store
 			result[index] = { Key = key, Current = toVersionInfo(record, currentVersionOf(record)) }
 		end
 		return result
+	end
+
+	self.Export = function(_self: Store): Snapshot
+		local now = nowMillis()
+		local snapshot: Snapshot = {}
+
+		for storeId, storeData in data do
+			local exportedStoreData: { [string]: StoredKey } = {}
+
+			for key, record in storeData do
+				local versions = record.Versions
+				local lastIndex = #versions
+
+				-- Poda por idade (ver cabeçalho): descarta versão NÃO-CORRENTE mais velha que
+				-- `RETENTION_MILLIS`. A corrente (última do array) nunca é podada, mesmo velha.
+				local prunedVersions: { StoredVersion } = {}
+				for index, version in versions do
+					local isCurrent = index == lastIndex
+					if isCurrent or (now - version.UpdatedTime) <= RETENTION_MILLIS then
+						table.insert(prunedVersions, {
+							Version = version.Version,
+							Value = Value.DeepCopy(version.Value),
+							UpdatedTime = version.UpdatedTime,
+							UserIds = Value.DeepCopy(version.UserIds),
+							Metadata = Value.DeepCopy(version.Metadata),
+							Tombstone = version.Tombstone,
+						})
+					end
+				end
+
+				exportedStoreData[key] = {
+					CreatedTime = record.CreatedTime,
+					Versions = prunedVersions,
+				}
+			end
+
+			snapshot[storeId] = exportedStoreData
+		end
+
+		return snapshot
+	end
+
+	self.Import = function(_self: Store, snapshot: Snapshot): ()
+		local errorMessage = validateSnapshot(snapshot)
+		if errorMessage ~= nil then
+			error(`Store.Import: malformed snapshot -- {errorMessage}`, 2)
+		end
+
+		-- Reconstrói o estado interno inteiro ANTES de substituir `data`/`versionCounter` -- se
+		-- algo desse errado no meio (não deveria, já validado acima), o `Store` continuaria com o
+		-- estado ANTIGO intacto em vez de ficar pela metade. Também calcula, na mesma passada, o
+		-- maior contador de versão visto (ver cabeçalho, "restaura `versionCounter`").
+		local newData: { [string]: { [string]: KeyRecord } } = {}
+		local maxCounter = 0
+
+		for storeId, storeData in snapshot do
+			local newStoreData: { [string]: KeyRecord } = {}
+
+			for key, keyRecord in storeData do
+				local newVersions: { VersionRecord } = table.create(#keyRecord.Versions)
+				for index, version in keyRecord.Versions do
+					newVersions[index] = {
+						Version = version.Version,
+						Value = Value.DeepCopy(version.Value),
+						UpdatedTime = version.UpdatedTime,
+						UserIds = Value.DeepCopy(version.UserIds),
+						Metadata = Value.DeepCopy(version.Metadata),
+						Tombstone = version.Tombstone,
+					}
+
+					local counter = parseVersionCounter(version.Version)
+					if counter ~= nil and counter > maxCounter then
+						maxCounter = counter
+					end
+				end
+
+				newStoreData[key] = {
+					CreatedTime = keyRecord.CreatedTime,
+					Versions = newVersions,
+				}
+			end
+
+			newData[storeId] = newStoreData
+		end
+
+		data = newData
+		versionCounter = maxCounter + 1
+		-- Estado recém-carregado não tem mudança pendente nenhuma -- ver cabeçalho.
+		dirty = false
+	end
+
+	self.IsDirty = function(_self: Store): boolean
+		return dirty
+	end
+
+	self.ClearDirty = function(_self: Store): ()
+		dirty = false
 	end
 
 	return self
