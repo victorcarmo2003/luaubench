@@ -286,6 +286,26 @@ function RunCommand.Execute(options: RunOptions): Result
 
 	scheduler:Run(buildShouldContinue(options.Timeout))
 
+	-- task-cli-031 (gap achado pelo arquiteto durante o desenho de persistência, INDEPENDENTE
+	-- dela -- ver cabeçalho de `DataModel.luau`, task-runtime-033, linhas 63-87, para a semântica
+	-- completa): `game:BindToClose(fn)` só REGISTRA -- é `DataModel.RunBindToCloseCallbacks` quem
+	-- de fato DISPARA e ESPERA cada callback registrado, cada um na sua própria thread do
+	-- `scheduler`, inclusive quando o callback yielda (`Scheduler:Wait` dentro dele -- o padrão
+	-- real do ProfileStore, `while ... do task.wait() end` esperando jobs de save terminarem).
+	-- Antes desta tarefa, nenhum chamador existia em `src/cli/**`: o callback era registrado e
+	-- JAMAIS disparava, pulando silenciosamente o passo mais importante do ciclo de vida de um
+	-- data manager real. Encaixado DEPOIS de `scheduler:Run` (passo 11) e ANTES do sumário final
+	-- (passo 12) -- exatamente como o pipeline de doze passos do cabeçalho já reserva: o processo
+	-- só é dado como "de fato encerrado" depois que todo callback de fechamento terminou.
+	-- No-op garantido (sem custo, sem chamada a `scheduler:Run` de novo por dentro) quando nenhum
+	-- script chamou `BindToClose` -- ver `DataModel.RunBindToCloseCallbacks`, "callbacks == nil or
+	-- #callbacks == 0" -- então um projeto sem `BindToClose` continua com output/exit code
+	-- idênticos ao de antes desta tarefa. Erro dentro de um callback já sai por `ThreadError` do
+	-- próprio `scheduler` (mesma proteção de `resumeThread`/`fireProtected` que qualquer outra
+	-- thread gerida) -- nunca propaga para cá, nunca derruba o processo, nunca impede os demais
+	-- callbacks de rodar (ver DataModel.luau, task-runtime-033).
+	Runtime.DataModel.RunBindToCloseCallbacks(game, scheduler)
+
 	printDiagnostics(bag, options.UseColor, options.Verbose)
 	print(Messages.SummaryLine(summary.Executed, summary.SkippedLocalScripts, summary.SkippedByContainer, summary.SkippedDisabled))
 	local totalErrorCount = bag:CountOf("error") + formatter:ErrorCount()

@@ -118,6 +118,21 @@ test("Execute: --timeout interrompe um script que CEDE indefinidamente (while tr
 	assert(elapsed < 5, `--timeout não interrompeu o script a tempo (levou {elapsed}s -- esperava perto de 0.2s)`)
 end)
 
+test("Execute: fixture 'bindtoclose' termina com ExitCode 0 sem propagar exceção (BindToClose disparado e esperado de verdade, task-cli-031)", function()
+	local result = RunCommand.Execute(baseOptions(fixturePath("run-e2e/bindtoclose")))
+	assert(result.ExitCode == 0, `esperava ExitCode 0, recebeu {result.ExitCode}`)
+	assert(result.ErrorCount == 0, `esperava ErrorCount 0, recebeu {result.ErrorCount}`)
+end)
+
+test("Execute: fixture 'bindtoclose-error' não propaga o erro de um callback de BindToClose para fora de Execute (task-cli-031)", function()
+	-- Se `RunBindToCloseCallbacks` propagasse o erro do primeiro callback, esta chamada (sem
+	-- `pcall` nenhum -- `test()` não protege `run`) derrubaria o arquivo de spec inteiro. Chegar
+	-- até a asserção abaixo já prova que a semântica de `DataModel` (ThreadError, nunca propaga)
+	-- se mantém de ponta a ponta através de `RunCommand`.
+	local result = RunCommand.Execute(baseOptions(fixturePath("run-e2e/bindtoclose-error")))
+	assert(result.ExitCode == 0, `esperava ExitCode 0 (erro de BindToClose não é contado como erro de script), recebeu {result.ExitCode}`)
+end)
+
 test("Diagnostics.Bag: um projeto com apenas warnings (sem erros) ainda produz ExitCode 0", function()
 	-- `globIgnorePaths`/`syncRules` não-vazios geram warning (Decisão 14), nunca erro -- reusa o
 	-- fixture de warnings já existente de `ProjectFile.spec.luau`.
@@ -246,6 +261,59 @@ test("Processo real: fixture 'http-audit' -- OnHttpRequest/HttpRequestAuditLine 
 	assert(
 		string.find(result.stderr, "[http] GET 127.0.0.1", 1, true) ~= nil,
 		`stderr deveria conter a linha de auditoria de rede (--verbose): {result.stderr}`
+	)
+end)
+
+test("Processo real: fixture 'bindtoclose' -- BindToClose dispara e ESPERA os callbacks (inclusive o que cede) ANTES do sumário final (task-cli-031)", function()
+	local result = runRealProcess({ "run", "src/cli/main.luau", "run", fixturePath("run-e2e/bindtoclose"), "--no-color" })
+
+	assert(result.code == 0, `esperava exit code 0, recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`)
+	assert(string.find(result.stdout, "main script ran", 1, true) ~= nil, `stdout deveria conter o print do script principal: {result.stdout}`)
+	assert(
+		string.find(result.stdout, "bindtoclose: simple callback ran", 1, true) ~= nil,
+		`stdout deveria conter o print do primeiro callback de BindToClose: {result.stdout}`
+	)
+	assert(
+		string.find(result.stdout, "bindtoclose: yielding callback finished", 1, true) ~= nil,
+		`stdout deveria conter o print do callback que cede (task.wait) -- prova que RunBindToCloseCallbacks ESPEROU o yield: {result.stdout}`
+	)
+
+	-- Ordem: os dois callbacks de BindToClose têm que aparecer ANTES da linha de sumário final
+	-- (passo 12) -- é exatamente o "ANTES do sumário" do acceptance desta tarefa.
+	local _, simpleCallbackEnd = string.find(result.stdout, "bindtoclose: simple callback ran", 1, true)
+	local _, yieldingCallbackEnd = string.find(result.stdout, "bindtoclose: yielding callback finished", 1, true)
+	local summaryStart = string.find(result.stdout, "Script(s) executed", 1, true)
+	assert(summaryStart ~= nil, `stdout deveria conter a linha de sumário: {result.stdout}`)
+	assert(
+		simpleCallbackEnd ~= nil and summaryStart ~= nil and simpleCallbackEnd < summaryStart,
+		"callback simples de BindToClose deveria aparecer ANTES do sumário final"
+	)
+	assert(
+		yieldingCallbackEnd ~= nil and summaryStart ~= nil and yieldingCallbackEnd < summaryStart,
+		"callback que cede de BindToClose deveria aparecer ANTES do sumário final, mesmo tendo que esperar o task.wait"
+	)
+end)
+
+test("Processo real: fixture 'bindtoclose-error' -- erro num callback de BindToClose não derruba o processo nem impede o segundo callback de rodar (task-cli-031)", function()
+	local result = runRealProcess({ "run", "src/cli/main.luau", "run", fixturePath("run-e2e/bindtoclose-error"), "--no-color" })
+
+	assert(
+		result.code == 0,
+		`esperava exit code 0 -- erro de BindToClose não deveria mudar o exit code do processo, recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`
+	)
+	assert(string.find(result.stdout, "main script ran", 1, true) ~= nil, `stdout deveria conter o print do script principal: {result.stdout}`)
+	assert(
+		string.find(result.stdout, "bindtoclose: second callback still ran despite the first one erroring", 1, true) ~= nil,
+		`o SEGUNDO callback de BindToClose deveria ter rodado mesmo com o PRIMEIRO tendo errado: {result.stdout}`
+	)
+end)
+
+test("Processo real: fixture 'basic' (SEM nenhum BindToClose) continua idêntico -- no-op, sem linha nova no output (task-cli-031)", function()
+	local result = runRealProcess({ "run", "src/cli/main.luau", "run", fixturePath("run-e2e/basic"), "--no-color" })
+	assert(result.code == 0, `esperava exit code 0, recebeu {result.code}`)
+	assert(
+		string.find(result.stdout, "bindtoclose", 1, true) == nil,
+		"um projeto sem BindToClose nunca deveria produzir nenhuma linha relacionada a bindtoclose"
 	)
 end)
 

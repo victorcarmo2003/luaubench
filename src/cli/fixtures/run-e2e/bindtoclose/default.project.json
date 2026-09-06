@@ -1,0 +1,9 @@
+{
+  "name": "RunE2EBindToClose",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

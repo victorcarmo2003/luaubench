@@ -2499,7 +2499,7 @@
       "id": "task-cli-031",
       "title": "GAP PRE-EXISTENTE: chamar RunBindToCloseCallbacks depois de scheduler:Run",
       "description": "Gap real descoberto pelo arquiteto durante o desenho de persistencia, INDEPENDENTE dela (por isso tarefa propria, sem depends). DataModel.RunBindToCloseCallbacks existe em src/runtime/DataModel.luau linha 338 (task-runtime-033, aprovada e testada) e NENHUM chamador existe em src/cli/** -- confirmado por grep. Consequencia hoje: game:BindToClose(callback) registra callbacks que JAMAIS disparam. Isso importa muito para o caso de uso central do projeto: a gravacao final de sessao do ProfileStore mora exatamente dentro de um BindToClose, entao a ferramenta silenciosamente pula o passo mais importante do ciclo de vida de um data manager real. FIX: RunCommand.Execute passa a chamar DataModel.RunBindToCloseCallbacks(game, scheduler) DEPOIS de scheduler:Run(shouldContinue) retornar e ANTES do sumario final (passo 12). Confira o cabecalho de DataModel.luau linhas 64-73 para a semantica exata (dispara E ESPERA todos os callbacks registrados de uma raiz antes de devolver o controle) antes de decidir onde exatamente encaixar. TERRITORIO: so src/cli/RunCommand.luau + spec.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 51,
@@ -2513,13 +2513,14 @@
       "acceptance": "Um script que chama game:BindToClose(fn) tem fn executado de verdade ao fim de luaubench run, antes do sumario. Callback que yielda (task.wait) e esperado ate terminar. Erro dentro de um callback nao derruba o processo nem impede os outros (confirma a semantica que DataModel ja garante). Projeto sem nenhum BindToClose continua identico (no-op, sem custo, sem linha nova no output). Exit code inalterado. --strict sem any. Suite de cli sem regressao.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor confirmou 18/18 RunCommand.spec, 239/239 arquivos de cli. Testado por processo real: callback sincrono e callback que yielda (task.wait) disparam e terminam ANTES do sumario; erro num callback nao derruba processo nem impede outros callbacks (exit 0); projeto sem BindToClose identico (zero linha nova). --strict, zero any, territorio limpo. 1 achado real confirmado independentemente: erro dentro de callback de BindToClose e engolido silenciosamente do output -- stdout/stderr vazios, sumario diz 0 error(s) apesar do error() real. Causa: ScriptRunner/Sandbox.Run so escuta ThreadError de threads que ele mesmo criou; threads de BindToClose nascem direto em DataModel.RunBindToCloseCallbacks via scheduler:Spawn, sem listener conectado. Nao bloqueia esta task (acceptance pedia so nao derrubar/nao impedir os demais, satisfeito), mas atinge o caso de uso central (save-on-close do ProfileStore vira sucesso aparente com bug real escondido) -- registrado como task-cli-032 prioridade alta. Relatorio: .claude/agents-memory/revisor-cli-task-cli-031-2026-09-06.md"
     },
     {
       "id": "task-services-031",
       "title": "Fiacao da persistencia em services: CloudPersistence, Context, marca-suja, load no Bootstrap",
       "description": "Amarra o que task-services-029 e task-services-030 construiram. (a) src/services/Types.luau: export type CloudPersistence = {Load: (document: string) -> string?, Save: (document: string, contents: string) -> ()} e o campo BootstrapOptions.CloudPersistence: CloudPersistence? (nil == sem persistencia nenhuma, que e o comportamento de hoje e o que --no-persist produz). (b) src/services/Context.luau: Context.GetCloudPersistence(): CloudPersistence? -- canal unico, nenhum behavior/*.luau le BootstrapOptions direto (mesma disciplina de IsHttpAllowed/NotifyHttpRequest). Diferente de GetScheduler/GetDataModel, a AUSENCIA do port e estado normal e frequente, nao erro de engenharia -- devolve nil, nunca erra (mesma logica de NotifyHttpRequest). (c) src/services/behavior/GlobalDataStore.luau: toda mutacao bem-sucedida marca o store como sujo (O(1), sincrono, nenhum I/O) -- cobre SetAsync/UpdateAsync/RemoveAsync/IncrementAsync e o caminho de OrderedDataStore, ja que os metodos sao achatados pela cadeia de classes. (d) src/services/init.luau: Services.Bootstrap, se CloudPersistence ~= nil, chama Load('datastore'), decodifica via Snapshot e faz store:Import -- ANTES de qualquer script rodar; falha de decode PROPAGA (cli transforma em erro de projeto exit 2), nunca 'recomeca do zero em silencio'. (e) src/services/init.luau: Services.FlushCloudState(): (boolean, string?) -- grava se houver algo sujo, no-op silencioso se nao houver ou se nenhum port foi injetado, e NUNCA propaga erro de I/O (erro vira false + mensagem, para cli decidir o que imprimir; perder persistencia nao deve derrubar a execucao do script). Services.HasPendingCloudState(): boolean para o sumario. services continua SEM @lune/fs -- so @lune/serde, que ja usa. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secao 10.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 52,
@@ -2576,6 +2577,25 @@
       "depends": [
         "task-cli-030"
       ],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-032",
+      "title": "BUG: erro dentro de callback de BindToClose e engolido silenciosamente do output",
+      "description": "Achado real confirmado (task-cli-031, coder + revisor independentemente). ScriptRunner/Sandbox.Run so escuta ThreadError das threads que ele mesmo cria (ownThreads) -- as threads de BindToClose nascem direto em DataModel.RunBindToCloseCallbacks via scheduler:Spawn, sem nenhum listener conectado em RunCommand.luau. Resultado real reproduzido: um error() dentro de game:BindToClose(fn) produz exit code 0, stdout/stderr vazios, sumario dizendo literalmente 0 error(s) apesar do erro real -- bug real de persistencia do usuario (ex: falha ao salvar sessao final do ProfileStore) vira sucesso aparente. Colide com regra 01 (erro nunca engolido sem logar) e regra 04 (erro formatado como Output do Studio). TERRITORIO: so src/cli/RunCommand.luau + spec (conectar o ThreadError das threads de BindToClose ao mesmo OutputFormatter/contagem de erro que ScriptRunner ja usa pras threads do script principal -- confira como esse listener ja funciona antes de duplicar logica).",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 51,
+      "tags": [
+        "cli",
+        "bug",
+        "correcao-de-revisao"
+      ],
+      "priority": "high",
+      "acceptance": "Um error() dentro de game:BindToClose(fn) aparece no output formatado (mesmo padrao de erro de script principal), conta no sumario de erros, e o exit code reflete a falha (nao mais 0 error(s) falso). Callback que nao erra continua silencioso (sem linha extra). Erro em um callback continua nao impedindo os demais (regressao da semantica ja aprovada). Specs cobrindo. --strict sem any. Suite de cli sem regressao.",
+      "depends": [],
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06"
     }
