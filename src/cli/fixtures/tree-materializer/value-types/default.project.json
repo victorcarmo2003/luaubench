@@ -7,6 +7,12 @@
         "Ambient": [0.5, 0.5, 0.5]
       }
     },
+    "StarterPlayer": {
+      "$properties": {
+        "CameraMode": "LockFirstPerson",
+        "DevCameraOcclusionMode": "NotARealItem"
+      }
+    },
     "Workspace": {
       "Baseplate": {
         "$className": "TreeMaterializerSpecPart",
@@ -25,6 +31,12 @@
         "$className": "Folder",
         "$properties": {
           "Mystery": [1, 2, 3]
+        }
+      },
+      "RenameMe": {
+        "$className": "Folder",
+        "$properties": {
+          "Name": "RenamedViaProperties"
         }
       }
     }

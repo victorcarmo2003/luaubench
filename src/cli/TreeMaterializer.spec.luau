@@ -69,6 +69,20 @@ local function countByCode(bag: Diagnostics.Bag, code: string): number
 	return count
 end
 
+-- task-cli-028-fix: a fixture 'value-types' passou a ter DUAS propriedades que produzem
+-- 'materialize/undecodable-property' (StarterPlayer.DevCameraOcclusionMode + Workspace.BadPosition.
+-- Position) -- `findByCode` sozinho (primeiro match) já não basta pra distinguir qual é qual. Filtra
+-- também por `Field`, mesmo padrão de busca já usado manualmente em vários testes acima (loop com
+-- `diagnostic.Field == "..."`), só extraído pra função reusável.
+local function findByCodeAndField(bag: Diagnostics.Bag, code: string, field: string): Diagnostics.Diagnostic?
+	for _, diagnostic in bag:All() do
+		if diagnostic.Code == code and diagnostic.Field == field then
+			return diagnostic
+		end
+	end
+	return nil
+end
+
 -- `Services.IsServiceClass`/`IsEngineFixedChild`/`IsEngineOnlyClass` REAIS (nunca as funções falsas
 -- de TreePlanner.spec.luau) -- este território exercita a integração de verdade entre `TreePlanner`
 -- e `services`. `IsEngineFixedChild`/`IsEngineOnlyClass` entraram na task-cli-024 (Decisão 17) --
@@ -1210,11 +1224,13 @@ test("Materialize: forma indecodificável (array de tamanho errado) vira erro 'm
 	local bag = Diagnostics.newBag()
 	TreeMaterializer.Materialize(plan, game, bag)
 
-	local diagnostic = findByCode(bag, "materialize/undecodable-property")
-	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/undecodable-property'")
+	-- task-cli-028-fix: `findByCode` sozinho não basta mais -- a fixture agora tem OUTRO
+	-- 'materialize/undecodable-property' (StarterPlayer.DevCameraOcclusionMode). Filtra também por
+	-- `Field` pra continuar mirando especificamente em 'Position'.
+	local diagnostic = findByCodeAndField(bag, "materialize/undecodable-property", "Position")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/undecodable-property' para o campo 'Position'")
 	if diagnostic ~= nil then
 		assert(diagnostic.Severity == "error", "forma indecodificável deveria ser Severity 'error'")
-		assert(diagnostic.Field == "Position", "Diagnostic deveria citar a propriedade 'Position'")
 		assert(string.find(diagnostic.Message, "Vector3", 1, true) ~= nil, "mensagem deveria citar o ValueType alvo 'Vector3'")
 		assert(diagnostic.NodePath ~= nil and string.find(diagnostic.NodePath, "BadPosition", 1, true) ~= nil, "Diagnostic deveria citar o nó 'BadPosition'")
 	end
@@ -1261,6 +1277,132 @@ test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vir
 	assert(unknownShape ~= nil, "deveria haver um 'UnknownShape' mesmo com a propriedade não-decodificável -- só a propriedade falha, não o nó inteiro")
 	if unknownShape ~= nil then
 		assert(unknownShape.ClassName == "Folder", "UnknownShape deveria ser um Folder")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-028-fix (BUG REAL, testador + orquestrador confirmando por leitura de código):
+-- `resolvePropertyValue` tratava QUALQUER `string` como primitivo sem checar `ValueCategory`,
+-- pulando o decode de Enum inteiramente -- `StarterPlayer.CameraMode = "LockFirstPerson"` (forma
+-- Rojo padrão pra Enum via `$properties`) virava uma STRING LUA CRUA na árvore materializada, não
+-- `EnumItem`, sem erro/warning nenhum. Reproduzido ANTES desta correção (revertendo só
+-- `TreeMaterializer.luau` e rodando este mesmo teste): `typeof(cameraMode) == "string"` e
+-- `cameraMode == "LockFirstPerson"`, nunca um `EnumItem` -- confirmado no relatório da tarefa.
+--
+-- Reusa a fixture 'value-types' (mesma que já cobre DataType via MemberDescriptor) -- StarterPlayer
+-- é uma classe REAL já coberta por `services` (task-services-015) com duas propriedades Enum reais:
+-- "CameraMode" (caso feliz, item válido) e "DevCameraOcclusionMode" (caso de item inexistente).
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: StarterPlayer.CameraMode = \"LockFirstPerson\" ($properties) vira Enum.CameraMode.LockFirstPerson REAL, não string crua (task-cli-028-fix, BUG REAL)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	-- "CameraMode" é um item válido -- NÃO deveria produzir 'materialize/undecodable-property'
+	-- (só 'DevCameraOcclusionMode', item inexistente, e 'Position', array de tamanho errado --
+	-- ver os outros dois testes desta fixture -- deveriam).
+	assert(findByCodeAndField(bag, "materialize/undecodable-property", "CameraMode") == nil, "'CameraMode' com item VÁLIDO não deveria produzir 'materialize/undecodable-property'")
+
+	local starterPlayer = game:FindService("StarterPlayer")
+	assert(starterPlayer ~= nil, "game deveria ter um StarterPlayer depois de Materialize")
+	if starterPlayer == nil then
+		return
+	end
+
+	local starterPlayerDot = (starterPlayer :: unknown) :: { [string]: unknown }
+	local cameraMode = starterPlayerDot["CameraMode"]
+
+	-- O BUG: antes da correção, isto era `typeof(cameraMode) == "string"` e `cameraMode ==
+	-- "LockFirstPerson"` -- corrupção silenciosa de tipo, sem NENHUM Diagnostic no bag.
+	assert(typeof(cameraMode) ~= "string", `StarterPlayer.CameraMode NÃO deveria mais ser uma string Lua crua -- typeof devolveu "{typeof(cameraMode)}"`)
+	assert(ValueTypes.TypeNameOf(cameraMode) == "EnumItem", `StarterPlayer.CameraMode deveria ter virado um EnumItem real, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(cameraMode))}`)
+	assert(tostring(cameraMode) == "Enum.CameraMode.LockFirstPerson", `esperava tostring "Enum.CameraMode.LockFirstPerson", recebeu "{tostring(cameraMode)}"`)
+
+	-- `== Enum.CameraMode.LockFirstPerson` precisa BATER -- é exatamente o `==` que o bug relatado
+	-- dizia "nunca bate" (comparando contra uma string crua nunca seria igual a um EnumItem).
+	local enumRootDot = (ValueTypes.Enum :: unknown) :: { [string]: unknown }
+	local cameraModeEnumDot = (enumRootDot["CameraMode"] :: unknown) :: { [string]: unknown }
+	local lockFirstPerson = cameraModeEnumDot["LockFirstPerson"]
+	assert(cameraMode == lockFirstPerson, "StarterPlayer.CameraMode deveria ser o MESMO EnumItem que Enum.CameraMode.LockFirstPerson (== precisa bater)")
+end)
+
+test("Materialize: string de Enum com item INEXISTENTE (StarterPlayer.DevCameraOcclusionMode = \"NotARealItem\") gera 'materialize/undecodable-property', nunca grava string crua (task-cli-028-fix)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	-- `findByCodeAndField` (não só `findByCode`) -- a fixture agora tem OUTRO
+	-- 'materialize/undecodable-property' (Workspace.BadPosition.Position, teste dedicado acima).
+	local diagnostic = findByCodeAndField(bag, "materialize/undecodable-property", "DevCameraOcclusionMode")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/undecodable-property' para o campo 'DevCameraOcclusionMode'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "item de Enum inexistente deveria ser Severity 'error'")
+		assert(string.find(diagnostic.Message, "NotARealItem", 1, true) ~= nil, `mensagem deveria citar a entrada inválida 'NotARealItem', recebeu: {diagnostic.Message}`)
+		assert(diagnostic.NodePath ~= nil and string.find(diagnostic.NodePath, "StarterPlayer", 1, true) ~= nil, "Diagnostic deveria citar o NodePath de StarterPlayer")
+	end
+
+	local starterPlayer = game:FindService("StarterPlayer")
+	assert(starterPlayer ~= nil, "game deveria ter um StarterPlayer depois de Materialize")
+	if starterPlayer == nil then
+		return
+	end
+
+	-- NUNCA gravou a string crua "NotARealItem" -- a propriedade manteve o Default real do schema
+	-- (`enumDefault("DevCameraOcclusionMode", "Zoom")`, ver generated/classes/StarterPlayer.luau).
+	local starterPlayerDot = (starterPlayer :: unknown) :: { [string]: unknown }
+	local occlusionMode = starterPlayerDot["DevCameraOcclusionMode"]
+	assert(typeof(occlusionMode) ~= "string", `DevCameraOcclusionMode NUNCA deveria ter virado a string crua "NotARealItem" -- typeof devolveu "{typeof(occlusionMode)}"`)
+	assert(ValueTypes.TypeNameOf(occlusionMode) == "EnumItem", "DevCameraOcclusionMode deveria continuar sendo o EnumItem Default (nunca a string inválida)")
+	assert(tostring(occlusionMode) == "Enum.DevCameraOcclusionMode.Zoom", `esperava o Default "Enum.DevCameraOcclusionMode.Zoom" preservado, recebeu "{tostring(occlusionMode)}"`)
+end)
+
+test("Materialize: string primitiva normal SEM MemberDescriptor de Enum (Folder.Name via $properties) continua idêntica a antes -- regressão (task-cli-028-fix)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	-- NUNCA `not bag:HasErrors()` aqui -- esta MESMA fixture 'value-types' tem outros nós que
+	-- deliberadamente produzem erro (BadPosition.Position, StarterPlayer.DevCameraOcclusionMode,
+	-- ver os testes acima). O que importa pra ESTE teste é que 'RenameMe'/'Name' especificamente
+	-- não produziu Diagnostic nenhum.
+	assert(findByCodeAndField(bag, "materialize/invalid-property", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/invalid-property'")
+	assert(findByCodeAndField(bag, "materialize/undecodable-property", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/undecodable-property'")
+	assert(findByCodeAndField(bag, "materialize/property-shape-unknown", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/property-shape-unknown'")
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
+	if workspaceInstance == nil then
+		return
+	end
+
+	-- "RenameMe" (nome original do nó no .project.json) não deveria mais existir -- $properties.Name
+	-- renomeou de verdade, via a via pública (__newindex real, ramo "Name" de Instance.luau).
+	assert(workspaceInstance:FindFirstChild("RenameMe") == nil, "'RenameMe' não deveria mais existir depois do $properties.Name renomear a Instance")
+
+	local renamed = workspaceInstance:FindFirstChild("RenamedViaProperties")
+	assert(renamed ~= nil, "'RenamedViaProperties' deveria existir -- Name (string SEM MemberDescriptor, tratada pelo Instance base) continua indo pelo caminho primitivo direto")
+	if renamed ~= nil then
+		assert(renamed.ClassName == "Folder", "a Instance renomeada deveria continuar sendo o mesmo Folder")
+		assert(renamed.Name == "RenamedViaProperties", "Instance.Name deveria refletir o valor aplicado via $properties")
 	end
 end)
 

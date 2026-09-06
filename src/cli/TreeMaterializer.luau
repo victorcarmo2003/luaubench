@@ -239,6 +239,13 @@ end
 -- "Baseplate.Position" chegam aqui como o MESMO array de 3 números, e só o `MemberDescriptor` da
 -- classe/propriedade diz qual é Color3 e qual é Vector3).
 --
+-- task-cli-028-fix (BUG REAL, testador + orquestrador confirmando por leitura de código): a MESMA
+-- ambiguidade vale pra `string` -- "LockFirstPerson" (StarterPlayer.CameraMode) é a forma Rojo
+-- padrão de um item de Enum via `$properties` (ver `Decode.luau`, `decodeEnum`: só aceita
+-- `string`), e é indistinguível de uma `string` primitiva de verdade (`Name`, `ScriptSource`) só
+-- olhando `typeof(raw)` -- as duas são `"string"`. É por isso que `resolvePropertyValue`, abaixo,
+-- também consulta este `MemberDescriptor` para o caso `string`, não só array/objeto.
+--
 -- LIMITAÇÃO DECLARADA (API FALTANTE, ver relatório da tarefa): `Runtime.ClassRegistry.Get`
 -- devolve só o `Schema` PRÓPRIO de uma classe -- o que ELA declara, NUNCA o herdado (ver o
 -- comentário de `ClassDescriptor.Schema` em `src/runtime/ClassRegistry.luau`: "Schema de
@@ -277,13 +284,32 @@ end
 -- array cru escrito direto num `Vector3`/`Color3` REAL seria a corrupção silenciosa que a
 -- invariante 2 do projeto proíbe. Por isso todo array/objeto passa OBRIGATORIAMENTE por
 -- `ValueTypes.Decode.FromRojoJson` antes de qualquer escrita.
+--
+-- task-cli-028-fix: `string` é o MESMO caso -- `typeof(raw)` NUNCA distingue uma `string`
+-- primitiva de verdade (`Name`) de uma `string` que é a forma Rojo de um item de Enum
+-- (`CameraMode = "LockFirstPerson"`), então `string` não pode mais ser um atalho incondicional.
+-- `boolean`/`number` continuam podendo (nenhuma forma ambígua do `Decode` usa esses kinds --
+-- `decodeEnum` só aceita `string`, `dataTypeDecoders` só aceitam array/objeto), então continuam
+-- sem pagar o custo de `findMemberDescriptor` -- IDÊNTICO ao de antes desta correção.
 local function resolvePropertyValue(className: string, key: string, raw: TreePlanner.PlanPropertyValue, nodePath: string, bag: Diagnostics.Bag): unknown?
 	local rawKind = typeof(raw)
-	if rawKind == "boolean" or rawKind == "number" or rawKind == "string" then
+	if rawKind == "boolean" or rawKind == "number" then
 		return raw
 	end
 
+	-- Resolvido AQUI (uma única vez) tanto para o caso `string` (decidir se é Enum ou primitivo)
+	-- quanto para array/objeto (forma sempre não-primitiva, já precisava do descriptor antes desta
+	-- correção) -- nunca duas buscas pela mesma propriedade nesta chamada.
 	local descriptor = findMemberDescriptor(className, key)
+	local isEnumProperty = descriptor ~= nil and descriptor.Kind == "Property" and descriptor.ValueCategory == "Enum"
+
+	if rawKind == "string" and not isEnumProperty then
+		-- String comum (`Name`, `ScriptSource`, ou qualquer propriedade sem `MemberDescriptor` de
+		-- Enum -- inclusive sem `MemberDescriptor` NENHUM, ex.: nome inválido/instância em modo
+		-- LENIENTE) -- grava DIRETO, comportamento IDÊNTICO ao de antes desta correção.
+		return raw
+	end
+
 	if descriptor == nil or descriptor.Kind ~= "Property" then
 		-- Sem MemberDescriptor de Property conhecido: LuauBench não tem como saber que tipo este
 		-- array/objeto deveria virar. Cobre o modo LENIENTE (instância sem ClassSchema instalado,
