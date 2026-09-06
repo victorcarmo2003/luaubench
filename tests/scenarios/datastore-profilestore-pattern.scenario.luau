@@ -35,53 +35,49 @@
 -- existem de verdade agora (task-services-021/022, commitadas) -- confirmado nesta rodada
 -- (2026-09-06): o GATE passa, `Runtime.Sandbox.Load(...)()` carrega o ProfileStore real com sucesso.
 --
--- ACHADO NOVO DESTA RODADA (2026-09-06, BUG REAL, NÃO contornado com stub -- regra do papel de
--- testador): com o require funcionando, os passos 1-3 falham TODOS com o MESMO erro, reproduzido
--- ao rodar `lune run tests/scenarios/datastore-profilestore-pattern.scenario.luau`:
---   [string "ProfileStore"]:1274: attempt to call a nil value
--- Linha 1274 do fixture é `if type(store_name) ~= "string" then` -- `ProfileStore.New` (a PRIMEIRA
--- coisa que qualquer chamador faz). Causa raiz confirmada por leitura de código, território
--- `src/runtime/Sandbox.luau`, função `buildEnvironment`: a whitelist de globais do sandbox
--- (`env.typeof`, `env.tostring`, `env.tonumber`, `env.pairs`, `env.ipairs`, `env.select`, ...)
--- NUNCA inclui `env.type` -- confirmado por grep (`\btype\b\s*=`) em todo `src/`: nenhuma linha
--- define esse global em lugar nenhum do projeto. `type()` é o global Lua/Luau BASE (distinto de
--- `typeof()`, que já existe) -- todo script Roblox real usa `type(x) == "table"` o tempo todo,
--- não é peculiaridade do ProfileStore. Confirmado que é a ÚNICA causa dos 3 passos falharem: um
--- diagnóstico isolado (fora de tests/scenarios, nunca commitado, descartado após o teste) que
--- monkeypatchou SÓ `type` em cima de `ScriptEnvironment.Build(...)` -- nunca dentro deste
--- arquivo -- fez `ProfileStore.New`/`StartSessionAsync`/`EndSession`/`IsActive`/reload rodarem de
--- ponta a ponta com sucesso (Data == template na sessão nova; Coins == 100 persistindo
--- intra-processo depois de EndSession + reabrir a mesma chave). Território do bug: `runtime`
--- (`src/runtime/Sandbox.luau`, `buildEnvironment`) -- fora do território deste agente, reportado
--- para `coder-runtime` corrigir, não contornado aqui.
+-- ACHADO DE RODADA ANTERIOR (2026-09-06, BUG REAL, RESOLVIDO): com o require funcionando, os
+-- passos 1-3 falhavam TODOS com `[string "ProfileStore"]:1274: attempt to call a nil value`
+-- (`if type(store_name) ~= "string" then`, `ProfileStore.New`) -- `env.type` nunca esteve na
+-- whitelist de globais do sandbox (`src/runtime/Sandbox.luau`, `buildEnvironment`). Corrigido em
+-- `task-runtime-037-fix` (commit "fix(runtime): add missing type() global to sandbox
+-- environment") -- confirmado NESTA rodada (2026-09-06) que `env.type = type` está presente
+-- (`src/runtime/Sandbox.luau:398`) e que os passos 1-2 passam de ponta a ponta sem nenhuma edição
+-- neste arquivo, exatamente como o diagnóstico descartável da rodada anterior previu.
 --
--- ACHADO SECUNDÁRIO (arquitetura, não bug): com `type` hipoteticamente corrigido, o mesmo
--- diagnóstico mostrou que o passo 3 (session lock cross-server) tal como desenhado por
--- task-services-027 -- duas chamadas de `chunk()` da MESMA fonte simulando "dois servidores" --
--- NÃO consegue exercitar o Steal/Cancel de verdade: o servidor B (sem `Steal`) adquiriu a sessão
--- de A imediatamente, sem disputa. Causa: `IsThisSession(session_tag)` no ProfileStore real
--- (fixture linha 679-681) compara só `PlaceId`/`JobId` (NÃO o `unique_session_id` de 3 elementos)
--- -- e `JobId` no LuauBench é uma CONSTANTE POR PROCESSO por desenho deliberado e já documentado
--- (task-runtime-034, `DataModel.luau` "DIVERGÊNCIA DECLARADA": "um processo Lune == um servidor").
--- Como as duas chamadas de `chunk()` compartilham o MESMO `game`/`JobId`, o ProfileStore real
--- (corretamente, do ponto de vista dele) enxerga a sessão de B como pertencendo ao MESMO servidor
--- de A, não a um servidor concorrente -- então não há disputa pra resolver. Isto não é bug de
--- `runtime`/`services` (a divergência já está declarada e é intencional); é uma limitação do
--- DESENHO deste passo 3: "dois `chunk()` no mesmo processo" não representa "dois servidores" pra
--- qualquer biblioteca que derive identidade de sessão de `JobId`. Testar o Steal/Cancel de verdade
--- exigiria ou (a) rodar dois processos `lune` separados contra armazenamento persistido entre eles
--- (não existe ainda -- persistência é só intra-processo, ver divergência já declarada acima) ou
--- (b) redesenhar o passo pra semear diretamente um `ActiveSession` de PlaceId/JobId FORJADOS (não
--- os do processo real) na estrutura de dados do DataStore, simulando uma sessão de terceiro sem
--- depender de dois `chunk()` -- não implementado nesta rodada por já ter achado o bug de `type`
--- como bloqueador anterior a este ponto; fica registrado como recomendação, não como stub.
+-- ACHADO SECUNDÁRIO DE RODADA ANTERIOR (arquitetura, não bug -- RESOLVIDO nesta rodada por
+-- redesenho do passo 3, opção "(b)" já cogitada aqui): o desenho ORIGINAL do passo 3 usava duas
+-- chamadas de `chunk()` da MESMA fonte simulando "dois servidores" -- e isso não conseguia
+-- exercitar o Steal/Cancel de verdade, porque `IsThisSession(session_tag)` no ProfileStore real
+-- (fixture linha 679-681) compara só `PlaceId`/`JobId`, e `JobId` no LuauBench é uma CONSTANTE POR
+-- PROCESSO por desenho deliberado e já documentado (task-runtime-034, `DataModel.luau`
+-- "DIVERGÊNCIA DECLARADA": "um processo Lune == um servidor"). Como as duas chamadas de `chunk()`
+-- compartilhavam o MESMO `game`/`JobId`, o "servidor B" via a sessão de A como sua PRÓPRIA sessão
+-- (mesmo par PlaceId/JobId) e a "adquiria" sem disputa nenhuma -- reproduzido e confirmado por
+-- execução real nesta rodada antes do redesenho abaixo (`[FAIL] passo 3 ... servidor B NÃO
+-- deveria ter roubado a sessão de A sem passar Steal=true`).
 --
--- Status: pending -- falta `env.type` em `src/runtime/Sandbox.luau` (`buildEnvironment`), bug real
--- de território `runtime`, bloqueia os passos 1-3 (todo `ProfileStore.New`/`StartSessionAsync`
--- passa por `type()` logo na entrada). Depois que `type` existir, os passos 1-2 devem passar sem
--- nenhuma edição neste arquivo (confirmado por diagnóstico descartável) -- o passo 3, tal como está
--- escrito, provavelmente continuará falhando por um motivo DIFERENTE (arquitetura de JobId acima,
--- não um bug), e vai precisar de redesenho numa rodada futura.
+-- REDESENHO do passo 3 (esta rodada): em vez de dois `chunk()`, um ÚNICO módulo real
+-- (`game.PlaceId` é sempre `0` no LuauBench, `src/runtime/DataModel.luau`) semeia DIRETAMENTE, via
+-- `store.data_store:SetAsync(...)` (campo `data_store` é público na tabela devolvida por
+-- `ProfileStore.New`, fixture linha ~1319 -- não é acesso a estado privado), um `ActiveSession`
+-- com `PlaceId`/`JobId`/`unique_session_id` FORJADOS (`{999, "forged-other-server-job-id",
+-- "forged-other-server-session-id"}`) na MESMA estrutura de dado (`Data`/`MetaData`/
+-- `GlobalUpdates`) que o próprio ProfileStore real escreveria via `UpdateAsync` -- representa uma
+-- sessão pertencente a um "terceiro servidor" que nunca vai responder ao
+-- `MessagingService.PublishAsync` de "libera a sessão" que o ProfileStore manda. Como
+-- `PlaceId` forjado (999) já difere do real (0), `IsThisSession(active_session) == false`
+-- independente do `JobId` -- a trava do lock é exercitada de verdade, sem depender de dois
+-- processos `lune` nem de persistência entre execuções (ainda intra-processo, ver divergência
+-- acima). Timings de produção sem alteração (`FIRST_LOAD_REPEAT = 5s`, fixture linha ~193) --
+-- o teste todo roda em ~6s reais, dentro dos timeouts de `driveUntil` já usados nos passos 1-2;
+-- não foi preciso `ProfileStore.SetConstant` (API pública real do módulo, fixture linha ~1225,
+-- usada pelos testes oficiais do próprio MadStudioRoblox/ProfileStore pra acelerar timing) para
+-- este cenário passar de forma determinística.
+--
+-- Status: passa hoje -- os 3 `test()` abaixo (5 comportamentos do cabeçalho: sessão nova =
+-- template; alterar+EndSession+reabrir confirmando persistência intra-processo; session lock sem
+-- Steal bloqueado / com Steal adquirindo) rodam de ponta a ponta contra o ProfileStore real, sem
+-- stub, e sem nenhum `[SKIP]`/`[PENDING]` quando o GATE acima consegue carregar o módulo.
 
 local process = require("@lune/process")
 local fs = require("@lune/fs")
@@ -153,6 +149,23 @@ local function driveUntil(scheduler: Runtime.Scheduler, predicate: () -> boolean
 	return predicate()
 end
 
+-- Roda `fn` (que pode yieldar -- ex: `SetAsync`/`GetAsync` de um DataStore real) dentro de uma
+-- coroutine gerida pelo `scheduler` e espera o resultado com cadência de tempo real. Necessário
+-- pro mesmo motivo de `StartSessionAsync` acima: chamar direto da thread principal deste arquivo
+-- (que não é gerida pelo Scheduler) erra "can only yield from a thread managed by...".
+local function runAsync(scheduler: Runtime.Scheduler, fn: () -> unknown, timeoutSeconds: number): unknown
+	local resultUnknown: unknown = nil
+	local done = false
+	scheduler:Spawn(function()
+		resultUnknown = fn()
+		done = true
+	end)
+	assert(driveUntil(scheduler, function(): boolean
+		return done
+	end, timeoutSeconds), "chamada assíncrona não resolveu dentro do timeout")
+	return resultUnknown
+end
+
 ----------------------------------------------------------------------------------------------
 -- Bootstrap único pra todo o cenário: um `game`/`scheduler` real de `runtime`+`services`, exatamente
 -- a sequência de 8 passos documentada em src/services/init.luau ("SEQUÊNCIA DE BOOTSTRAP que cli
@@ -195,10 +208,9 @@ local fixtureSource = fs.readFile("tests/scenarios/fixtures/ProfileStore.luau")
 -- `Runtime.Sandbox.Load` compila e devolve uma função chamável SEM criar thread (é o mecanismo
 -- real de `require` de ModuleScript do LuauBench, task-runtime-025/cli/ModuleLoader.luau) --
 -- diferente de `require` real do Roblox, cada CHAMADA deste `chunk` re-executa o corpo do módulo
--- do zero (sem cache) -- usamos isso DE PROPÓSITO no passo 3 para simular DOIS "servidores"
--- independentes (cada um com seu próprio `ActiveSessionCheck`/`AutoSaveList` locais ao módulo)
--- compartilhando o MESMO DataStoreService por baixo -- exatamente o cenário que a trava de sessão
--- existe para proteger.
+-- do zero (sem cache): `ProfileStoreLib1` (passos 1-2) e `server` (passo 3, ver "REDESENHO do
+-- passo 3" no cabeçalho) são instâncias INDEPENDENTES do módulo, cada uma com seu próprio
+-- `ActiveSessionCheck`/`AutoSaveList` locais, compartilhando o MESMO DataStoreService por baixo.
 local chunk = Runtime.Sandbox.Load({
 	scriptName = "ProfileStore",
 	source = fixtureSource,
@@ -325,75 +337,99 @@ test("passo 2: alterar Profile.Data, EndSession, reabrir a MESMA chave e confirm
 end)
 
 ----------------------------------------------------------------------------------------------
--- Passo 3: session lock. Duas instâncias INDEPENDENTES do módulo ProfileStore (duas chamadas de
--- `chunk()`, cada uma com seu próprio `ActiveSessionCheck` local -- ver comentário acima de
--- `chunk` sobre por que isto simula dois "servidores" de verdade) competindo pela MESMA chave no
--- MESMO DataStoreService por baixo.
+-- Passo 3: session lock. Um único módulo/`store` real (o `game.PlaceId`/`game.JobId` deste
+-- processo NUNCA mudam -- task-runtime-034) tenta abrir uma chave cujo `ActiveSession` já
+-- pertence, na estrutura de dado, a um PlaceId/JobId FORJADOS -- simula um "outro servidor" sem
+-- depender de `JobId` divergente entre duas chamadas de `chunk()` (ver comentário no cabeçalho
+-- do arquivo, "REDESENHO do passo 3").
 ----------------------------------------------------------------------------------------------
-test("passo 3: session lock -- o segundo StartSessionAsync para a MESMA chave NÃO rouba sem Steal, e rouba imediatamente COM Steal=true", function()
+test("passo 3: session lock -- StartSessionAsync NÃO rouba um ActiveSession de outro servidor sem Steal, e rouba imediatamente COM Steal=true", function()
 	local template: Dynamic = { Coins = 0 }
 	local profileKey = "Player_SessionLock"
 
-	local serverA = asDynamic((chunk :: () -> ...unknown)())
-	local serverB = asDynamic((chunk :: () -> ...unknown)())
+	local server = asDynamic((chunk :: () -> ...unknown)())
+	local store = callNew(server, "SessionLockStore", template)
 
-	local storeA = callNew(serverA, "SessionLockStore", template)
-	local storeB = callNew(serverB, "SessionLockStore", template)
+	-- `data_store` é campo PÚBLICO da tabela devolvida por `ProfileStore.New` (fixture linha
+	-- ~1319, `self.data_store = DataStoreService:GetDataStore(...)`) -- não é acesso a estado
+	-- privado do módulo. `SetAsync` é chamado diretamente (por fora do ProfileStore) só para
+	-- semear o `ActiveSession` forjado; toda LEITURA/ESCRITA feita pelo ProfileStore em si
+	-- continua passando só por `UpdateAsync`, como a task-services-027 exige.
+	local dataStore = asDynamic((store :: Dynamic).data_store)
 
-	-- Servidor A abre a sessão primeiro.
-	local profileAUnknown: unknown = nil
-	scheduler:Spawn(function()
-		profileAUnknown = callMethod(storeA, "StartSessionAsync", profileKey, nil)
-	end)
-	assert(driveUntil(scheduler, function(): boolean
-		return profileAUnknown ~= nil
-	end, 15), "servidor A deveria ter adquirido a sessão")
-	local profileA = asDynamic(profileAUnknown)
-	assert(callMethod(profileA, "IsActive") == true, "profileA deveria estar IsActive() == true logo após adquirir")
+	-- PlaceId=999 já basta pra `IsThisSession` (fixture linha 679) dar false independente do
+	-- JobId, porque `game.PlaceId` é sempre 0 no LuauBench (DataModel.luau) -- mas inclui um
+	-- JobId/unique_session_id forjados também, pela mesma forma que o ProfileStore real grava.
+	local forgedActiveSession: Dynamic = { 999, "forged-other-server-job-id", "forged-other-server-session-id" }
+	local seededProfileRecord: Dynamic = {
+		Data = { Coins = 0 },
+		MetaData = {
+			ProfileCreateTime = os.time(),
+			SessionLoadCount = 0,
+			ActiveSession = forgedActiveSession,
+			LastUpdate = os.time(), -- recente o bastante pra nunca cruzar ASSUME_DEAD (630s, fixture linha ~195)
+			MetaTags = {},
+		},
+		GlobalUpdates = { 0, {} },
+	}
+	runAsync(scheduler, function(): unknown
+		return callMethod(dataStore, "SetAsync", profileKey, seededProfileRecord)
+	end, 10)
 
-	-- Servidor B tenta a MESMA chave SEM Steal, com um Cancel que desiste depois de ~2s reais --
-	-- API pública documentada no cabeçalho do fixture ("Cancel = fn() -> (boolean), -- Pass this
-	-- to create a request cancel condition."). Se B conseguisse a sessão aqui, seria a trava de
-	-- sessão falhando (bug GRAVE de fidelidade -- corromperia save concorrente em produção).
+	-- Tenta a chave já "ocupada" SEM Steal, com um Cancel que desiste depois de ~2s reais -- API
+	-- pública documentada no cabeçalho do fixture ("Cancel = fn() -> (boolean), -- Pass this to
+	-- create a request cancel condition."). Se isto conseguisse a sessão, seria a trava de sessão
+	-- falhando (bug GRAVE de fidelidade -- corromperia save concorrente em produção).
 	local cancelDeadline = os.clock() + 2
 	local paramsNoSteal: Dynamic = {
 		Cancel = function(): boolean
 			return os.clock() >= cancelDeadline
 		end,
 	}
-	local resultBNoStealUnknown: unknown = nil
-	local bNoStealDone = false
+	local resultNoStealUnknown: unknown = nil
+	local noStealDone = false
 	scheduler:Spawn(function()
-		resultBNoStealUnknown = callMethod(storeB, "StartSessionAsync", profileKey, paramsNoSteal)
-		bNoStealDone = true
+		resultNoStealUnknown = callMethod(store, "StartSessionAsync", profileKey, paramsNoSteal)
+		noStealDone = true
 	end)
 	assert(driveUntil(scheduler, function(): boolean
-		return bNoStealDone
-	end, 10), "StartSessionAsync de B (sem Steal, com Cancel) deveria ter retornado (via Cancel) dentro de 10s")
+		return noStealDone
+	end, 10), "StartSessionAsync sem Steal, com Cancel, deveria ter retornado (via Cancel) dentro de 10s")
 	assert(
-		resultBNoStealUnknown == nil,
-		"servidor B NÃO deveria ter roubado a sessão de A sem passar Steal=true -- trava de sessão violada"
+		resultNoStealUnknown == nil,
+		"NÃO deveria ter roubado o ActiveSession forjado sem passar Steal=true -- trava de sessão violada"
 	)
-	assert(callMethod(profileA, "IsActive") == true, "profileA deveria continuar IsActive() == true (não foi roubado)")
 
-	-- Servidor B tenta de novo, agora COM Steal=true -- doc do fixture: "Steal = true, -- Pass
-	-- this to disregard an existing session lock". Deve suceder sem precisar esperar o timeout
-	-- natural de SESSION_STEAL (40s, fixture linha ~173).
+	-- Confirma que a trava NÃO foi corrompida pela tentativa sem Steal: o ActiveSession no
+	-- DataStore ainda deve apontar pro PlaceId/JobId forjados (não foi sobrescrito por engano).
+	local recordAfterNoStealUnknown = runAsync(scheduler, function(): unknown
+		return callMethod(dataStore, "GetAsync", profileKey)
+	end, 10)
+	local recordAfterNoSteal = asDynamic(recordAfterNoStealUnknown)
+	local activeSessionAfterNoSteal = asDynamic(asDynamic(recordAfterNoSteal.MetaData).ActiveSession)
+	assert(
+		(activeSessionAfterNoSteal :: { [number]: unknown })[1] == 999,
+		"ActiveSession forjado (PlaceId=999) deveria continuar intacto depois da tentativa sem Steal"
+	)
+
+	-- Tenta de novo, agora COM Steal=true -- doc do fixture: "Steal = true, -- Pass this to
+	-- disregard an existing session lock". Deve suceder sem precisar esperar o timeout natural de
+	-- SESSION_STEAL (40s, fixture linha ~194).
 	local paramsSteal: Dynamic = { Steal = true }
-	local resultBStealUnknown: unknown = nil
+	local resultStealUnknown: unknown = nil
 	scheduler:Spawn(function()
-		resultBStealUnknown = callMethod(storeB, "StartSessionAsync", profileKey, paramsSteal)
+		resultStealUnknown = callMethod(store, "StartSessionAsync", profileKey, paramsSteal)
 	end)
 	assert(driveUntil(scheduler, function(): boolean
-		return resultBStealUnknown ~= nil
-	end, 15), "StartSessionAsync de B com Steal=true deveria ter resolvido com um Profile dentro de 15s")
+		return resultStealUnknown ~= nil
+	end, 15), "StartSessionAsync com Steal=true deveria ter resolvido com um Profile dentro de 15s")
 
-	local profileB = asDynamic(resultBStealUnknown)
-	assert(callMethod(profileB, "IsActive") == true, "profileB deveria estar IsActive() == true depois do Steal")
+	local profile = asDynamic(resultStealUnknown)
+	assert(callMethod(profile, "IsActive") == true, "profile deveria estar IsActive() == true depois do Steal")
 
 	-- Limpeza -- encerra o que ainda estiver ativo (best-effort, não faz parte da asserção).
 	pcall(function()
-		callMethod(profileB, "EndSession")
+		callMethod(profile, "EndSession")
 	end)
 end)
 
