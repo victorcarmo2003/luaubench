@@ -1,0 +1,18 @@
+{
+  "name": "CloudProfileStoreTwoProcessFixture",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "ProfileStoreLib": {
+        "$path": "../ProfileStore.luau"
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    }
+  }
+}

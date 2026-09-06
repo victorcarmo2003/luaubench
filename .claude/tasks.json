@@ -2565,7 +2565,7 @@
       "id": "task-test-cloud-001",
       "title": "Cenario: estado cloud sobrevive entre duas execucoes de luaubench run",
       "description": "Cenario de ponta a ponta em tests/scenarios/ provando a promessa da feature do ponto de vista de quem usa: rodar luaubench run duas vezes contra o MESMO projeto-fixture e confirmar que o DataStore persistiu entre elas, enquanto a arvore de Instance/scripts foi reconstruida do zero (que e o comportamento correto e nao muda). Cobrir tambem: --no-persist nao persiste nem le; historico de versao (ListVersionsAsync) sobrevive ao restart na ordem certa; OrderedDataStore mantem a ordenacao depois do restart. VALOR EXTRA se der: este e o unico caminho que finalmente permite testar o Steal/Cancel de sessao do ProfileStore de verdade -- o cabecalho de tests/scenarios/datastore-profilestore-pattern.scenario.luau (linhas 63-83) documenta que o passo 3 nao pode passar hoje porque JobId e constante por processo e a persistencia era so intra-processo; com dois PROCESSOS lune separados contra armazenamento persistido, a opcao (a) que aquele cabecalho lista passa a existir. Avaliar se da pra tirar o passo 3 do estado conhecido de falha, e se NAO der, dizer no relatorio por que (nao forcar). TERRITORIO: so tests/scenarios/ (mais fixtures proprias); read-only em src/**.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "testador",
       "reviewer": null,
       "wave": 54,
@@ -2580,7 +2580,8 @@
         "task-cli-030"
       ],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "result": "PASSOU, confirmado por mim rodando diretamente (3/3 no cenario principal, 1/1 no cenario novo de two-process, ambos estaveis). Cenario principal: dois processos luaubench run REAIS separados contra o mesmo projeto-fixture confirmam persistencia de valor (SetAsync+2xUpdateAsync), historico de versao na ordem certa (ListVersionsAsync, prova que Store.Import restaura versionCounter), e ordenacao de OrderedDataStore apos restart. --no-persist confirmado nunca criando .luaubench/ e nunca lendo/corrompendo estado de execucao anterior (bytes comparados antes/depois). Fixture limpa o proprio .luaubench/ antes/depois (deterministico). VALOR EXTRA alcancado: passo 3 do ProfileStore (session lock) AVANCOU de verdade -- confirmado empiricamente que dois processos lune distintos geram JobIds diferentes (o bloqueio original de JobId constante por processo era so intra-processo, agora removido com persistencia real em disco). Novo cenario profilestore-two-process-session-steal.scenario.luau roda dois processos lune reais (um em background via process.create segurando sessao, outro em foreground tentando roubar) contra o mesmo datastore.json -- servidor 2 nao rouba sem Steal, rouba imediatamente com Steal=true. Rodado 4x seguidas sem flake pelo testador +1x por mim. O cenario forjado antigo (datastore-profilestore-pattern.scenario.luau) NAO foi editado -- continua valido, o novo e aditivo. Nenhum bug real encontrado -- toda a superficie (--no-persist, CloudStore, Store.Export/Import, ListVersionsAsync, GetSortedAsync) se comportou exatamente como o desenho preve."
     },
     {
       "id": "task-cli-032",
