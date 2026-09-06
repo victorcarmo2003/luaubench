@@ -79,14 +79,23 @@
 	- `DataStoreSetOptions`/`DataStoreIncrementOptions` (ver `./DataStoreSetOptions.luau`/
 	  `./DataStoreIncrementOptions.luau`): `GetMetadata`/`SetMetadata`, metadata como estado
 	  privado por instância (nenhuma propriedade no schema gerado das duas).
-	`DataStore`/`OrderedDataStore`/`Pages`/as classes de paginação NÃO entram nesta leva (sub-leva
-	B: `GetVersionAsync`/`ListVersionsAsync`/`ListKeysAsync`/`GetSortedAsync`, fora do território de
-	task-services-018) -- ficam SEM entrada aqui, cobertas pelo stub `[LuauBench]` do `ClassBuilder`
-	método a método (a HERANÇA de `GlobalDataStore` continua funcionando para `DataStore`/
-	`OrderedDataStore` mesmo sem entrada própria neste mapa -- ver cabeçalho de
-	`./GlobalDataStore.luau`).
+	task-services-019 (sub-leva B: `GetVersionAsync`/`ListVersionsAsync`/`ListKeysAsync` + a família
+	`Pages` -- LER .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.1.3"/"L2.1.6", antes
+	de mexer aqui) adiciona mais DUAS entradas:
+	- `DataStore` (ver `./DataStore.luau`): `Methods` cobre `GetVersionAsync`/`ListVersionsAsync`/
+	  `ListKeysAsync`, construídos EM CIMA do `Store` singleton de `./GlobalDataStore.luau`
+	  (exportado a partir desta tarefa). `GetVersionAtTimeAsync`/`RemoveVersionAsync` (Deprecated)
+	  ficam com o stub `[LuauBench]`.
+	- `Pages` (ver `./Pages.luau`): `Methods` cobre `GetCurrentPage`/`AdvanceToNextPageAsync` (a
+	  fábrica `New`, fora do contrato `Types.Behavior`, consumida por `./DataStore.luau`, fatia um
+	  buffer completo de itens em páginas) -- via o achatamento de classe do `runtime`, os mesmos
+	  dois métodos ficam disponíveis em `DataStoreVersionPages`/`DataStoreKeyPages`/
+	  `DataStoreListingPages`/`DataStorePages` sem entrada própria para cada uma.
+	`OrderedDataStore` continua SEM entrada própria (`GetSortedAsync` fica com o stub
+	`[LuauBench]`, fora do território de task-services-019) -- a herança de `GlobalDataStore`
+	continua funcionando para ela mesmo assim.
 
-	Todas as outras classes desta e da leva anterior continuam registradas por
+	Todas as outras classes desta e das levas anteriores continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
 	`Initialize`/`Methods` próprio.
 ]]
@@ -104,6 +113,8 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	DataStoreOptions = require("./DataStoreOptions") :: Types.Behavior,
 	DataStoreSetOptions = require("./DataStoreSetOptions") :: Types.Behavior,
 	DataStoreIncrementOptions = require("./DataStoreIncrementOptions") :: Types.Behavior,
+	DataStore = require("./DataStore") :: Types.Behavior,
+	Pages = require("./Pages") :: Types.Behavior,
 }
 
 return BehaviorIndex

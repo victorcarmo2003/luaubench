@@ -130,10 +130,31 @@ export type Store = {
 	-- nil)` se aquela `Version` nunca existiu naquela chave. Devolve a versão MESMO que ela (ou
 	-- uma posterior) esteja tombstoned -- é o que prova "versões antigas continuam legíveis"
 	-- (L2.1.3) mesmo depois de um `Remove`. NÃO é `GetVersionAsync`/`ListVersionsAsync`/
-	-- `DataStoreVersionPages` (paginação, ordenação, filtro de data) -- esses ficam para a
-	-- sub-leva B (L2.1.3, fora do território desta tarefa); isto é só o bloco de construção que
-	-- eles vão empilhar em cima, sem precisar redesenhar `KeyRecord`/`VersionRecord`.
+	-- `DataStoreVersionPages` (paginação, ordenação, filtro de data) -- ver `ListVersions`/
+	-- `ListKeys` abaixo (task-services-019, sub-leva B) para o bloco de construção que
+	-- `../behavior/DataStore.luau` empilha em cima disto, sem precisar redesenhar
+	-- `KeyRecord`/`VersionRecord`.
 	GetVersion: (self: Store, storeId: string, key: string, version: string) -> (unknown, VersionInfo?),
+
+	-- ACRESCENTADO em task-services-019 (sub-leva B: `GetVersionAsync`/`ListVersionsAsync`/
+	-- `ListKeysAsync`, ver `../behavior/DataStore.luau`) -- exatamente o "bloco de construção"
+	-- que o comentário de `GetVersion`, acima, já antecipava desde task-017. Devolve TODO o
+	-- HISTÓRICO de versões de `key` (deep-copiado, MESMO as tombstoned -- histórico completo,
+	-- sem filtro nenhum, L2.1.3), em ORDEM CRONOLÓGICA CRESCENTE (mais antiga primeiro -- a mesma
+	-- ordem de inserção de `record.Versions`). `{}` se a chave nunca existiu neste `storeId`.
+	-- Filtro de data/ordenação/paginação são responsabilidade de quem chama (`DataStore.luau`) --
+	-- este módulo continua sem saber o que é `Pages`/paginação, mesma fronteira de
+	-- responsabilidade do cabeçalho ("FRONTEIRA DE RESPONSABILIDADE").
+	ListVersions: (self: Store, storeId: string, key: string) -> { VersionInfo },
+
+	-- ACRESCENTADO em task-services-019 -- lista TODAS as chaves conhecidas de `storeId` (mesmo as
+	-- cuja versão corrente é tombstone -- quem decide excluir removidas é `ListKeysAsync`, via
+	-- `excludeDeleted`, em `DataStore.luau`; este módulo só expõe o dado cru), cada uma com o
+	-- `VersionInfo` (deep-copiado) da sua versão CORRENTE. ORDEM: alfabética (`table.sort` sobre a
+	-- string da chave) -- o Roblox real não documenta uma ordem específica para `ListKeysAsync`;
+	-- ordem determinística e testável é preferível a depender da ordem de iteração de `pairs`
+	-- (que não é estável entre execuções). `{}` se `storeId` nunca recebeu nenhuma escrita.
+	ListKeys: (self: Store, storeId: string) -> { { Key: string, Current: VersionInfo } },
 }
 
 -- ============================================================================================
@@ -329,6 +350,47 @@ function Store.new(): Store
 		-- Devolve MESMO se `found.Tombstone == true` -- ver cabeçalho, "Primitiva de HISTÓRICO":
 		-- versões antigas continuam legíveis mesmo depois de um Remove.
 		return Value.DeepCopy(found.Value), toVersionInfo(record, found)
+	end
+
+	self.ListVersions = function(_self: Store, storeId: string, key: string): { VersionInfo }
+		local storeData = data[storeId]
+		if storeData == nil then
+			return {}
+		end
+		local record = storeData[key]
+		if record == nil then
+			return {}
+		end
+
+		-- `record.Versions` já está em ordem cronológica crescente (append-only, ver
+		-- `writeVersion`) -- nenhum `table.sort` necessário aqui; ordenar/inverter por
+		-- `sortDirection` é responsabilidade de quem chama (ver o tipo `ListVersions`, acima).
+		local result: { VersionInfo } = table.create(#record.Versions)
+		for index, version in record.Versions do
+			result[index] = toVersionInfo(record, version)
+		end
+		return result
+	end
+
+	self.ListKeys = function(_self: Store, storeId: string): { { Key: string, Current: VersionInfo } }
+		local storeData = data[storeId]
+		if storeData == nil then
+			return {}
+		end
+
+		-- Ordem alfabética determinística -- ver o tipo `ListKeys`, acima, para o porquê.
+		local keys: { string } = {}
+		for key in storeData do
+			table.insert(keys, key)
+		end
+		table.sort(keys)
+
+		local result: { { Key: string, Current: VersionInfo } } = table.create(#keys)
+		for index, key in keys do
+			local record = storeData[key]
+			result[index] = { Key = key, Current = toVersionInfo(record, currentVersionOf(record)) }
+		end
+		return result
 	end
 
 	return self

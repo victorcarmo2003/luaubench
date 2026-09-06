@@ -31,6 +31,11 @@
 	fábrica de `DataStoreService.luau` cria essas instâncias -- não há `Instance.new`/`Services.new`
 	alcançável para elas, `IsAbstract = true` nas três) -- por isso o erro em `storeIdOf` é de
 	ENGENHARIA INTERNA, em português.
+
+	task-services-019 (sub-leva B): `./DataStore.luau` (`GetVersionAsync`/`ListVersionsAsync`/
+	`ListKeysAsync`) é um SEGUNDO CONSUMIDOR deste módulo, além de `./DataStoreService.luau` -- por
+	isso o `return` no final deste arquivo agora também exporta `Store`/`StoreIdOf`/`KeyInfoOrNil`
+	(ver o comentário ali). Nenhuma linha de COMPORTAMENTO deste arquivo mudou nessa tarefa.
 ]]
 
 local Runtime = require("../../runtime")
@@ -262,11 +267,25 @@ local Methods: { [string]: unknown } = {
 	end,
 }
 
--- Módulo devolve `{ Methods, StoreIdState }` -- MAIS do que `Types.Behavior` declara, mesmo padrão
--- e mesma razão de `./DataStoreKeyInfo.luau` (ver o comentário lá): `behavior/Index.luau` faz
--- `require("./GlobalDataStore") :: Types.Behavior` (downcast seguro), `./DataStoreService.luau`
--- faz `require("./GlobalDataStore")` sem cast para alcançar `.StoreIdState`.
+-- Módulo devolve `{ Methods, StoreIdState, Store, StoreIdOf, KeyInfoOrNil }` -- MAIS do que
+-- `Types.Behavior` declara, mesmo padrão e mesma razão de `./DataStoreKeyInfo.luau` (ver o
+-- comentário lá): `behavior/Index.luau` faz `require("./GlobalDataStore") :: Types.Behavior`
+-- (downcast seguro), `./DataStoreService.luau` faz `require("./GlobalDataStore")` sem cast para
+-- alcançar `.StoreIdState`.
+--
+-- `Store`/`StoreIdOf`/`KeyInfoOrNil` ACRESCENTADOS em task-services-019 (sub-leva B:
+-- `GetVersionAsync`/`ListVersionsAsync`/`ListKeysAsync`, ver `./DataStore.luau`) -- ÚNICA mudança
+-- deste arquivo nessa tarefa (o resto acima é o já aprovado por task-018, intocado). Necessário
+-- porque `./DataStore.luau` precisa do MESMO `store` singleton (nunca um segundo `Store.new()` --
+-- ver cabeçalho, "STORE ÚNICO, MÓDULO-LOCAL": um segundo store seria invisível para
+-- `GetAsync`/`SetAsync`, quebrando a premissa "escreva com SetAsync, leia versão antiga com
+-- GetVersionAsync") e da MESMA disciplina de resolução de `_LuauBenchStoreId`/construção de
+-- `DataStoreKeyInfo` que este módulo já usa -- nunca uma segunda cópia dessas duas funções que
+-- pudesse divergir (ex.: uma mensagem de erro de engenharia diferente para o mesmo caso).
 return {
 	Methods = Methods,
 	StoreIdState = StoreIdState,
+	Store = store,
+	StoreIdOf = storeIdOf,
+	KeyInfoOrNil = keyInfoOrNil,
 }

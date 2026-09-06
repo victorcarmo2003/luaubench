@@ -343,5 +343,68 @@ test("dois Set consecutivos com a MESMA tabela Lua (por referência) não fazem 
 	assert((secondVersionValue :: { Coins: number }).Coins == 2, "a leitura da 2a versão deveria refletir o valor no momento do 2o Set")
 end)
 
+-- ================= ListVersions/ListKeys (task-services-019, sub-leva B) =================
+
+test("ListVersions de uma chave nunca escrita devolve {}", function()
+	local store = Store.new()
+	local versions = store:ListVersions("s", "never-written")
+	assert(#versions == 0, "ListVersions de chave inexistente deveria devolver lista vazia")
+end)
+
+test("ListVersions devolve TODO o histórico, em ordem cronológica crescente, INCLUSIVE tombstones", function()
+	local store = Store.new()
+	local v1 = store:Set("s", "k", "first")
+	local v2 = store:Set("s", "k", "second")
+	store:Remove("s", "k") -- cria uma 3a versão, tombstoned
+
+	local versions = store:ListVersions("s", "k")
+	assert(#versions == 3, `esperava 3 versões (2 Set + 1 Remove), achou {#versions}`)
+	assert(versions[1].Version == v1, "1a versão da lista deveria ser a mais ANTIGA (v1)")
+	assert(versions[2].Version == v2, "2a versão da lista deveria ser v2")
+	assert(versions[3].Tombstone == true, "3a versão (do Remove) deveria estar marcada Tombstone")
+end)
+
+test("ListVersions: mutar o retorno não afeta uma chamada seguinte (deep copy, mesma disciplina de Get/GetVersion)", function()
+	local store = Store.new()
+	store:Set("s", "k", { Coins = 1 })
+	local firstCall = store:ListVersions("s", "k")
+	local firstMetadata = firstCall[1].Metadata :: { [string]: unknown }
+	firstMetadata.Injected = true
+
+	local secondCall = store:ListVersions("s", "k")
+	assert(secondCall[1].Metadata.Injected == nil, "mutar o Metadata devolvido por ListVersions não deveria vazar para uma chamada seguinte")
+end)
+
+test("ListKeys de um storeId nunca usado devolve {}", function()
+	local store = Store.new()
+	local keys = store:ListKeys("never-used-store")
+	assert(#keys == 0, "ListKeys de storeId nunca usado deveria devolver lista vazia")
+end)
+
+test("ListKeys devolve todas as chaves do storeId, em ORDEM ALFABÉTICA, cada uma com sua versão CORRENTE", function()
+	local store = Store.new()
+	store:Set("s", "zebra", 1)
+	store:Set("s", "alpha", 2)
+	store:Set("s", "mike", 3)
+	store:Set("other-store", "should-not-appear", 4)
+
+	local keys = store:ListKeys("s")
+	assert(#keys == 3, `esperava 3 chaves em 's', achou {#keys}`)
+	assert(keys[1].Key == "alpha" and keys[2].Key == "mike" and keys[3].Key == "zebra", "ListKeys deveria devolver em ordem alfabética")
+	assert(keys[1].Current.Tombstone == false, "chave recém-escrita não deveria estar tombstoned")
+end)
+
+test("ListKeys INCLUI chave tombstoned (RemoveAsync) -- quem decide excluir é o CHAMADOR (excludeDeleted), não este módulo", function()
+	local store = Store.new()
+	store:Set("s", "removed", 1)
+	store:Remove("s", "removed")
+	store:Set("s", "alive", 2)
+
+	local keys = store:ListKeys("s")
+	assert(#keys == 2, "ListKeys deveria continuar listando a chave removida -- filtro é responsabilidade do chamador")
+	local removedEntry = if keys[1].Key == "removed" then keys[1] else keys[2]
+	assert(removedEntry.Current.Tombstone == true, "a entrada da chave removida deveria refletir Tombstone == true na versão corrente")
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)
