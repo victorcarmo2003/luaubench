@@ -9,17 +9,17 @@
 	`ThreadError` do Scheduler, nunca um `pcall` manual deste módulo), e a validação de tamanho de
 	mensagem (1 kB)/tópico (1-80 caracteres).
 
-	BLOQUEIO REPORTADO (ver cabeçalho de `./MessagingService.luau` e de `./Index.luau`):
-	`MessagingService` AINDA NÃO está em `tools/coverage.luau` nem em `generated/**` -- fora do
-	território desta tarefa (só `behavior/MessagingService.luau` + spec + `behavior/Index.luau`/
-	spec). Por isso este spec NÃO alcança a classe via `game:GetService("MessagingService")`
-	(erraria `[LuauBench] ... not simulated yet`, CORRETAMENTE) -- em vez disso, registra a classe
-	à mão via `ClassBuilder.Build` + `Runtime.ClassRegistry.Register`, MESMO padrão já estabelecido
-	em `../InstanceState.spec.luau`/`../init.spec.luau` para uma classe testada de ponta a ponta
-	sem depender de `generated/`. A `GeneratedClass` usada abaixo reflete o dump REAL desta classe
-	(.claude/agents-memory/pesquisa-http-messaging-2026-09-05.md, seção A: `Schema = {}`,
-	`MethodNames = { "PublishAsync", "SubscribeAsync" }`, `IsService = true`, `IsAbstract = true`
-	-- tag `NotCreatable`) -- não é uma classe fictícia inventada.
+	BLOQUEIO REPORTADO EM task-services-021, FECHADO EM task-services-022: `MessagingService`
+	ficou fora de `tools/coverage.luau`/`generated/**` até task-services-022 acrescentá-la ao
+	gerador (junto com `HttpService`, mesma tarefa, para não rodar o gerador duas vezes -- ver
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.2"/"L2.3"). Agora que
+	`generated/classes/MessagingService.luau` existe de verdade, este spec alcança a classe pelo
+	caminho REAL -- `Services.Register()` (que itera `generated/Index.luau` cruzado com
+	`behavior/Index.luau`, e já tinha a entrada `MessagingService` pronta desde task-services-021)
+	seguido de `game:GetService("MessagingService")` -- MESMO padrão de
+	`./DataStoreService.spec.luau`/`./HttpService.spec.luau`. Registrar a classe À MÃO aqui (como
+	este spec fazia antes de task-services-022) colidiria com esse registro real ("classe já
+	registrada em ClassRegistry").
 
 	Todo método (`PublishAsync`/`SubscribeAsync`) passa por `../AsyncCall.luau`
 	(`Context.GetScheduler():Wait(0)`) -- por isso toda chamada que deve SUCEDER até o fim roda
@@ -40,8 +40,6 @@
 
 local process = require("@lune/process")
 local Runtime = require("../../runtime")
-local Types = require("../Types")
-local ClassBuilder = require("../ClassBuilder")
 local Services = require("../")
 
 type Dynamic = { [string]: unknown }
@@ -57,33 +55,22 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
--- Ver cabeçalho, "BLOQUEIO REPORTADO": `MessagingService` construída à mão, refletindo o dump
--- real, e registrada diretamente em `Runtime.ClassRegistry` -- nunca via `generated/`.
-local MESSAGING_SERVICE_SCHEMA: Runtime.ClassSchema = {}
-table.freeze(MESSAGING_SERVICE_SCHEMA)
+-- Ver cabeçalho, "BLOQUEIO REPORTADO EM task-services-021, FECHADO EM task-services-022":
+-- `MessagingService` agora é registrada pelo caminho REAL (generated/Index.luau x
+-- behavior/Index.luau) -- registro à mão via ClassBuilder/ClassRegistry.Register, como este spec
+-- fazia antes desta tarefa, colidiria com este registro real.
+Services.Register()
 
-local messagingServiceGenerated: Types.GeneratedClass = {
-	ClassName = "MessagingService",
-	Superclass = "Instance",
-	IsService = true,
-	IsAbstract = true,
-	Schema = MESSAGING_SERVICE_SCHEMA,
-	MethodNames = { "PublishAsync", "SubscribeAsync" },
-}
-local MessagingServiceBehavior = require("./MessagingService") :: Types.Behavior
-Runtime.ClassRegistry.Register(ClassBuilder.Build(messagingServiceGenerated, MessagingServiceBehavior))
-
--- Idempotente -- registra as OUTRAS classes cobertas desta leva (harmless; `MessagingService` já
--- foi registrada acima, à mão, e `Services.Register()` nunca a toca -- ela não está em
--- `generated/Index.luau`, ver bloqueio reportado).
 local scheduler = Runtime.Scheduler.new()
 local game = Runtime.DataModel.new()
 Services.Bootstrap({ scheduler = scheduler, dataModel = game })
 
 -- Instância única, compartilhada pelo arquivo inteiro -- `MessagingService` é singleton de
 -- verdade (estado module-local em `./MessagingService.luau`, nunca por instância), mesma
--- disciplina de `dataStoreService` em `GlobalDataStore.spec.luau`.
-local messagingService = (Runtime.ClassRegistry.NewEngineInstance("MessagingService") :: unknown) :: Dynamic
+-- disciplina de `dataStoreService` em `GlobalDataStore.spec.luau`. Alcançada por
+-- `game:GetService`, o caminho que um script real usaria (`Runtime.ClassRegistry.
+-- NewEngineInstance` continua funcionando, mas deixou de ser necessário aqui).
+local messagingService = (game:GetService("MessagingService") :: unknown) :: Dynamic
 local publishAsync = messagingService.PublishAsync :: (self: Dynamic, topic: string, message: unknown) -> ()
 local subscribeAsync = messagingService.SubscribeAsync :: (self: Dynamic, topic: string, callback: (MessagePayload) -> ()) -> Runtime.Connection
 

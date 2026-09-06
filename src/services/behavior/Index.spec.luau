@@ -2,30 +2,31 @@
 
 --[[
 	Teste de task-services-003 para `src/services/behavior/Index.luau`, ATUALIZADO por
-	task-services-004, task-services-024, task-services-018, task-services-019, task-services-020
-	e task-services-021.
+	task-services-004, task-services-024, task-services-018, task-services-019, task-services-020,
+	task-services-021 e task-services-022.
 	O mapa deixou de estar vazio na retomada de task-services-003 (ver o cabeçalho de `Index.luau`,
 	seção "HISTÓRICO", para o porquê) com UMA entrada (`StarterPlayer`), ganhou mais DUAS em
 	task-services-004 (`RunService`/`Players`), mais UMA em task-services-024 (`Lighting`), mais
 	SEIS em task-services-018 (`DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo`/
 	`DataStoreOptions`/`DataStoreSetOptions`/`DataStoreIncrementOptions`), mais DUAS em
-	task-services-019 (`DataStore`/`Pages`), mais UMA em task-services-020 (`OrderedDataStore`) e
-	mais UMA em task-services-021 (`MessagingService`) -- 14 entradas ao todo. `Initialize`/
-	`Methods` de cada uma (cobertura de comportamento própria) é testado em
-	`./StarterPlayer.spec.luau`/`./RunService.spec.luau`/`./Players.spec.luau`/
-	`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/`./GlobalDataStore.spec.luau`/
-	`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/`./DataStoreSetOptions.spec.luau`/
-	`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/`./Pages.spec.luau`/
-	`./OrderedDataStore.spec.luau`/`./MessagingService.spec.luau`. Este arquivo cobre só a FORMA
-	do mapa (tipado corretamente, requerível, exatamente as entradas esperadas -- nem mais nem
-	menos) e que `Services.Register()` (src/services/init.luau) consegue iterar
-	`generated/Index.luau` cruzando com este mapa sem erro -- essa segunda parte já está coberta em
-	`../Integration.spec.luau` (24 classes registradas com sucesso, `StarterPlayer` nascendo com os
-	dois filhos fixos, e `RunService`/`Players` alcançáveis por `GetService`) e em
-	`../init.spec.luau`, não duplicada aqui. `MessagingService` (task-services-021) é a EXCEÇÃO
-	desta invariante -- ainda NÃO está em `generated/Index.luau` (bloqueio reportado, ver o
-	cabeçalho de `Index.luau` e de `./MessagingService.luau`), então a entrada fica pronta mas
-	inerte no laço de `Services.Register()` até uma tarefa futura de regeneração.
+	task-services-019 (`DataStore`/`Pages`), mais UMA em task-services-020 (`OrderedDataStore`),
+	mais UMA em task-services-021 (`MessagingService`) e mais UMA em task-services-022
+	(`HttpService`) -- 15 entradas ao todo. `Initialize`/`Methods` de cada uma (cobertura de
+	comportamento própria) é testado em `./StarterPlayer.spec.luau`/`./RunService.spec.luau`/
+	`./Players.spec.luau`/`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/
+	`./GlobalDataStore.spec.luau`/`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/
+	`./DataStoreSetOptions.spec.luau`/`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/
+	`./Pages.spec.luau`/`./OrderedDataStore.spec.luau`/`./MessagingService.spec.luau`/
+	`./HttpService.spec.luau`. Este arquivo cobre só a FORMA do mapa (tipado corretamente,
+	requerível, exatamente as entradas esperadas -- nem mais nem menos) e que
+	`Services.Register()` (src/services/init.luau) consegue iterar `generated/Index.luau` cruzando
+	com este mapa sem erro -- essa segunda parte já está coberta em `../Integration.spec.luau`
+	(24 classes registradas com sucesso, `StarterPlayer` nascendo com os dois filhos fixos, e
+	`RunService`/`Players` alcançáveis por `GetService`) e em `../init.spec.luau`, não duplicada
+	aqui. `MessagingService`/`HttpService` (task-services-022) FECHOU a exceção que existia desde
+	task-services-021 -- as duas já estão em `generated/Index.luau` (regeneradas nesta tarefa),
+	então `game:GetService("MessagingService")`/`game:GetService("HttpService")` funcionam de
+	verdade, sem exceção nenhuma a esta invariante.
 
 	Roda com `lune run src/services/behavior/Index.spec.luau`.
 ]]
@@ -43,12 +44,12 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
-test("behavior/Index.luau tem EXATAMENTE 14 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService", function()
+test("behavior/Index.luau tem EXATAMENTE 15 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService, HttpService", function()
 	local count = 0
 	for _ in BehaviorIndex do
 		count += 1
 	end
-	assert(count == 14, `esperava 14 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
+	assert(count == 15, `esperava 15 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
 end)
 
 test("behavior/Index.luau['StarterPlayer'] existe e tem Initialize; classes-contêiner puro continuam sem entrada", function()
@@ -145,6 +146,23 @@ test("behavior/Index.luau['MessagingService'] existe, tem Methods (PublishAsync/
 	assert(methods.PublishAsync ~= nil, "MessagingService.Methods.PublishAsync deveria existir")
 	assert(methods.SubscribeAsync ~= nil, "MessagingService.Methods.SubscribeAsync deveria existir")
 	assert(messagingServiceBehavior.Initialize == nil, "MessagingService não precisa de Initialize -- estado (assinaturas por tópico) é local de módulo, não por instância")
+end)
+
+test("behavior/Index.luau['HttpService'] existe, tem Methods (JSONEncode/JSONDecode/UrlEncode/GenerateGUID/GetAsync/PostAsync/RequestAsync) e NENHUM Initialize (task-services-022)", function()
+	local httpServiceBehavior = BehaviorIndex["HttpService"]
+	assert(httpServiceBehavior ~= nil, "HttpService deveria ter Behavior a partir de task-services-022")
+	assert(httpServiceBehavior.Methods ~= nil, "HttpService.Methods deveria existir")
+	local methods = httpServiceBehavior.Methods :: { [string]: unknown }
+	assert(methods.JSONEncode ~= nil, "HttpService.Methods.JSONEncode deveria existir")
+	assert(methods.JSONDecode ~= nil, "HttpService.Methods.JSONDecode deveria existir")
+	assert(methods.UrlEncode ~= nil, "HttpService.Methods.UrlEncode deveria existir")
+	assert(methods.GenerateGUID ~= nil, "HttpService.Methods.GenerateGUID deveria existir")
+	assert(methods.GetAsync ~= nil, "HttpService.Methods.GetAsync deveria existir")
+	assert(methods.PostAsync ~= nil, "HttpService.Methods.PostAsync deveria existir")
+	assert(methods.RequestAsync ~= nil, "HttpService.Methods.RequestAsync deveria existir")
+	assert(methods.GetSecret == nil, "HttpService.Methods NÃO deveria implementar GetSecret -- fica com o stub do ClassBuilder, de propósito")
+	assert(methods.CreateWebStreamClient == nil, "HttpService.Methods NÃO deveria implementar CreateWebStreamClient -- fica com o stub do ClassBuilder, de propósito")
+	assert(httpServiceBehavior.Initialize == nil, "HttpService não precisa de Initialize -- HttpEnabled já é semeado false/ReadOnly pelo schema gerado")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

@@ -2,7 +2,8 @@
 
 --[[
 	Teste da task-services-002 (leva 1), ESTENDIDO por task-services-017 (leva 2 -- as 16 classes
-	de DataStoreService entraram em tools/coverage.luau, ver L2.1.7): verifica os FATOS que
+	de DataStoreService entraram em tools/coverage.luau, ver L2.1.7) e por task-services-022
+	(`HttpService`/`MessagingService`, L2.2/L2.3): verifica os FATOS que
 	`lune run tools/generate-services` deve produzir em `src/services/generated/` -- não roda o
 	gerador (que baixa/lê o dump e pode demorar e depende de rede na ausência de cache), só
 	INSPECIONA a saída já commitada. Rode `lune run tools/generate-services` antes desta suíte
@@ -13,27 +14,33 @@
 	`CLOSED_NEVER_LEGITIMATE`/`COVERED_CLASSES` em `src/services/init.spec.luau`/
 	`Integration.spec.luau`.
 
-	Cobre os números exatos do acceptance de task-services-002 + task-services-017:
+	Cobre os números exatos do acceptance de task-services-002 + task-services-017 +
+	task-services-022:
 	- Manifest.luau com exatamente 916 entradas (as 916 classes do dump -- não muda entre levas)
-	- fecho de 40 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
+	- fecho de 42 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
 	  WorldRoot/Model/PVInstance/BasePlayerGui, puxadas por herança sem estarem listadas em
 	  coverage.luau) + as 16 de DataStoreService da leva 2 (task-services-017 -- todas listadas
 	  EXPLICITAMENTE em coverage.luau, nenhuma puxada por herança desta vez: L2.1.7 confirma que
-	  nenhuma tem superclasse fora da lista, exceto `Pages`, que já está listada)
+	  nenhuma tem superclasse fora da lista, exceto `Pages`, que já está listada) + as 2 de
+	  task-services-022 (`HttpService`/`MessagingService` -- as duas terminam em `Instance` direto
+	  no dump, nenhuma puxa classe nova pelo fecho de superclasses)
 	- exatamente 4 membros de schema excluídos pelo eixo Capabilities na leva 1 (Script.Source,
-	  ModuleScript.Source, RunService.Misprediction, RunService.FrameNumber) -- a leva 2 não
-	  acrescenta nenhuma exclusão nova (pesquisa-datastore-2026-09-05.md, seção A: "nenhum outro
-	  membro das 16 classes é filtrado por Security/Capabilities" fora de
-	  `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são `Property`, não afetam esta
-	  contagem de MÉTODOS -- ver teste dedicado abaixo)
-	- 171 métodos emitidos no total no fecho (143 da leva 1 + 28 das 16 classes de DataStoreService
-	  da leva 2 -- conferido por inspeção direta do `Index` gerado nesta tarefa)
+	  ModuleScript.Source, RunService.Misprediction, RunService.FrameNumber) -- nem a leva 2 nem
+	  task-services-022 acrescentam exclusão nova por este eixo (pesquisa-datastore-2026-09-05.md,
+	  seção A, e pesquisa-http-messaging-2026-09-05.md, seção A: `HttpService`/`MessagingService`
+	  não têm membro excluído por Capability -- `Network`/`ServerCommunication` são grantable)
+	  fora de `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são `Property`, não
+	  afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo)
+	- 182 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
+	  2 de `MessagingService`, task-services-022 -- conferido por inspeção direta do `Index`
+	  gerado nesta tarefa, e batendo com o relatório impresso pelo gerador: "182 mantidos")
 	- Lighting/Players/StarterPlayer com schema COMPLETO (nenhuma exclusão por Capability -- prova
 	  de que a regra ingênua "capability != Basic é restritiva" não foi implementada)
 	- RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema
 	- Generated.Schema vem sempre congelado (table.freeze)
 	- DataStoreService.AutomaticRetry/LegacyNamingScheme (LocalUserSecurity) ficam FORA do schema
 	  -- único filtro de Security/Capabilities que a leva 2 introduz (task-services-017)
+	- HttpService.HttpEnabled semeada Default=false/ReadOnly=true (task-services-022, L2.2.1)
 
 	Roda com `lune run tools/generate-services.spec.luau`.
 ]]
@@ -79,7 +86,7 @@ test("Manifest distingue classe não coberta (mas conhecida) de classe coberta",
 	assert(frameEntry.Covered == false, "Frame NÃO deveria estar coberto nesta leva")
 end)
 
-test("O fecho tem exatamente 40 classes (24 da leva 1 + 16 de DataStoreService da leva 2, task-services-017)", function()
+test("O fecho tem exatamente 42 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService, task-services-022)", function()
 	local expected = {
 		-- Leva 1 (task-services-002) -- 24 classes, 4 delas (WorldRoot/Model/PVInstance/
 		-- BasePlayerGui) puxadas por herança sem estarem em coverage.luau (ver prova abaixo).
@@ -94,13 +101,15 @@ test("O fecho tem exatamente 40 classes (24 da leva 1 + 16 de DataStoreService d
 		"DataStoreSetOptions", "DataStoreOptions", "DataStoreGetOptions", "DataStoreIncrementOptions",
 		"Pages", "DataStorePages", "DataStoreKeyPages", "DataStoreListingPages",
 		"DataStoreVersionPages", "DataStoreObjectVersionInfo", "DataStoreInfo",
+		-- task-services-022 (L2.2/L2.3) -- 2 classes, ambas terminam em "Instance" direto no dump.
+		"HttpService", "MessagingService",
 	}
 	local indexCount = 0
 	for _ in Index do
 		indexCount += 1
 	end
-	assert(#expected == 40, `sanity check da própria lista 'expected' deste teste -- deveria ter 40 nomes, tem {#expected}`)
-	assert(indexCount == 40, `Index deveria ter 40 classes, tem {indexCount}`)
+	assert(#expected == 42, `sanity check da própria lista 'expected' deste teste -- deveria ter 42 nomes, tem {#expected}`)
+	assert(indexCount == 42, `Index deveria ter 42 classes, tem {indexCount}`)
 	for _, name in expected do
 		assert(Index[name] ~= nil, `Index deveria conter "{name}"`)
 		assert(Manifest.Classes[name].Covered == true, `Manifest deveria marcar "{name}" como Covered`)
@@ -159,12 +168,29 @@ test("RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema (
 	end
 end)
 
-test("171 métodos emitidos no total no fecho (143 da leva 1 + 28 da leva 2, task-services-017)", function()
+test("182 métodos emitidos no total no fecho (171 até task-services-017 + 9 de HttpService + 2 de MessagingService, task-services-022)", function()
 	local total = 0
 	for _, generated in Index do
 		total += #generated.MethodNames
 	end
-	assert(total == 171, `esperava 171 métodos no total do fecho, contei {total}`)
+	assert(total == 182, `esperava 182 métodos no total do fecho, contei {total}`)
+end)
+
+test("HttpService.HttpEnabled semeada Default=false/ReadOnly=true pelo schema gerado (task-services-022, L2.2.1)", function()
+	local httpEnabled = Index["HttpService"].Schema["HttpEnabled"]
+	assert(httpEnabled ~= nil, "HttpService.HttpEnabled deveria estar no schema")
+	assert(httpEnabled.Kind == "Property", "HttpService.HttpEnabled deveria ser Kind=\"Property\"")
+	assert(httpEnabled.Default == false, `HttpService.HttpEnabled.Default deveria ser false, recebeu {tostring(httpEnabled.Default)}`)
+	assert(httpEnabled.ReadOnly == true, "HttpService.HttpEnabled deveria ser ReadOnly (Security.Write=LocalUserSecurity)")
+end)
+
+test("MessagingService não tem NENHUMA propriedade/evento no schema -- só PublishAsync/SubscribeAsync em MethodNames (task-services-022, L2.3)", function()
+	local schemaCount = 0
+	for _ in Index["MessagingService"].Schema do
+		schemaCount += 1
+	end
+	assert(schemaCount == 0, `MessagingService.Schema deveria estar vazio, tem {schemaCount} entradas`)
+	assert(#Index["MessagingService"].MethodNames == 2, "MessagingService.MethodNames deveria ter exatamente 2 métodos")
 end)
 
 test("Lighting/Players/StarterPlayer têm schema COMPLETO (zero exclusão pelo eixo Capabilities)", function()

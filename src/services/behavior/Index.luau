@@ -113,18 +113,31 @@
 
 	task-services-021 (`MessagingService` -- LER
 	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.3", e `./MessagingService.luau`,
-	cabeçalho, ANTES de mexer aqui) adiciona a última entrada desta leva:
+	cabeçalho, ANTES de mexer aqui) adiciona a entrada:
 	- `MessagingService` (ver `./MessagingService.luau`): `Methods` cobre `PublishAsync`/
 	  `SubscribeAsync` (a superfície INTEIRA da classe no dump -- nenhuma propriedade, nenhum
-	  evento). BLOQUEIO REPORTADO (fora do território desta tarefa, que é só
-	  `behavior/MessagingService.luau` + spec + este arquivo/spec): `MessagingService` AINDA NÃO
-	  está em `tools/coverage.luau` nem em `generated/**` -- esta entrada fica PRONTA MAS INERTE
-	  (o laço de `Services.Register()`, em `../init.luau`, itera só `generated/Index.luau`) até uma
-	  tarefa futura de regeneração criar `generated/classes/MessagingService.luau`. Até lá,
-	  `game:GetService("MessagingService")` continua com o erro `[LuauBench] ... not simulated by
-	  LuauBench yet` (correto e intencional, regra 03) -- `./MessagingService.spec.luau` testa o
-	  `Behavior` de ponta a ponta construindo a `GeneratedClass` real desta classe à mão (mesmo
-	  padrão de `../InstanceState.spec.luau`/`../init.spec.luau`), sem depender de `generated/`.
+	  evento). NA ÉPOCA de task-services-021, `MessagingService` ainda não estava em
+	  `tools/coverage.luau` nem em `generated/**` -- essa lacuna foi FECHADA por task-services-022
+	  (abaixo), que acrescentou a classe ao gerador. Esta entrada, que já existia pronta desde
+	  task-services-021, ficou automaticamente ATIVA nesse momento -- nenhuma mudança neste arquivo
+	  foi necessária para isso.
+
+	task-services-022 (`HttpService` sub-leva A + registro de `MessagingService` no gerador -- LER
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.2", e `./HttpService.luau`,
+	cabeçalho, ANTES de mexer aqui) fez DUAS coisas:
+	1. Acrescentou `HttpService`/`MessagingService` a `tools/coverage.luau` e rodou
+	   `lune run tools/generate-services` -- `generated/classes/MessagingService.luau` e
+	   `generated/classes/HttpService.luau` passaram a existir, e `game:GetService(...)` das duas
+	   classes deixou de errar `[LuauBench] ... not simulated by LuauBench yet` (o bloqueio
+	   reportado em task-services-021 está FECHADO).
+	2. Adicionou esta última entrada:
+	- `HttpService` (ver `./HttpService.luau`): `Methods` cobre `JSONEncode`/`JSONDecode`/
+	  `UrlEncode`/`GenerateGUID` (sem rede, funcionam com `HttpEnabled == false`) e
+	  `GetAsync`/`PostAsync`/`RequestAsync` (erram com a família "HTTP não habilitado" -- SEM
+	  REDE nesta sub-leva, `@lune/net` nunca é `require`d). `HttpEnabled` (Property) NÃO precisa de
+	  `Initialize` -- o schema gerado já semeia `false`/`ReadOnly` sozinho (ver cabeçalho de
+	  `./HttpService.luau`). `GetSecret`/`CreateWebStreamClient` ficam com o stub `[LuauBench]` do
+	  `ClassBuilder`, de propósito.
 
 	Todas as outras classes desta e das levas anteriores continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
@@ -148,6 +161,7 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	Pages = require("./Pages") :: Types.Behavior,
 	OrderedDataStore = require("./OrderedDataStore") :: Types.Behavior,
 	MessagingService = require("./MessagingService") :: Types.Behavior,
+	HttpService = require("./HttpService") :: Types.Behavior,
 }
 
 return BehaviorIndex
