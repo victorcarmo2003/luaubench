@@ -2649,7 +2649,7 @@
       "id": "task-cli-034",
       "title": "Testes de processo real em RunCommand.spec.luau sao instaveis (nao so http-audit)",
       "description": "Achado do revisor durante verificacao de estabilidade do fix de task-cli-030 (nao relacionado a esse fix). RunCommand.spec.luau, teste na linha ~245 (fixture run-e2e/http-audit, task-cli-026): rodando o spec 5 vezes seguidas, 3 falharam -- aparenta corrida entre o net.serve local que o proprio teste sobe e a requisicao HTTP feita pelo processo filho (lune run src/cli/main.luau run <fixture> ...). TERRITORIO: so src/cli/RunCommand.spec.luau (e possivelmente a fixture run-e2e/http-audit/). Investigar causa raiz (timing de start do servidor vs spawn do processo filho, porta fixa colidindo entre rodadas, falta de retry/wait) antes de corrigir -- nao adicionar sleep arbitrario sem entender a causa. ATUALIZACAO (revisor de task-cli-035): a instabilidade e mais AMPLA do que so o teste http-audit -- rodando a suite repetidas vezes, tambem foram observadas falhas esporadicas em testes de \"Processo real\" de persistencia (task-cli-030, PARTE 4), sugerindo que o problema pode ser mais geral (timing de spawn de processo filho no Windows, porta fixa colidindo entre rodadas paralelas de teste, falta de retry/wait apos process.exec) em vez de exclusivo do cenario de net.serve local do http-audit. Investigar se ha uma causa raiz COMUM a todos os testes de processo real antes de aplicar fix pontual so no http-audit.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 51,
@@ -2662,7 +2662,9 @@
       "acceptance": "lune run src/cli/RunCommand.spec.luau passa de forma estavel em pelo menos 20 execucoes consecutivas (nao so 10) -- incluindo os testes de http-audit E os de persistencia (task-cli-030 PARTE 4). Causa raiz da instabilidade documentada no codigo/relatorio (comum ou especifica por teste). --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "result": "Causa raiz 1 (corrigida): recursos fixos compartilhados (porta 47210 do net.serve de http-audit; SCRATCH_ROOT fixo da PARTE 3/4 de persistencia) colidiam sob execucao CONCORRENTE (nao so serial) do spec -- explica a instabilidade mais ampla achada por task-cli-035. Fix: PROCESS_UNIQUE_SUFFIX (math.random, distinto por processo) gera SCRATCH_ROOT unico; porta do http-audit escolhida dinamicamente (25 candidatas aleatorias 40000-59999) com retry via pcall. Causa raiz 2 (achada, NAO corrigida, fora do territorio cli): HttpService:GetAsync falha esporadica (~1/40 reproduzido pelo revisor) com erro que ESCAPA do pipeline normal de formatacao/contagem (stack cru vazando de HttpService.luau/Sandbox.luau, sumario falso \"0 error(s)\", exit 0). Registrada como task-services-034 para coder-services/coder-runtime.",
+      "reviewResult": "APROVADO (revisor-cli, 2026-09-06). Reproduzido de forma independente: 15/15 serial, 10/10 instancias concorrentes reais (4+6), PROCESS_UNIQUE_SUFFIX confirmado unico entre processos (4 valores distintos capturados), porta dinamica com retry confirmada em codigo (47210 sobrevive so como referencia documental no fixture estatico, nao mais executado direto). Achado 2 reproduzido de forma independente com script proprio do revisor (1/40). Retry do teste nao mascara regressao sistemica (assert final falharia mesmo com GetAsync sempre quebrado). --strict/zero any confirmado. Territorio limpo: so os 2 arquivos alegados, RunCommand.luau intocado. Suite completa de src/cli/ (16 arquivos) zero regressao. Ressalva menor nao-bloqueante: unicidade de PROCESS_UNIQUE_SUFFIX e probabilistica (math.random sem seed explicito, colisao ~1/900000 por par), validada empiricamente sem colisao observada."
     },
     {
       "id": "task-runtime-038",
@@ -2705,6 +2707,26 @@
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06",
       "reviewResult": "APROVADO. Revisor confirmou 258/258 no restante da suite e bindtoclose-overlap estavel em 21 rodadas (100%). Reproduziu antes/depois de forma real via git stash: com o fix, --timeout 0.1 produz 1 error(s) em 3 execucoes; revertendo so RunCommand.luau, reproduz 2 error(s) em 3 execucoes -- prova concreta, nao alegacao. Confirmou parseBindToCloseThreadError fora de qualquer hunk do diff (so a conexao do callback mudou, formatacao identica). Regressoes confirmadas: bindtoclose (0 erros), bindtoclose-error isolado (1 erro), erro normal de script sem BindToClose (1 erro). Contrato com DataModel.RunBindToCloseCallbacks confirmado batendo exatamente com task-runtime-038, sem gambiarra de tipo. --strict, zero any real, territorio limpo. 2 achados nao bloqueantes: (1) flakiness de testes de processo real e mais ampla que so http-audit (tambem viu 2 falhas em testes de persistencia, task-cli-030 PARTE 4) -- escopo de task-cli-034 ampliado; (2) 1 diagnostico pre-existente do luau-lsp em RunCommand.luau:470, fora do diff desta task, ja existia antes. Relatorio: .claude/agents-memory/revisor-cli-task-cli-035-2026-09-06.md"
+    },
+    {
+      "id": "task-services-034",
+      "title": "HttpService:GetAsync falha esporadica com erro que escapa do pipeline de contagem",
+      "description": "Achado do revisor de task-cli-034 (nao relacionado ao fix daquela task; reproduzido de forma independente, ~1/40 execucoes tanto pelo coder quanto pelo revisor, sem concorrencia envolvida -- nao e o mesmo bug de porta/scratch). HttpService:GetAsync falha intermitentemente (~5-20%/tentativa, taxa exata nao determinada) com mensagem \"the request could not be completed\" (ou similar) vinda de @lune/net. O problema real nao e a falha em si (rede real pode falhar), mas que NESSA condicao especifica o erro ESCAPA do pipeline normal de formatacao/contagem de RunCommand: sai como stack trace cru do Lune (visto vazando de HttpService.luau:1353 e Sandbox.luau:549 em vez de passar por OutputFormatter), o sumario final mente \"0 error(s)\", e o processo termina com exit 0 mesmo tendo havido erro real. Investigar por que esse caminho de erro especifico nao esta sendo capturado pelo mecanismo normal de ThreadError/pcall que os demais erros de script usam -- pode ser um pcall faltando em HttpService.luau ao redor da chamada net.request, ou um erro lancado fora do coroutine que Sandbox.luau monitora. TERRITORIO: provavelmente src/services/behavior/HttpService.luau (pcall ausente/incorreto ao redor de net.request) -- se a investigacao mostrar que a causa e em como Sandbox.luau/scheduler captura ThreadError para esse tipo de erro assincrono, precisa virar tarefa cross-territorio (avisar antes de expandir para runtime). NAO mascarar com retry no codigo de producao -- o objetivo e o erro aparecer corretamente formatado e contado, nao desaparecer nem ser escondido.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 52,
+      "tags": [
+        "services",
+        "http",
+        "bug",
+        "error-handling"
+      ],
+      "priority": "medium",
+      "acceptance": "Reproduzir a falha esporadica de GetAsync isoladamente (script de teste que repete a chamada N vezes ate reproduzir). Apos o fix: quando a falha ocorre, o erro passa pelo pipeline normal (OutputFormatter, contagem correta de erros no sumario, exit code != 0 quando aplicavel) em vez de vazar stack cru. --strict sem any. Documentar no relatorio se a causa raiz era em services ou cruzava para runtime.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
     }
   ]
 }

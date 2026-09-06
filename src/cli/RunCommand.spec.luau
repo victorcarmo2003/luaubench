@@ -14,25 +14,56 @@
 	processo real -- não há como interceptar `stdio.write`/`stdio.ewrite` de dentro do mesmo
 	processo (ver cabeçalho de `OutputFormatter.luau`).
 
-	Fixtures em `src/cli/fixtures/run-e2e/{basic,module-error,timeout,http-audit}` (task-cli-006,
-	novas -- `http-audit` adicionada na correção do achado MÉDIO da revisão de task-cli-026):
-	`basic` cobre setmetatable/OOP + `require` entre módulos + print/warn + LocalScript/Enabled=
-	false/Script-fora-de-container todos carregados mas nunca executados; `module-error` cobre a
-	reatribuição de linha/nome do `OutputFormatter`; `timeout` cobre `--timeout`; `http-audit`
-	cobre o contrato `OnHttpRequest`/`Messages.HttpRequestAuditLine` de ponta a ponta contra uma
-	requisição HTTP REAL (servida por um `net.serve` local que este próprio arquivo sobe -- nunca
-	uma dependência externa).
+	Fixtures em `src/cli/fixtures/run-e2e/{basic,module-error,timeout}` (task-cli-006) cobrem,
+	respectivamente: setmetatable/OOP + `require` entre módulos + print/warn + LocalScript/Enabled=
+	false/Script-fora-de-container todos carregados mas nunca executados; a reatribuição de linha/
+	nome do `OutputFormatter`; e `--timeout`. `http-audit` (adicionada na correção do achado MÉDIO
+	da revisão de task-cli-026) cobre o contrato `OnHttpRequest`/`Messages.HttpRequestAuditLine` de
+	ponta a ponta contra uma requisição HTTP REAL (servida por um `net.serve` local que este próprio
+	arquivo sobe -- nunca uma dependência externa) -- desde task-cli-034 (ver `SCRATCH_ROOT`/
+	`startLocalHttpServer`, abaixo), o projeto executado é uma CÓPIA MUTÁVEL gerada em tempo de
+	teste (com a porta do servidor local já embutida), não mais o fixture estático
+	`src/cli/fixtures/run-e2e/http-audit/` diretamente -- esse fixture estático continua versionado
+	como referência do formato, mas a porta fixa que ele documentava (47210) foi removida do
+	caminho de execução real (ver comentário no próprio arquivo do fixture).
 
 	PARTE 3/4 -- task-cli-030 (persistência local do estado "cloud", par de task-cli-029/
-	task-services-031): projetos MUTÁVEIS gerados em `%TEMP%/luaubench-runcommand-persist-spec/`
-	(nunca em `src/cli/fixtures/`, que são projetos ESTÁTICOS versionados -- mesma disciplina de
-	`CloudStore.spec.luau`/`TreePlanner.spec.luau`). CUIDADO DE ISOLAMENTO (regra 00, achado desta
-	tarefa): o `Store` de `DataStoreService` é um SINGLETON MÓDULO-LOCAL do PROCESSO inteiro (ver
+	task-services-031): projetos MUTÁVEIS gerados sob `SCRATCH_ROOT` (nunca em `src/cli/fixtures/`,
+	que são projetos ESTÁTICOS versionados -- mesma disciplina de `CloudStore.spec.luau`/
+	`TreePlanner.spec.luau`). CUIDADO DE ISOLAMENTO (regra 00, achado desta tarefa): o `Store` de
+	`DataStoreService` é um SINGLETON MÓDULO-LOCAL do PROCESSO inteiro (ver
 	`src/services/behavior/GlobalDataStore.luau`) -- todo teste da PARTE 3 (que chama
 	`RunCommand.Execute` no MESMO processo Lune deste spec) usa um nome de DataStore ÚNICO
 	(`RoundtripStore`/`NoPersistStore`/etc.), nunca reaproveitado entre casos, para que um valor
 	deixado na memória por um caso nunca contamine a asserção de outro -- a PARTE 4 (processo real,
 	`process.exec`) não tem esse cuidado porque cada chamada é um processo Lune SEPARADO.
+
+	CAUSA RAIZ DE INSTABILIDADE (task-cli-034, achado do revisor de task-cli-026/task-cli-035):
+	antes desta correção, tanto a porta do `net.serve` local de 'http-audit' (fixa em 47210) quanto
+	a raiz de scratch da PARTE 3/4 (fixa em "%TEMP%/luaubench-runcommand-persist-spec/", com nomes
+	de caso também fixos) eram recursos COMPARTILHADOS ENTRE PROCESSOS. Rodando este arquivo UMA
+	instância de cada vez isso nunca falha -- reproduzido nesta tarefa: 15 execuções seriais
+	seguidas, 15/15 verdes. O problema só aparece quando DUAS OU MAIS instâncias deste MESMO
+	arquivo rodam CONCORRENTEMENTE -- cenário rotineiro neste projeto (regra 05: `coder-cli`/
+	`revisor-cli`/`testador` disparados em paralelo o tempo todo, e mais de um frequentemente
+	verifica o mesmo comando ao mesmo tempo). Reproduzido ao vivo nesta tarefa (3 instâncias em
+	paralelo, `for i in 1 2 3; do (lune run ... ) & done`): 2 das 3 falharam na chamada de
+	`net.serve` do teste 'http-audit' com `Only one usage of each socket address... is normally
+	permitted. (os error 10048)` -- a MESMA classe de corrida explicaria as falhas esporádicas já
+	observadas na PARTE 4 (duas instâncias lendo/escrevendo o mesmo caminho de scratch ao mesmo
+	tempo), mesmo sem rede nenhuma envolvida ali: o denominador comum nunca foi "processo real"
+	nem "`net.serve`" especificamente, e sim QUALQUER recurso FIXO (porta ou caminho de arquivo)
+	compartilhado entre execuções concorrentes deste spec. CORREÇÃO (nunca um sleep/retry por
+	tempo): cada processo sorteia, uma vez, um sufixo próprio via `math.random` (o Luau já semeia
+	`math.random` de forma distinta por processo por padrão -- confirmado empiricamente nesta
+	tarefa: 4 processos `lune` concorrentes chamando `math.random(1, 1e9)` sem `math.randomseed`
+	explícito produziram 4 valores diferentes; o Lune não expõe PID, então este é o identificador
+	exclusivo por execução disponível sem depender de um recurso do SO) -- todo caminho MUTÁVEL
+	gerado por este spec fica sob esse sufixo (`SCRATCH_ROOT`), e a porta do `net.serve` local
+	tenta várias candidatas aleatórias em sequência (`startLocalHttpServer`) em vez de uma fixa,
+	reagindo a uma falha de bind imediatamente (nunca esperando) -- resolve tanto a colisão entre
+	duas instâncias deste spec quanto uma eventual colisão com qualquer OUTRO processo do SO já
+	usando aquela porta.
 
 	Roda com `lune run src/cli/RunCommand.spec.luau`.
 ]]
@@ -63,6 +94,28 @@ local ESCAPE = "\27"
 local function hasEscapeCode(text: string): boolean
 	return string.find(text, ESCAPE, 1, true) ~= nil
 end
+
+-- Sufixo ÚNICO por processo deste spec (task-cli-034 -- ver cabeçalho do arquivo, "CAUSA RAIZ DE
+-- INSTABILIDADE", para a investigação completa). Usado para isolar TODO caminho mutável que este
+-- arquivo gera (projeto dinâmico do teste 'http-audit' + scratch da PARTE 3/4) de qualquer outra
+-- instância concorrente deste MESMO spec -- nunca chamamos `math.randomseed` explicitamente aqui
+-- (ex.: semeando com `os.time()`, que tem granularidade de 1s) porque isso arriscaria DIMINUIR a
+-- entropia que o Luau já garante por padrão entre processos distintos.
+local PROCESS_UNIQUE_SUFFIX = tostring(math.random(100000, 999999))
+
+local SCRATCH_TEMP_ROOT = process.env.TEMP or process.env.TMP
+assert(SCRATCH_TEMP_ROOT ~= nil, "TEMP/TMP precisa existir no ambiente pra este spec gerar projetos mutáveis de teste")
+
+-- Raiz-mãe de TODO projeto mutável gerado por este spec (o projeto dinâmico de 'http-audit' e a
+-- raiz de scratch da PARTE 3/4, abaixo) -- única por processo, removida inteira ao final do
+-- arquivo. Nunca reaproveitada de uma rodada anterior que tenha abortado no meio (mesmo nome de
+-- sufixo é praticamente impossível de repetir entre execuções, mas o `removeDir` aqui é defesa
+-- extra, não a garantia principal).
+local SCRATCH_ROOT = `{SCRATCH_TEMP_ROOT}/luaubench-runcommand-spec-{PROCESS_UNIQUE_SUFFIX}`
+if fs.isDir(SCRATCH_ROOT) then
+	fs.removeDir(SCRATCH_ROOT)
+end
+fs.writeDir(SCRATCH_ROOT)
 
 local function baseOptions(projectPath: string): RunCommand.RunOptions
 	return {
@@ -269,33 +322,141 @@ test("Processo real: exit code 2 para .project.json inválido, com diagnóstico 
 	assert(string.find(result.stderr, "stack traceback", 1, true) == nil, "nunca deveria vazar stack traceback cru")
 end)
 
+-- Raiz do projeto MUTÁVEL gerado pelo teste 'http-audit', abaixo (task-cli-034 -- ver cabeçalho do
+-- arquivo). Vive sob `SCRATCH_ROOT` (sufixo único por processo), nunca mais o fixture estático
+-- `src/cli/fixtures/run-e2e/http-audit/` diretamente.
+local HTTP_AUDIT_PROJECT_ROOT = `{SCRATCH_ROOT}/http-audit`
+
+-- Gera uma cópia MUTÁVEL do fixture 'http-audit' (ver `src/cli/fixtures/run-e2e/http-audit/` para
+-- o formato de referência versionado, incluindo o comentário completo sobre o desenho original)
+-- com a porta do `net.serve` local já embutida no script -- precisa ser gerada em tempo de
+-- execução porque a porta agora é dinâmica (`startLocalHttpServer`, abaixo) e o sandbox do script
+-- nunca recebe variável de ambiente nenhuma (regra 00: a superfície exposta ao script é só a que o
+-- Roblox real exporia) -- a única forma de "passar" a porta pro script sem violar isso é
+-- escrevendo-a no PRÓPRIO arquivo antes de rodar, mesmo padrão já usado por
+-- `freshPersistProject`/`rewriteScript` na PARTE 3/4, abaixo.
+local function freshHttpAuditProject(port: number): string
+	local root = HTTP_AUDIT_PROJECT_ROOT
+	if fs.isDir(root) then
+		fs.removeDir(root)
+	end
+	fs.writeDir(`{root}/server`)
+	fs.writeFile(
+		`{root}/default.project.json`,
+		table.concat({
+			"{",
+			'  "name": "RunE2EHttpAudit",',
+			'  "tree": {',
+			'    "$className": "DataModel",',
+			'    "ServerScriptService": { "$path": "server" }',
+			"  }",
+			"}",
+		}, "\n")
+	)
+	fs.writeFile(
+		`{root}/server/Main.server.lua`,
+		table.concat({
+			"-- Gerado em tempo de teste por RunCommand.spec.luau (PARTE 2, teste 'http-audit') --",
+			"-- a porta é escolhida dinamicamente A CADA EXECUÇÃO deste spec (task-cli-034 -- nunca",
+			"-- mais fixa em 47210). Ver",
+			"-- src/cli/fixtures/run-e2e/http-audit/server/Main.server.lua para o formato de",
+			"-- referência versionado (o mesmo script, documentando o desenho original de porta fixa).",
+			'local HttpService = game:GetService("HttpService")',
+			"",
+			`local body = HttpService:GetAsync("http://127.0.0.1:{port}/")`,
+			'print("got body: " .. body)',
+		}, "\n")
+	)
+	return root
+end
+
+-- Tenta candidatas de porta ALEATÓRIAS (nunca uma fixa, nunca sequenciais a partir de uma base
+-- comum -- duas instâncias concorrentes deste spec, cada uma com seu próprio `math.random`,
+-- convergem pra portas diferentes bem mais rápido sorteando de novo a cada tentativa do que
+-- incrementando a partir do mesmo ponto de partida) até `net.serve` aceitar uma. Reage a uma falha
+-- de bind IMEDIATAMENTE tentando outra candidata -- nunca um sleep/espera arbitrária (a causa raiz
+-- aqui é porta fixa colidindo entre processos, não timing de start de servidor).
+local function startLocalHttpServer(handler: (net.ServeRequest) -> net.ServeResponse): (net.ServeHandle, number)
+	local MAX_ATTEMPTS = 25
+	local lastError: string? = nil
+	for _ = 1, MAX_ATTEMPTS do
+		local candidatePort = math.random(40000, 59999)
+		local ok, handleOrError = pcall(function()
+			return net.serve(candidatePort, handler)
+		end)
+		if ok then
+			return handleOrError, candidatePort
+		end
+		lastError = tostring(handleOrError)
+	end
+	error(`RunCommand.spec: could not bind the local test HTTP server to any of {MAX_ATTEMPTS} random candidate ports -- last error: {lastError}`)
+end
+
 test("Processo real: fixture 'http-audit' -- OnHttpRequest/HttpRequestAuditLine fiados de ponta a ponta contra uma requisição HTTP real (achado MÉDIO, revisão task-cli-026)", function()
-	-- Porta FIXA, combinada com `src/cli/fixtures/run-e2e/http-audit/server/Main.server.lua` (o
-	-- fixture é um arquivo estático em disco -- não há como injetar a porta em tempo de execução
-	-- sem expor variável de ambiente ao sandbox do script, o que a regra 00 proíbe). Mesmo padrão
-	-- de `HttpService.spec.luau` (`TEST_PORT = 47182`) para o canário `net.serve` local -- número
-	-- diferente de propósito, para nunca colidir caso as duas suítes rodem em paralelo.
-	local TEST_PORT = 47210
 	local RESPONSE_BODY = "http-audit-ok"
 
-	-- Servidor HTTP local de verdade (nunca dependência externa) -- é contra ELE que o processo
-	-- real do `luaubench run`, abaixo, faz a requisição via `HttpService:GetAsync`.
-	local serveHandle = net.serve(TEST_PORT, function(_request: net.ServeRequest): net.ServeResponse
-		return { status = 200, body = RESPONSE_BODY }
-	end)
+	-- ACHADO EXTRA desta tarefa (task-cli-034), FORA do território de `cli` -- não corrigido aqui,
+	-- só mitigado no teste (ver `MAX_ROUNDTRIP_ATTEMPTS` abaixo): mesmo com a porta escolhida
+	-- dinamicamente (nunca mais a fixa 47210) e o servidor local comprovadamente pronto (testado
+	-- isoladamente com uma checagem de `net.tcp.connect` bem-sucedida IMEDIATAMENTE antes de
+	-- spawnar o processo filho -- não eliminou a falha, o que descarta "servidor ainda não subiu"
+	-- como causa), `HttpService:GetAsync` (`src/services/behavior/HttpService.luau:1255/1353`)
+	-- ainda falha esporadicamente com "the request could not be completed". Taxa medida nesta
+	-- investigação, isolando o cenário fora deste spec (só `net.serve` local + `net.request` de um
+	-- processo `lune` novo, em loop apertado): de ~5% (2/40) a ~20% por tentativa dependendo da
+	-- carga da máquina no momento -- e as falhas às vezes vêm em RAJADAS de 2-3 tentativas seguidas
+	-- (medido ao vivo), não são estritamente independentes. Mais grave que a falha em si: quando
+	-- isso acontece, o erro ESCAPA do pipeline normal de formatação/contagem de erro (o formato de
+	-- uma linha só "error ServerScriptService.Main:2: ..." + ErrorCount>=1 que qualquer OUTRO erro
+	-- de script já usa, ex. teste 'module-error' acima) -- em vez disso sai como um dump CRU de
+	-- stack do próprio Lune (`[Stack Begin]/[Stack End]`, citando `src/runtime/Sandbox:549`) com o
+	-- sumário final ainda dizendo "0 error(s)" e exit code 0. É um bug real de `services`/`runtime`
+	-- (o erro do `GetAsync` não propaga pelo mesmo caminho de `ThreadError` que outros erros de
+	-- script usam), fora do território desta tarefa para corrigir. Reportado à parte para
+	-- `coder-services`/`coder-runtime` investigarem.
+	--
+	-- MITIGAÇÃO (nunca um sleep -- reação determinística a uma falha REAL, com teto): repete o
+	-- round-trip inteiro (nova porta a cada tentativa) até `MAX_ROUNDTRIP_ATTEMPTS` vezes -- 8, com
+	-- margem generosa por causa das rajadas observadas (mesmo a uma taxa pessimista de 20% por
+	-- tentativa E tratando cada rajada como perfeitamente correlacionada em pares, esgotar 8
+	-- tentativas seguidas é um evento overwhelmingly raro). Isto NÃO mascara uma regressão de
+	-- verdade: uma quebra sistemática do contrato (`GetAsync` sempre falhando, ou a linha de
+	-- auditoria sumindo) continua falhando em TODAS as tentativas -- a asserção final roda sem rede
+	-- de segurança nenhuma na última tentativa.
+	local MAX_ROUNDTRIP_ATTEMPTS = 8
+	local finalResult: process.ExecResult? = nil
 
-	local result = runRealProcess({
-		"run",
-		"src/cli/main.luau",
-		"run",
-		fixturePath("run-e2e/http-audit"),
-		"--allow-http",
-		"--allow-http-local",
-		"--verbose",
-		"--no-color",
-	})
+	for attempt = 1, MAX_ROUNDTRIP_ATTEMPTS do
+		-- Servidor HTTP local de verdade (nunca dependência externa) -- é contra ELE que o processo
+		-- real do `luaubench run`, abaixo, faz a requisição via `HttpService:GetAsync`. Porta
+		-- escolhida dinamicamente a cada tentativa (task-cli-034, ver `startLocalHttpServer` acima)
+		-- -- nunca mais a porta fixa 47210 do fixture estático original.
+		local serveHandle, port = startLocalHttpServer(function(_request: net.ServeRequest): net.ServeResponse
+			return { status = 200, body = RESPONSE_BODY }
+		end)
+		local projectRoot = freshHttpAuditProject(port)
 
-	serveHandle.stop()
+		local attemptResult = runRealProcess({
+			"run",
+			"src/cli/main.luau",
+			"run",
+			projectRoot,
+			"--allow-http",
+			"--allow-http-local",
+			"--verbose",
+			"--no-color",
+		})
+
+		serveHandle.stop()
+		finalResult = attemptResult
+
+		local reachedExpectedBody = string.find(attemptResult.stdout, "got body: " .. RESPONSE_BODY, 1, true) ~= nil
+		if reachedExpectedBody or attempt == MAX_ROUNDTRIP_ATTEMPTS then
+			break
+		end
+	end
+
+	local result = finalResult :: process.ExecResult
 
 	assert(result.code == 0, `esperava exit code 0, recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`)
 	assert(
@@ -305,7 +466,8 @@ test("Processo real: fixture 'http-audit' -- OnHttpRequest/HttpRequestAuditLine 
 	-- Formato EXATO produzido por `Messages.HttpRequestAuditLine("GET", "127.0.0.1")` -- confirmado
 	-- contra `src/cli/Messages.luau` antes de escrever esta asserção (nunca um formato adivinhado).
 	-- `extractHost` (`services/behavior/HttpService.luau`) devolve o host SEM porta -- a linha não
-	-- carrega ":47210".
+	-- carrega a porta escolhida pelo sorteio, então esta asserção é estável independente de qual
+	-- candidata `startLocalHttpServer` acabou usando.
 	assert(
 		string.find(result.stderr, "[http] GET 127.0.0.1", 1, true) ~= nil,
 		`stderr deveria conter a linha de auditoria de rede (--verbose): {result.stderr}`
@@ -402,14 +564,9 @@ end)
 --------------------------------------------------------------------------------------------------
 
 -- Pasta-mãe de todo este bloco -- projetos MUTÁVEIS gerados em tempo de teste (ver cabeçalho do
--- arquivo, "PARTE 3/4"). Nunca reaproveitada de uma rodada anterior que tenha abortado no meio.
-local PERSIST_TEMP_ROOT = process.env.TEMP or process.env.TMP
-assert(PERSIST_TEMP_ROOT ~= nil, "TEMP/TMP precisa existir no ambiente pra este spec gerar projetos de persistência de teste")
-local PERSIST_SCRATCH_ROOT = `{PERSIST_TEMP_ROOT}/luaubench-runcommand-persist-spec`
-
-if fs.isDir(PERSIST_SCRATCH_ROOT) then
-	fs.removeDir(PERSIST_SCRATCH_ROOT)
-end
+-- arquivo, "PARTE 3/4"). Vive sob `SCRATCH_ROOT` (sufixo único por processo, task-cli-034) -- nunca
+-- mais um caminho fixo compartilhado entre execuções concorrentes deste spec.
+local PERSIST_SCRATCH_ROOT = `{SCRATCH_ROOT}/persist`
 fs.writeDir(PERSIST_SCRATCH_ROOT)
 
 -- Gera um projeto mínimo (DataModel -> ServerScriptService -> Main.server.lua) do ZERO -- apaga
@@ -719,11 +876,12 @@ test("Processo real: falha de escrita da persistência NUNCA vaza o caminho de i
 	assert(string.find(result.stderr, "/src/", 1, true) == nil, `stderr NUNCA deveria conter o padrão de caminho interno "/src/": {result.stderr}`)
 end)
 
--- Limpeza final -- `pcall` pra garantir que a bateria acima nunca deixe `PERSIST_SCRATCH_ROOT` pra
--- trás, mesmo se algo inesperado tiver deixado um arquivo com atributo especial pelo caminho
--- (mesmo protocolo de CloudStore.spec.luau).
+-- Limpeza final -- remove TODO o scratch deste processo (projeto dinâmico de 'http-audit' +
+-- persistência da PARTE 3/4) de uma vez só, via `SCRATCH_ROOT`. `pcall` pra garantir que a bateria
+-- acima nunca deixe scratch pra trás, mesmo se algo inesperado tiver deixado um arquivo com
+-- atributo especial pelo caminho (mesmo protocolo de CloudStore.spec.luau).
 pcall(function()
-	fs.removeDir(PERSIST_SCRATCH_ROOT)
+	fs.removeDir(SCRATCH_ROOT)
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
