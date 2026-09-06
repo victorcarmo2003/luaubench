@@ -71,6 +71,35 @@
 	Roblox (inglês, sem prefixo `[LuauBench]` -- este erro TEM contraparte real, só a string exata
 	não está confirmada por citação viva, mesma disciplina de `../datastore/Value.luau`).
 
+	## AUDITORIA -- `OnMessagePublished`, task-services-032 (SEM PERSISTÊNCIA -- decisão do
+	## arquiteto)
+
+	LER `.claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md`, seção 7, INTEIRA antes
+	de mexer nesta seção. Resumo: `MessagingService` NÃO ganha persistência nenhuma entre execuções
+	do `luaubench run` -- e isso é FIDELIDADE, não economia de escopo. No Roblox real o pub/sub é
+	efêmero: `PublishAsync` entrega só a quem já está inscrito NAQUELE MOMENTO, não existe mensagem
+	pendente, fila nem backlog. Persistir "mensagens pendentes" inventaria um comportamento que a
+	classe real NÃO TEM dentro do namespace da classe real -- proibido pela regra 00, invariante 1.
+
+	O que serve a intenção de observabilidade sem mentir sobre o comportamento real é um canal de
+	AUDITORIA, MESMO padrão exato já usado por `HttpService.luau`/`Context.NotifyHttpRequest`
+	(`OnHttpRequest`, task-services-026/task-cli-026): `Context.NotifyMessagePublished(topic,
+	byteSize)`, chamada UMA VEZ por `PublishAsync` bem-sucedido -- DEPOIS que `assertValidTopic`/
+	`assertValidMessage` já deixaram passar (uma publicação que ERRA na validação nunca chega a
+	chamar isto -- nada foi publicado de verdade, nada para auditar), e ANTES do `AsyncCall.Yield`
+	-- mesma posição relativa que `auditOutgoingRequest` ocupa em `HttpService.luau` (validação ->
+	auditoria -> yield -> efeito de verdade).
+
+	`byteSize` é o MESMO valor que `assertValidMessage` já calculou via `Value.EstimateByteSize`
+	para decidir se a mensagem passa do limite de 1024 bytes -- `assertValidMessage` passou a
+	DEVOLVER esse número (em vez de `()`) para que a auditoria reaproveite a MESMA medição, nunca
+	recalculando-a uma segunda vez.
+
+	NUNCA o corpo da mensagem: `topic`/`byteSize` são os dois ÚNICOS parâmetros -- mesma disciplina
+	de `OnHttpRequest` nunca logar corpo/headers (regra 00/07, dado do usuário não sai do LuauBench
+	por um canal que o script não pediu). `Types.BootstrapOptions.OnMessagePublished` é `nil` por
+	padrão -- `Context.NotifyMessagePublished` vira NO-OP nesse caso, nunca erro.
+
 	NÃO VALIDADO DE PROPÓSITO (fora do acceptance desta tarefa, e a pesquisa não confirma a lista
 	exata de tipos aceitos por `message` além de string -- ver pesquisa, seção C.5, "NÃO
 	CONFIRMADO"): este módulo não rejeita `message` de tipo função/thread/userdata. `message` é
@@ -138,8 +167,9 @@
 	`IsAbstract = true`), não uma classe fictícia inventada.
 
 	Depende de: `../../runtime` (tipos), `../Types` (`Behavior`), `../Context` (Scheduler do
-	processo), `../AsyncCall` (ponto único de yield), `../datastore/Value` (estimativa de tamanho +
-	deep copy, reaproveitados). Estado: `subscriptionsByTopic`, module-local -- `MessagingService`
+	processo; `NotifyMessagePublished`, NOVO em task-services-032), `../AsyncCall` (ponto único de
+	yield), `../datastore/Value` (estimativa de tamanho + deep copy, reaproveitados). Estado:
+	`subscriptionsByTopic`, module-local -- `MessagingService`
 	é Service singleton (só entra em `InstanceState` quem precisa de estado POR INSTÂNCIA, que não
 	é o caso aqui -- mesma disciplina de `DataStoreService.luau`/`GlobalDataStore.luau`).
 ]]
@@ -197,11 +227,15 @@ end
 
 -- Nível 2, mesma convenção acima. Mede via `Value.EstimateByteSize` (reaproveitado, ver
 -- cabeçalho) -- a MENSAGEM de erro é própria de `MessagingService`, nunca a de `DataStore`.
-local function assertValidMessage(message: unknown): ()
+-- DEVOLVE o tamanho medido (task-services-032): `PublishAsync`, abaixo, reaproveita este MESMO
+-- número para `Context.NotifyMessagePublished` -- nunca recalcula `Value.EstimateByteSize` uma
+-- segunda vez só para a auditoria.
+local function assertValidMessage(message: unknown): number
 	local size = Value.EstimateByteSize(message)
 	if size > MAX_MESSAGE_BYTES then
 		error(`MessagingService message exceeds the maximum size of {MAX_MESSAGE_BYTES} bytes (got {size} bytes, serialized)`, 2)
 	end
+	return size
 end
 
 -- Anotação explícita de `{ [string]: unknown }` -- mesmo padrão de `RunService.luau`/
@@ -214,7 +248,14 @@ local Methods: { [string]: unknown } = {
 	]]
 	PublishAsync = function(_self: Runtime.Instance, topic: string, message: unknown): ()
 		assertValidTopic(topic)
-		assertValidMessage(message)
+		local byteSize = assertValidMessage(message)
+
+		-- Canal de auditoria (task-services-032, ver cabeçalho "AUDITORIA -- OnMessagePublished")
+		-- -- DEPOIS que a validação de tópico/tamanho já passou, ANTES do yield -- MESMA posição
+		-- relativa que `auditOutgoingRequest` ocupa em `HttpService.luau`. NUNCA o corpo da
+		-- mensagem, só `topic`/`byteSize`. No-op se `Types.BootstrapOptions.OnMessagePublished`
+		-- não foi passado a `Services.Bootstrap`.
+		Context.NotifyMessagePublished(topic, byteSize)
 
 		AsyncCall.Yield("MessagingService:PublishAsync")
 

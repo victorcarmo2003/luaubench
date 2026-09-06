@@ -35,6 +35,13 @@
 	spec INTEIRO (um único processo Lune) -- por isso cada teste usa um TÓPICO exclusivo (mesma
 	disciplina de nome de DataStore exclusivo por teste em `GlobalDataStore.spec.luau`).
 
+	task-services-032 (auditoria `OnMessagePublished`, SEM persistência -- ver cabeçalho de
+	`./MessagingService.luau`, seção "AUDITORIA") acrescenta dois testes ao fim deste arquivo, que
+	RECONFIGURAM o `Context` no meio do spec via uma segunda chamada a `Services.Bootstrap` (SEMPRE
+	sobrescreve `Context.Set`, mesmo padrão já usado por `HttpService.spec.luau` para
+	`AllowHttp`/`OnHttpRequest`) -- cada um restaura o `Context` sem callback ao final, para não
+	vazar estado para outro teste que rode depois.
+
 	Roda com `lune run src/services/behavior/MessagingService.spec.luau`.
 ]]
 
@@ -350,6 +357,71 @@ test("cada assinante recebe sua PRÓPRIA cópia profunda de uma mensagem-tabela 
 	a.count = 555 -- mutação do valor recebido por A -- não deveria alcançar B
 	assert(b.count == 1, `mutar o valor recebido por A não deveria afetar o valor recebido por B (cópias independentes), achou {b.count}`)
 	assert(a ~= b, "assinante A e assinante B deveriam ter recebido referências DIFERENTES (deep copy por assinante), não a mesma tabela")
+end)
+
+test("OnMessagePublished (task-services-032) é chamado UMA VEZ por PublishAsync bem-sucedido, com (topic, byteSize) corretos -- NUNCA o corpo da mensagem", function()
+	local topic = "Spec9"
+	local calls: { { Topic: string, ByteSize: number } } = {}
+
+	-- Reconfigura o Context só para este teste -- `Services.Bootstrap` é idempotente em
+	-- `Register()` (guarda local) mas SEMPRE sobrescreve `Context.Set` (ver `../Context.luau`,
+	-- cabeçalho: "Sobrescreve silenciosamente numa segunda chamada") -- mesmo padrão que
+	-- `HttpService.spec.luau` já usa para reconfigurar `AllowHttp`/`OnHttpRequest` no meio de um
+	-- spec.
+	Services.Bootstrap({
+		scheduler = scheduler,
+		dataModel = game,
+		OnMessagePublished = function(publishedTopic: string, byteSize: number)
+			table.insert(calls, { Topic = publishedTopic, ByteSize = byteSize })
+		end,
+	})
+
+	runAsync(function()
+		publishAsync(messagingService, topic, "hello")
+	end)
+
+	assert(#calls == 1, `esperava exatamente 1 chamada a OnMessagePublished, recebeu {#calls}`)
+	assert(calls[1].Topic == topic, `OnMessagePublished deveria receber o tópico "{topic}", recebeu "{calls[1].Topic}"`)
+	-- `Value.EstimateByteSize` de uma string soma 2 bytes de aspas delimitadoras (ver
+	-- `../datastore/Value.luau`, mesma conta já usada no teste do limite de 1024 bytes acima) --
+	-- "hello" tem 5 caracteres -> 7 bytes.
+	assert(calls[1].ByteSize == 7, `OnMessagePublished deveria receber byteSize == 7 (5 caracteres + 2 aspas), recebeu {calls[1].ByteSize}`)
+
+	-- Restaura o Context SEM callback -- defensivo, para não vazar para um teste futuro que venha
+	-- a ser acrescentado depois deste no arquivo (hoje este não é mais o último teste).
+	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+end)
+
+test("OnMessagePublished NUNCA é chamado quando a validação de tópico/tamanho falha -- nada foi publicado de verdade, nada para auditar", function()
+	local calls = 0
+	Services.Bootstrap({
+		scheduler = scheduler,
+		dataModel = game,
+		OnMessagePublished = function(_topic: string, _byteSize: number)
+			calls += 1
+		end,
+	})
+
+	-- Validação de tópico/tamanho acontece ANTES do `AsyncCall.Yield` (mesma disciplina dos
+	-- testes de validação acima) -- chamadas DIRETAS, fora de `runAsync`.
+	local okEmptyTopic = pcall(function()
+		publishAsync(messagingService, "", "x")
+	end)
+	assert(not okEmptyTopic, "PublishAsync com tópico vazio deveria continuar errando")
+
+	local bigMessage = string.rep("x", 2000)
+	local okBigMessage = pcall(function()
+		publishAsync(messagingService, "Spec10", bigMessage)
+	end)
+	assert(not okBigMessage, "PublishAsync com mensagem acima de 1024 bytes deveria continuar errando")
+
+	assert(
+		calls == 0,
+		`OnMessagePublished NÃO deveria ter sido chamado para nenhuma publicação que falhou na validação, foi chamado {calls} vez(es)`
+	)
+
+	-- Restaura o Context SEM callback -- defensivo, mesmo motivo do teste anterior.
+	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

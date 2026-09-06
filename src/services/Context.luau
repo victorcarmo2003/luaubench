@@ -78,4 +78,80 @@ function Context.GetDataModel(): Runtime.DataModel
 	return current.dataModel
 end
 
+-- task-services-026: lida por `behavior/HttpService.luau` (`Initialize`, para decidir se
+-- `HttpEnabled` nasce `true`). `BootstrapOptions.AllowHttp` é `boolean?` -- `nil`/omitido vira
+-- `false` aqui, nunca um terceiro estado "não configurado" que `HttpService` precisaria tratar
+-- separadamente. Mesma guarda de engenharia interna (português, nunca observável por um script
+-- de usuário comum) que `GetScheduler`/`GetDataModel` já usam: erra se `Bootstrap` ainda não
+-- rodou, nunca adivinha um default silencioso para quem esqueceu de inicializar o Context.
+function Context.IsHttpAllowed(): boolean
+	if current == nil then
+		error(
+			"Context.IsHttpAllowed: Services.Bootstrap ainda não foi chamado neste processo -- cli precisa chamar Services.Bootstrap({ scheduler = ..., dataModel = ... }) antes de qualquer acesso a Service",
+			2
+		)
+	end
+	return current.AllowHttp == true
+end
+
+-- task-services-026: lida por `behavior/HttpService.luau` (a checagem de destino loopback/
+-- link-local/privado em `GetAsync`/`PostAsync`/`RequestAsync`). Mesma normalização e mesma
+-- guarda de `IsHttpAllowed`, acima -- `AllowHttpLocal` é consultado independentemente de
+-- `AllowHttp` aqui; é a ORDEM em que `behavior/HttpService.luau` os usa (`assertHttpEnabled`
+-- sempre primeiro) que garante que a permissão local nunca abre rede sem a permissão geral, não
+-- nenhuma lógica de OR entre as duas neste módulo.
+function Context.IsHttpLocalAllowed(): boolean
+	if current == nil then
+		error(
+			"Context.IsHttpLocalAllowed: Services.Bootstrap ainda não foi chamado neste processo -- cli precisa chamar Services.Bootstrap({ scheduler = ..., dataModel = ... }) antes de qualquer acesso a Service",
+			2
+		)
+	end
+	return current.AllowHttpLocal == true
+end
+
+-- Correção coordenada com `task-cli-026` (par de `task-services-026`): chamada por
+-- `behavior/HttpService.luau` UMA VEZ por requisição de saída de `GetAsync`/`PostAsync`/
+-- `RequestAsync`, ANTES de tocar `net.request` de verdade -- é o canal de auditoria que permite
+-- `cli` (não `services`) decidir SE e COMO imprimir a linha (`--verbose`), sem que este
+-- território precise conhecer `Messages.luau`/stdio (regra 03: `services` só usa a API pública
+-- de `runtime`, nunca formata output do CLI). `BootstrapOptions.OnHttpRequest` é `nil` por
+-- padrão (sem `cli` passar nada) -- NO-OP nesse caso, nunca erro: ao contrário de
+-- `IsHttpAllowed`/`IsHttpLocalAllowed` (que SEMPRE têm um valor, `boolean`, depois de
+-- `Bootstrap`), a ausência do callback é um estado normal e frequente (qualquer chamador de
+-- `Services.Bootstrap` que não passe `OnHttpRequest`), não um erro de engenharia interna.
+function Context.NotifyHttpRequest(method: string, host: string): ()
+	if current == nil then
+		error(
+			"Context.NotifyHttpRequest: Services.Bootstrap ainda não foi chamado neste processo -- cli precisa chamar Services.Bootstrap({ scheduler = ..., dataModel = ... }) antes de qualquer acesso a Service",
+			2
+		)
+	end
+	local callback = current.OnHttpRequest
+	if callback ~= nil then
+		callback(method, host)
+	end
+end
+
+-- task-services-032 (decisão do arquiteto, `.claude/agents-memory/arquiteto-persistencia-cloud-
+-- 2026-09-06.md`, seção 7): canal de auditoria de `MessagingService:PublishAsync`, MESMO padrão
+-- de `Context.NotifyHttpRequest`, acima. Chamado por `behavior/MessagingService.luau` UMA VEZ por
+-- publicação bem-sucedida, DEPOIS que a validação de tópico/tamanho já passou -- nunca para uma
+-- publicação que erra na validação (nada foi publicado de verdade). `BootstrapOptions.
+-- OnMessagePublished` é `nil` por padrão -- NO-OP nesse caso, nunca erro (mesma disciplina de
+-- `NotifyHttpRequest`: ausência do callback é estado normal, não erro de engenharia interna).
+-- `topic`/`byteSize` são os dois ÚNICOS parâmetros -- NUNCA o corpo da mensagem (regra 00/07).
+function Context.NotifyMessagePublished(topic: string, byteSize: number): ()
+	if current == nil then
+		error(
+			"Context.NotifyMessagePublished: Services.Bootstrap ainda não foi chamado neste processo -- cli precisa chamar Services.Bootstrap({ scheduler = ..., dataModel = ... }) antes de qualquer acesso a Service",
+			2
+		)
+	end
+	local callback = current.OnMessagePublished
+	if callback ~= nil then
+		callback(topic, byteSize)
+	end
+end
+
 return Context

@@ -63,6 +63,55 @@ export type Behavior = {
 export type BootstrapOptions = {
 	scheduler: Runtime.Scheduler,
 	dataModel: Runtime.DataModel,
+
+	-- task-services-026 (contrato coordenado com task-cli-026): permissão de rede, populada por
+	-- `cli` (`RunCommand.luau`) a partir das flags `--allow-http`/`--allow-http-local`.
+	-- `nil`/omitido == `false` em AMBOS -- default-off, o mesmo estado de um lugar Roblox
+	-- recém-criado (`HttpEnabled` semeada `false`, ver `../.claude/agents-memory/arquiteto-
+	-- services-2026-09-05.md`, L2.2.1). Lidos por `behavior/HttpService.luau` (`Initialize`, e a
+	-- checagem de destino loopback/link-local/privado em `GetAsync`/`PostAsync`/`RequestAsync`)
+	-- via `Context.IsHttpAllowed`/`Context.IsHttpLocalAllowed` -- nunca lidos direto daqui por
+	-- nenhum `behavior/*.luau` (mesmo canal único que `Context.GetScheduler`/`GetDataModel` já
+	-- são para `scheduler`/`dataModel`, acima).
+	--
+	-- `AllowHttp` controla se `HttpService.HttpEnabled` nasce `true` (o portão geral de rede).
+	-- `AllowHttpLocal` controla só o endurecimento ADICIONAL do LuauBench sobre destinos
+	-- loopback/link-local/privados (127.0.0.0/8, ::1, 169.254.0.0/16, 10/8, 172.16/12,
+	-- 192.168/16, e o alias "localhost") -- é avaliado SÓ depois que `AllowHttp` já liberou
+	-- `HttpEnabled`, então `AllowHttpLocal = true` sem `AllowHttp = true` nunca abre rede
+	-- nenhuma, local ou não (os três métodos de rede continuam errando "not enabled" antes de
+	-- qualquer checagem de destino) -- nunca abre a rede local sem a rede geral primeiro.
+	AllowHttp: boolean?,
+	AllowHttpLocal: boolean?,
+
+	-- Correção coordenada com `task-cli-026`: canal de AUDITORIA de saída de rede, populado por
+	-- `cli` (`RunCommand.luau`) a partir de `--verbose`. `nil`/omitido == sem auditoria nenhuma
+	-- (comportamento de hoje, sem custo). Quando presente, `behavior/HttpService.luau` chama
+	-- `(method, host)` UMA VEZ por requisição de saída de `GetAsync`/`PostAsync`/`RequestAsync`,
+	-- ANTES de tocar `net.request` de verdade -- nunca quando a requisição é recusada antes
+	-- disso (`HttpEnabled == false` ou destino privado sem `AllowHttpLocal`: nada saiu de
+	-- verdade, nada para auditar). Lido só via `Context.NotifyHttpRequest` (`../Context.luau`),
+	-- mesmo canal único que `AllowHttp`/`AllowHttpLocal` já usam -- `HttpService.luau` nunca lê
+	-- `BootstrapOptions` direto. `method`/`host` são os dois ÚNICOS parâmetros de propósito: a
+	-- auditoria não pode vazar corpo/headers (regra 00/07, dado do usuário não sai do LuauBench
+	-- por um canal que o script não pediu).
+	OnHttpRequest: ((method: string, host: string) -> ())?,
+
+	-- task-services-032 (decisão do arquiteto, `.claude/agents-memory/arquiteto-persistencia-
+	-- cloud-2026-09-06.md`, seção 7): canal de AUDITORIA de `MessagingService:PublishAsync`,
+	-- populado por `cli` a partir de `--verbose` -- MESMO padrão de `OnHttpRequest`, acima, nunca
+	-- um canal novo inventado. `MessagingService` NÃO ganha persistência (fiel: o Roblox real não
+	-- tem mensagem pendente/fila/backlog -- persistir inventaria comportamento que a classe real
+	-- não tem, proibido pela regra 00) -- isto é OBSERVABILIDADE, não estado. `nil`/omitido == sem
+	-- auditoria nenhuma (comportamento de hoje, sem custo). Quando presente,
+	-- `behavior/MessagingService.luau` chama `(topic, byteSize)` UMA VEZ por `PublishAsync`
+	-- bem-sucedido, DEPOIS que a validação de tópico (1-80 caracteres) e tamanho (<=1024 bytes) já
+	-- passou -- uma publicação que ERRA na validação nunca chega a chamar isto (nada foi publicado
+	-- de verdade, nada para auditar). Lido só via `Context.NotifyMessagePublished`
+	-- (`../Context.luau`), nunca direto daqui por `MessagingService.luau`. `topic`/`byteSize` são
+	-- os dois ÚNICOS parâmetros de propósito: a auditoria NUNCA recebe o corpo da mensagem (regra
+	-- 00/07, mesma disciplina de `OnHttpRequest` nunca logar corpo/headers).
+	OnMessagePublished: ((topic: string, byteSize: number) -> ())?,
 }
 
 -- Módulo folha: nada para exportar em valor, só os tipos acima. Todo ModuleScript do Lune
