@@ -201,6 +201,13 @@ local Runtime = {
 		-- Desvio deliberado do precedente NewBase/SetClassChain/SetClassMethods/SetClassSchema
 		-- (ver cabeçalho deste arquivo) -- task-runtime-023.
 		NewEngineInstance = ClassRegistryModule.NewEngineInstance,
+		-- task-runtime-036 (achado de revisão): expõe o mesmo achatamento de schema (própria
+		-- classe + cadeia de superclasses) que `NewEngineInstance` já usa internamente -- sem
+		-- isto, `cli`/`services` só enxergavam `ClassRegistry.Get(className).Schema` (schema
+		-- PRÓPRIO, nunca herdado). Ver cabeçalho de `ClassRegistry.luau` para o contrato completo
+		-- (nunca `nil`; `EMPTY_SCHEMA` para "cadeia sem Schema"; erra para `className` não
+		-- registrado).
+		GetFlattenedSchema = ClassRegistryModule.GetFlattenedSchema,
 	},
 
 	DataModel = {

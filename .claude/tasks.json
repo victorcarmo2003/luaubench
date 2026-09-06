@@ -2059,7 +2059,7 @@
       "id": "task-services-022",
       "title": "HttpService sub-leva A: JSON/GUID/UrlEncode + HttpEnabled falso + os tres metodos de rede errando",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.2, sobretudo L2.2.1 e L2.2.3. SEM REDE NENHUMA nesta tarefa -- e fidelidade EXATA a um lugar Roblox com HTTP desligado, que e o default do Roblox. FATO DO DUMP que decide o desenho: HttpEnabled tem Security { Read = None, Write = LocalUserSecurity }, Capabilities.Read = ['Network'], Default 'false' -- pela regra de emissao A.4 passo 5 ele entra no schema como ReadOnly, ou seja, no Roblox real um script LE e NAO ESCREVE HttpEnabled: a rede e ligada pelo DONO DO LUGAR, fora do codigo. Implementar: JSONEncode/JSONDecode sobre @lune/serde (JSONDecode de JSON invalido ERRA, como o Roblox -- nao devolve nil; referencia ciclica erra; se o serde do Lune recusar inf/NaN onde o Roblox aceita e produz JSON invalido de proposito, DECLARAR a divergencia em vez de silenciar), UrlEncode, GenerateGUID(wrapInCurlyBraces) com e sem chaves (funciona mesmo com HTTP desabilitado). HttpEnabled semeado false e ReadOnly. GetAsync/PostAsync/RequestAsync existem e ERRAM com a familia Roblox de 'HTTP nao habilitado' -- string exata NAO CONFIRMADA, aproximacao de boa-fe comentada como tal, mesmo protocolo da mensagem de Instance.new. GetSecret e CreateWebStreamClient ficam com o stub [LuauBench] do ClassBuilder. Acrescentar HttpService a tools/coverage.luau e regerar. ATUALIZACAO (2026-09-06): acrescente TAMBEM MessagingService a tools/coverage.luau nesta mesma tarefa (comportamento ja implementado e aprovado em src/services/behavior/MessagingService.luau, task-services-021 -- so falta o registro no gerador). Registrar as duas classes (HttpService + MessagingService) juntas evita rodar o gerador duas vezes. MessagingService so tem 2 membros no dump (PublishAsync/SubscribeAsync), regeneracao deve ser trivial.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 47,
@@ -2336,7 +2336,7 @@
       "id": "task-runtime-036",
       "title": "Expor schema achatado (propria classe + heranca) publicamente em ClassRegistry",
       "description": "Achado MEDIO de task-cli-025 (revisor-cli): runtime/ClassRegistry.resolveClassMethods ja faz achatamento de heranca internamente (para metodos), mas nao ha equivalente publico para PROPRIEDADES -- so ClassRegistry.Get(className).Schema, que e o schema PROPRIO da classe, sem herdar de superclasses. cli/TreeMaterializer.findMemberDescriptor (task-cli-025) precisa do MemberDescriptor achatado para decodificar  via ValueTypes.Decode, e hoje so acha propriedade DECLARADA na propria classe -- propriedade herdada (ex: Instance.Capabilities, presente em toda classe; BaseScript.LinkedSource, herdada por Script/LocalScript) cai no caminho generico materialize/property-shape-unknown em vez do especifico materialize/property-type-not-simulated. Efeito pratico hoje e so cosmetico (Capabilities/LinkedSource sao tipos leva-2 de qualquer forma, entao o resultado funcional -- warning, propriedade fica nil -- e identico), mas o gap fica mais serio conforme mais tipos DataType/Enum forem simulados e alguma propriedade herdada precisar decodificar de verdade. TERRITORIO: so src/runtime/ (ClassRegistry.luau) -- expor uma funcao publica tipo ClassRegistry.GetFlattenedSchema(className): {[string]: MemberDescriptor} que reusa o mesmo algoritmo de achatamento ja usado internamente para metodos, sem duplicar logica. Ver .claude/agents-memory/revisor-cli-task-cli-025-2026-09-05.md.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 46,
@@ -2348,7 +2348,8 @@
       "acceptance": "ClassRegistry expoe funcao publica de schema achatado (propria classe + toda a cadeia de superclasses), reusando o algoritmo interno ja usado para metodos (nao duplicando). Teste confirmando Script (via BaseScript/LuaSourceContainer/Instance) inclui LinkedSource E Capabilities no schema achatado. --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "REPROVADO na primeira passada, depois fix aplicado e reverificado. Implementacao em ClassRegistry.luau (GetFlattenedSchema, reusa resolveClassChain+resolveClassSchema, mesmas funcoes privadas de NewEngineInstance) confirmada correta pelo revisor: 8 specs verdes, heranca de 4 niveis, override por classe mais concreta, erro nivel 2 pra classe nao registrada, EMPTY_SCHEMA compartilhada e congelada, preocupacao de poluicao do registro module-local no spec confirmada real (nao cautela excessiva). ACHADO ALTO/REPROVACAO: a funcao nao estava reexportada em src/runtime/init.luau (o unico ponto de entrada publico que cli/services usam via require) -- Runtime.ClassRegistry.GetFlattenedSchema era nil de fora, bloqueava o proprio proposito da tarefa e a task-cli-027 subsequente. Corrigido: uma linha em init.luau + teste espelhando o padrao ja usado pra NewEngineInstance. Reverificado por mim: 7/7 init.spec (era 6/6). Suite completa de runtime: 188/188 (9 specs, nao 8 como o achado original contou), zero regressao."
     },
     {
       "id": "task-cli-027",

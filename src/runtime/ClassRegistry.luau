@@ -388,4 +388,49 @@ function ClassRegistry.new(className: string, name: string?): Instance
 	return ClassRegistry.NewEngineInstance(className, name)
 end
 
+-- Tabela vazia congelada compartilhada por toda chamada de `GetFlattenedSchema` sobre uma classe
+-- sem NENHUM `Schema` na cadeia inteira — evita alocar uma tabela nova a cada chamada só para
+-- devolver "nada aqui" (mesma classe sempre devolve a MESMA referência, sem custo de alocação
+-- repetida). Nunca mutada.
+local EMPTY_SCHEMA: InstanceModule.ClassSchema = table.freeze({}) :: InstanceModule.ClassSchema
+
+-- task-runtime-036 (achado do revisor-cli em task-cli-025, ver
+-- .claude/agents-memory/revisor-cli-task-cli-025-2026-09-05.md): `resolveClassSchema`, acima, já
+-- faz o achatamento de PROPRIEDADES/eventos/callbacks (própria classe + toda a cadeia de
+-- superclasses) internamente para alimentar `Instance.SetClassSchema` dentro de
+-- `NewEngineInstance` — mas até esta tarefa esse achatamento nunca saía do módulo: o único jeito
+-- de `services`/`cli` verem um `ClassSchema` era `ClassRegistry.Get(className).Schema`, que é só
+-- o schema PRÓPRIO (nunca herdado), o mesmo espelhamento do campo `Superclass` do dump que o
+-- comentário de `ClassDescriptor.Schema` já documenta. Isso deixava `cli/TreeMaterializer`
+-- (`findMemberDescriptor`) sem enxergar propriedade herdada (ex.: `Instance.Capabilities`,
+-- `BaseScript.LinkedSource` herdada por `Script`/`LocalScript`) e caindo no diagnóstico genérico
+-- em vez do específico.
+--
+-- `GetFlattenedSchema` expõe exatamente o mesmo algoritmo já usado por `NewEngineInstance`
+-- (`resolveClassChain` + `resolveClassSchema`, ambas acima, cache incluído) — NENHUMA lógica de
+-- achatamento nova, só uma via pública para o resultado que já existia internamente. Única
+-- diferença deliberada de contrato em relação a `resolveClassSchema`: aqui devolve-se sempre uma
+-- tabela (nunca `nil`) — `EMPTY_SCHEMA` para "nenhum elo da cadeia declara Schema" — porque o
+-- consumidor típico (`cli`, procurando um `MemberDescriptor` por nome de propriedade) quer indexar
+-- direto (`GetFlattenedSchema(className)[propertyName]`) sem precisar de um `if schema ~= nil`
+-- extra a cada call site; `ClassRegistry.Get(className).Schema` continua disponível, com seu `nil`
+-- de sempre, para quem precisa distinguir "declarou schema vazio" de "não declarou".
+--
+-- Erra (nível 2, mesmo padrão de `ClassRegistry.new`/`NewEngineInstance`) para `className` nunca
+-- registrado — nunca devolve `EMPTY_SCHEMA` silenciosamente para uma classe inexistente, que
+-- seria indistinguível de "classe real sem Schema na cadeia".
+function ClassRegistry.GetFlattenedSchema(className: string): InstanceModule.ClassSchema
+	local descriptor = registry[className]
+	if descriptor == nil then
+		error(`classe '{className}' não registrada`, 2)
+	end
+
+	local chain = resolveClassChain(descriptor)
+	local schema = resolveClassSchema(className, chain)
+	if schema == nil then
+		return EMPTY_SCHEMA
+	end
+	return schema
+end
+
 return ClassRegistry

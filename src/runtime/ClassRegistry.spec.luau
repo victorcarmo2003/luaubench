@@ -731,5 +731,137 @@ test("erro de superclasse órfã dispara com a mesma mensagem pelas duas entrada
 	)
 end)
 
+--[[
+	Testes NOVOS da task-runtime-036 (`ClassRegistry.GetFlattenedSchema` -- achado do revisor-cli
+	em task-cli-025, ver .claude/agents-memory/revisor-cli-task-cli-025-2026-09-05.md). Nenhum dos
+	testes acima foi alterado.
+]]
+
+test("GetFlattenedSchema erra claramente para classe não registrada, nunca devolve tabela vazia silenciosa", function()
+	local ok, err = pcall(function()
+		return ClassRegistry.GetFlattenedSchema("TestFlattenedClasseInexistente")
+	end)
+
+	assert(not ok, "GetFlattenedSchema de classe não registrada deveria erro, não devolver tabela vazia")
+	assert(
+		string.find(tostring(err), "não registrada") ~= nil,
+		`mensagem de erro deveria dizer 'não registrada', recebeu: {err}`
+	)
+end)
+
+test("GetFlattenedSchema de classe sem Schema em nenhum elo da cadeia devolve tabela vazia, nunca nil", function()
+	ClassRegistry.Register(makeDescriptor("TestFlattenedEmpty", nil, false, nil))
+
+	local schema = ClassRegistry.GetFlattenedSchema("TestFlattenedEmpty")
+	assert(
+		next(schema) == nil,
+		"GetFlattenedSchema de classe sem Schema em nenhum elo da cadeia deveria devolver tabela vazia (contrato público difere de propósito do `nil` que resolveClassSchema devolve internamente -- ver comentário de GetFlattenedSchema em ClassRegistry.luau)"
+	)
+end)
+
+-- Reproduz a cadeia real Script -> BaseScript -> LuaSourceContainer -> Instance citada no achado
+-- do revisor-cli (task-cli-025): uma propriedade herdada de um ancestral DISTANTE (aqui,
+-- "TestFlattenedRoot" no papel de "Instance", contribuindo "Capabilities") e uma propriedade
+-- herdada de um ancestral IMEDIATO ("TestFlattenedBaseScriptLike" no papel de "BaseScript",
+-- contribuindo "LinkedSource") precisam as duas aparecer no schema achatado da classe FOLHA
+-- ("TestFlattenedScriptLike", no papel de "Script"), que não declara nenhuma das duas por si --
+-- exatamente como o Script real não redeclara LinkedSource/Capabilities, só herda.
+--
+-- Nomes de teste prefixados com "TestFlattened" em vez dos nomes reais "Script"/"BaseScript"/
+-- "LuaSourceContainer"/"Instance" É DE PROPÓSITO: registrar literalmente "Instance" no
+-- ClassRegistry global deste processo mudaria o schema achatado de QUALQUER OUTRO teste deste
+-- arquivo cuja cadeia termine em "Instance" (todas terminam, `resolveClassChain` sempre insere o
+-- literal "Instance" no fim) -- o achatamento consulta `registry["Instance"]` de verdade quando
+-- ela existe (é assim que `services` propaga `Capabilities` para toda classe na vida real, ver
+-- `src/services/generated/classes/Instance.luau`). Como todos os testes deste arquivo rodam num
+-- único processo Lune persistente compartilhando o mesmo `registry` module-level, registrar
+-- "Instance" de verdade poluiria silenciosamente testes anteriores (dependente de ordem). Nomes
+-- isolados evitam o efeito colateral sem abrir mão de provar a profundidade de herança exata (4
+-- elos) e a forma exata do achado original.
+test(
+	"GetFlattenedSchema inclui propriedade herdada de ancestral distante E de ancestral imediato (cadeia de 4 níveis, cenário real Script/BaseScript/LuaSourceContainer/Instance)",
+	function()
+		ClassRegistry.Register(
+			makeDescriptorWithSchema(
+				"TestFlattenedRoot",
+				nil,
+				makeSchema({
+					Capabilities = { Kind = "Property", Default = nil, ReadOnly = false },
+				}),
+				nil
+			)
+		)
+		ClassRegistry.Register(makeDescriptorWithSchema("TestFlattenedLuaSourceContainerLike", "TestFlattenedRoot", nil, nil))
+		ClassRegistry.Register(
+			makeDescriptorWithSchema(
+				"TestFlattenedBaseScriptLike",
+				"TestFlattenedLuaSourceContainerLike",
+				makeSchema({
+					LinkedSource = { Kind = "Property", Default = "", ReadOnly = false },
+				}),
+				nil
+			)
+		)
+		ClassRegistry.Register(makeDescriptorWithSchema("TestFlattenedScriptLike", "TestFlattenedBaseScriptLike", nil, nil))
+
+		local schema = ClassRegistry.GetFlattenedSchema("TestFlattenedScriptLike")
+
+		local linkedSource = schema.LinkedSource
+		assert(linkedSource ~= nil, "schema achatado deveria incluir LinkedSource, herdada do ancestral imediato (papel de BaseScript)")
+		assert(linkedSource.Kind == "Property", "LinkedSource deveria ser Kind == 'Property'")
+
+		local capabilities = schema.Capabilities
+		assert(
+			capabilities ~= nil,
+			"schema achatado deveria incluir Capabilities, herdada do ancestral distante (papel de Instance)"
+		)
+		assert(capabilities.Kind == "Property", "Capabilities deveria ser Kind == 'Property'")
+
+		-- A própria classe folha (TestFlattenedScriptLike) não declara Schema próprio -- prova de
+		-- que as duas entradas acima vieram MESMO da cadeia herdada, não de um Schema local
+		-- inventado pelo teste.
+		local ownDescriptor = ClassRegistry.Get("TestFlattenedScriptLike")
+		assert(ownDescriptor ~= nil, "Get deveria devolver o descriptor registrado")
+		assert(
+			(ownDescriptor :: ClassDescriptor).Schema == nil,
+			"classe folha não deveria declarar Schema próprio neste cenário -- as entradas têm que vir só da herança"
+		)
+	end
+)
+
+test(
+	"GetFlattenedSchema aplica a mesma semântica de override (classe mais concreta vence) que resolveClassSchema já usa internamente -- prova de que não há lógica duplicada/divergente",
+	function()
+		ClassRegistry.Register(
+			makeDescriptorWithSchema(
+				"TestFlattenedOverrideParent",
+				nil,
+				makeSchema({
+					Foo = { Kind = "Property", Default = "parent", ReadOnly = false },
+				}),
+				nil
+			)
+		)
+		ClassRegistry.Register(
+			makeDescriptorWithSchema(
+				"TestFlattenedOverrideChild",
+				"TestFlattenedOverrideParent",
+				makeSchema({
+					Foo = { Kind = "Property", Default = "child", ReadOnly = false },
+				}),
+				nil
+			)
+		)
+
+		local schema = ClassRegistry.GetFlattenedSchema("TestFlattenedOverrideChild")
+		local foo = schema.Foo
+		assert(foo ~= nil, "Foo deveria estar presente no schema achatado")
+		assert(
+			foo.Default == "child",
+			"classe mais concreta deveria vencer no achatamento -- mesma semântica de resolveClassSchema/ClassRegistry.new"
+		)
+	end
+)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

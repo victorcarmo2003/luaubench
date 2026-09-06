@@ -321,5 +321,28 @@ test(
 	end
 )
 
+-- task-runtime-036 (achado REPROVADO em revisão: GetFlattenedSchema existia em ClassRegistry.luau
+-- mas não estava reexportada em init.luau -- ficava inalcançável para quem só pode usar
+-- `require("../runtime")`, nunca um módulo interno). Mesmo padrão do teste de NewEngineInstance
+-- acima: prova que a função está exposta e é chamável de fora do território, e que o achatamento
+-- (própria classe + cadeia de superclasses, via SCHEMA_CLASS_NAME já registrada acima) bate com o
+-- que `ClassRegistry.new`/`Instance.Label` já confirmaram nos testes anteriores.
+test(
+	"Runtime.ClassRegistry.GetFlattenedSchema está exportada e é chamável -- achata Schema da própria classe (sem superclasse aqui)",
+	function()
+		local flattened = Runtime.ClassRegistry.GetFlattenedSchema(SCHEMA_CLASS_NAME)
+
+		assert(flattened ~= nil, "GetFlattenedSchema não deveria devolver nil para uma classe registrada")
+		assert(
+			flattened.Label ~= nil and (flattened.Label :: MemberDescriptor).Default == "default-label",
+			"a entrada 'Label' achatada deveria trazer o mesmo Default declarado no Schema de SCHEMA_CLASS_NAME"
+		)
+		assert(
+			flattened.Added ~= nil and (flattened.Added :: MemberDescriptor).Kind == "Event",
+			"a entrada 'Added' achatada deveria preservar Kind == 'Event'"
+		)
+	end
+)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)
