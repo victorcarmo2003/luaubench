@@ -1792,7 +1792,7 @@
       "id": "task-test-valuetypes-001",
       "title": "Cenario real: projeto Tiktok deixa de emitir warning de $properties e recebe os valores certos",
       "description": "Cria tests/scenarios/value-types-real-project.scenario.luau. TERRITORIO: so tests/scenarios/ (read-only em src/** e em C:\\Users\\hakor\\Documents\\Roblox-Games). Contexto em .claude/agents-memory/testador-roblox-games-2026-09-05.md: o projeto Tiktok (template do rojo init) hoje emite 4 warnings plan/non-primitive-property em Ambient/Position/Color/Size -- os UNICOS contatos reais com value types que a bancada ja observou. Depois desta leva, esses 4 warnings tem que sumir e os valores tem que estar corretos na arvore materializada. Roda o binario real (lune run src/cli/main.luau run <caminho> --no-color --timeout 5), nunca chamada in-process. Manter o padrao de harness com pcall por teste que a Parte 1 daquele relatorio ja corrigiu (um assert falho nao pode derrubar os outros testes). Acrescentar um teste de script de usuario de verdade exercitando Vector3/CFrame/Color3/Enum dentro do sandbox -- e a primeira oportunidade de confirmar a pendencia declarada do item 5 daquele relatorio (falso positivo de sandbox nunca foi testavel porque nenhum script de usuario chegava a rodar).",
-      "column": "todo",
+      "column": "done",
       "agent": "testador",
       "reviewer": null,
       "wave": 43,
@@ -1807,7 +1807,8 @@
       "updatedAt": "2026-09-05",
       "depends": [
         "task-cli-025"
-      ]
+      ],
+      "result": "Cenario criado e passando (2/2, confirmado por mim rodando lune run diretamente). Os 4 warnings antigos do Tiktok (Ambient/Position/Color/Size) sumiram do stderr real. Fixture sintetica confirma Vector3/Color3/CFrame corretos na arvore materializada e operados no sandbox (7/8 checagens, fecha a pendencia do item 5 do relatorio de contexto). GAP DE COBERTURA (nao bug, territorio services): Baseplate.Size/Position nao pode ser confirmado no Tiktok real porque Part continua Covered=false em generated/Manifest.luau -- TreeMaterializer pula a subarvore inteira quando createInstance falha, entao os 3 warnings sumiram sem o decode ter rodado de verdade para Part. Documentado no cenario. BUG REAL ENCONTRADO E CONFIRMADO POR MIM (territorio cli): resolvePropertyValue trata qualquer string JSON como primitivo sem checar ValueCategory==Enum -- StarterPlayer.CameraMode = \"LockFirstPerson\" (formato Rojo padrao pra Enum via $properties) vira uma STRING LUA CRUA na arvore materializada, nao EnumItem, sem erro/warning nenhum. Corrupcao silenciosa de tipo, exatamente o que a regra 00 e o comentario da propria funcao dizem evitar. Impacto alto: Enum via $properties (Part.Material, Lighting.LightingStyle, CameraMode) e padrao Rojo comum. Registrado como task-cli-028-fix, prioridade alta, dispatch imediato."
     },
     {
       "id": "task-services-015",
@@ -2364,6 +2365,25 @@
       "depends": [
         "task-runtime-036"
       ],
+      "createdAt": "2026-09-05",
+      "updatedAt": "2026-09-05"
+    },
+    {
+      "id": "task-cli-028-fix",
+      "title": "BUG: resolvePropertyValue trata string sempre como primitivo, pula decode de Enum via $properties",
+      "description": "Bug real confirmado (task-test-valuetypes-001, testador + reproduzido pelo orquestrador lendo o codigo). src/cli/TreeMaterializer.luau, funcao resolvePropertyValue (linha ~282): if rawKind == \"boolean\" or rawKind == \"number\" or rawKind == \"string\" then return raw end -- trata QUALQUER string como primitivo e grava direto, sem checar descriptor.ValueCategory. Isso pula o branch de decode de Enum inteiramente: StarterPlayer.CameraMode = \"LockFirstPerson\" (formato Rojo padrao pra Enum via $properties, string com nome do item) termina como string Lua crua na arvore materializada, nao EnumItem -- typeof() mente (\"string\" em vez de \"EnumItem\"), == Enum.CameraMode.LockFirstPerson nunca bate, e NENHUM erro/warning e emitido. Corrupcao silenciosa de tipo, violando a invariante 2 do projeto e o proprio comentario da funcao (linhas 273-279) que explicitamente diz querer evitar essa classe de bug pra array/objeto -- so esqueceu de string com ValueCategory=Enum. TERRITORIO: so src/cli/TreeMaterializer.luau + spec. FIX: antes do check de primitivo, ou depois mas ainda dentro do mesmo branch, checar se descriptor (buscado via findMemberDescriptor) existe e tem ValueCategory==\"Enum\" -- se sim, string tambem precisa passar por ValueTypes.Decode.FromRojoJson (mesmo caminho que array/objeto ja usa), nao ser gravada crua. String sem MemberDescriptor de Enum continua indo pelo caminho primitivo de sempre (comportamento identico pra Name, ScriptSource, etc). Adicionar teste reproduzindo o caso exato (CameraMode = \"LockFirstPerson\" -> EnumItem real, nao string) + regressao de string primitiva normal continuando igual.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 43,
+      "tags": [
+        "cli",
+        "bug",
+        "correcao-de-revisao"
+      ],
+      "priority": "high",
+      "acceptance": "StarterPlayer.CameraMode = \"LockFirstPerson\" em $properties vira Enum.CameraMode.LockFirstPerson real (typeof == EnumItem, == bate); string invalida pra aquele Enum (nome inexistente) gera materialize/undecodable-property, nunca grava string crua; string primitiva normal (Name, etc) continua identica a antes (regressao); specs cobrindo os 3 casos; --strict sem any; suite completa de cli sem regressao.",
+      "depends": [],
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05"
     }
