@@ -154,6 +154,33 @@ test("Execute: fixture 'bindtoclose-error' não propaga o erro de um callback de
 	assert(result.ErrorCount == 1, `esperava ErrorCount 1 (só o PRIMEIRO callback erra, o segundo não), recebeu {result.ErrorCount}`)
 end)
 
+test("Execute: fixture 'bindtoclose-overlap' -- erro de uma thread ALHEIA (script principal) retomada dentro da janela de BindToClose conta EXATAMENTE 1 vez, nunca 2x (task-cli-035, fecha o achado de revisão de task-cli-032)", function()
+	-- Cenário EXATO reproduzido pelo revisor de task-cli-032 (ver
+	-- .claude/agents-memory/revisor-cli-task-cli-032-2026-09-06.md, "Verificação 5"): um
+	-- `BindToClose` que CEDE por mais tempo que `--timeout` (0.5s vs 0.1s), abrindo uma janela em
+	-- que a thread do SCRIPT PRINCIPAL -- ainda suspensa em `task.wait` quando o timeout expira --
+	-- é retomada pelo laço genérico interno de `RunBindToCloseCallbacks` (que drena TODAS as
+	-- threads vivas do Scheduler, não só as de BindToClose) e erra DENTRO dessa janela.
+	--
+	-- ANTES desta correção (listener pega-tudo de task-cli-032, sem filtro de identidade de
+	-- thread): o mesmo `error()` batia TANTO no listener antigo de `Sandbox.Run` (que nunca
+	-- desconecta) QUANTO no listener pega-tudo desta função -- ErrorCount saía 2 para um erro só
+	-- (confirmado ao vivo antes desta correção: `lune run src/cli/main.luau run
+	-- fixtures/run-e2e/bindtoclose-overlap --timeout 0.1` imprimia a mesma linha de erro DUAS
+	-- vezes e "2 error(s)" no sumário).
+	--
+	-- DEPOIS: `DataModel.RunBindToCloseCallbacks` (task-runtime-038) filtra por `ownThreads` DELA
+	-- MESMA -- a thread do script principal nunca é uma delas, então o erro só sai pelo listener
+	-- de `Sandbox.Run` (contado 1x, como qualquer erro de script normal que sobrevive além do
+	-- timeout).
+	local options = baseOptions(fixturePath("run-e2e/bindtoclose-overlap"))
+	options.Timeout = 0.1
+	local result = RunCommand.Execute(options)
+
+	assert(result.ExitCode == 1, `esperava ExitCode 1 (o script principal errou), recebeu {result.ExitCode}`)
+	assert(result.ErrorCount == 1, `esperava ErrorCount EXATAMENTE 1 (nunca 2x -- bug de task-cli-032 fechado por task-cli-035), recebeu {result.ErrorCount}`)
+end)
+
 test("Diagnostics.Bag: um projeto com apenas warnings (sem erros) ainda produz ExitCode 0", function()
 	-- `globIgnorePaths`/`syncRules` não-vazios geram warning (Decisão 14), nunca erro -- reusa o
 	-- fixture de warnings já existente de `ProjectFile.spec.luau`.

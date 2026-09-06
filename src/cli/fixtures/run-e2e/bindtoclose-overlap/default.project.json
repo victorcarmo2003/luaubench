@@ -1,0 +1,9 @@
+{
+  "name": "RunE2EBindToCloseOverlap",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

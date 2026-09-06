@@ -2647,8 +2647,8 @@
     },
     {
       "id": "task-cli-034",
-      "title": "Teste http-audit (task-cli-026) instavel: 3/5 falhas em rodadas repetidas",
-      "description": "Achado do revisor durante verificacao de estabilidade do fix de task-cli-030 (nao relacionado a esse fix). RunCommand.spec.luau, teste na linha ~245 (fixture run-e2e/http-audit, task-cli-026): rodando o spec 5 vezes seguidas, 3 falharam -- aparenta corrida entre o net.serve local que o proprio teste sobe e a requisicao HTTP feita pelo processo filho (lune run src/cli/main.luau run <fixture> ...). TERRITORIO: so src/cli/RunCommand.spec.luau (e possivelmente a fixture run-e2e/http-audit/). Investigar causa raiz (timing de start do servidor vs spawn do processo filho, porta fixa colidindo entre rodadas, falta de retry/wait) antes de corrigir -- nao adicionar sleep arbitrario sem entender a causa.",
+      "title": "Testes de processo real em RunCommand.spec.luau sao instaveis (nao so http-audit)",
+      "description": "Achado do revisor durante verificacao de estabilidade do fix de task-cli-030 (nao relacionado a esse fix). RunCommand.spec.luau, teste na linha ~245 (fixture run-e2e/http-audit, task-cli-026): rodando o spec 5 vezes seguidas, 3 falharam -- aparenta corrida entre o net.serve local que o proprio teste sobe e a requisicao HTTP feita pelo processo filho (lune run src/cli/main.luau run <fixture> ...). TERRITORIO: so src/cli/RunCommand.spec.luau (e possivelmente a fixture run-e2e/http-audit/). Investigar causa raiz (timing de start do servidor vs spawn do processo filho, porta fixa colidindo entre rodadas, falta de retry/wait) antes de corrigir -- nao adicionar sleep arbitrario sem entender a causa. ATUALIZACAO (revisor de task-cli-035): a instabilidade e mais AMPLA do que so o teste http-audit -- rodando a suite repetidas vezes, tambem foram observadas falhas esporadicas em testes de \"Processo real\" de persistencia (task-cli-030, PARTE 4), sugerindo que o problema pode ser mais geral (timing de spawn de processo filho no Windows, porta fixa colidindo entre rodadas paralelas de teste, falta de retry/wait apos process.exec) em vez de exclusivo do cenario de net.serve local do http-audit. Investigar se ha uma causa raiz COMUM a todos os testes de processo real antes de aplicar fix pontual so no http-audit.",
       "column": "todo",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
@@ -2659,7 +2659,7 @@
         "flakiness"
       ],
       "priority": "medium",
-      "acceptance": "lune run src/cli/RunCommand.spec.luau passa de forma estavel em pelo menos 10 execucoes consecutivas (nao so 1). Causa raiz da instabilidade documentada no codigo/relatorio. --strict sem any.",
+      "acceptance": "lune run src/cli/RunCommand.spec.luau passa de forma estavel em pelo menos 20 execucoes consecutivas (nao so 10) -- incluindo os testes de http-audit E os de persistencia (task-cli-030 PARTE 4). Causa raiz da instabilidade documentada no codigo/relatorio (comum ou especifica por teste). --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06"
@@ -2688,7 +2688,7 @@
       "id": "task-cli-035",
       "title": "RunCommand.luau consome onCallbackError em vez de listener pega-tudo (fecha contagem dupla)",
       "description": "Segunda metade do fix de task-cli-033 (depende de task-runtime-038). RunCommand.Execute troca o listener pega-tudo que hoje conecta direto em scheduler.ThreadError (Connect antes de RunBindToCloseCallbacks, Disconnect depois -- introduzido em task-cli-032) por passar onCallbackError diretamente pra DataModel.RunBindToCloseCallbacks(game, scheduler, onCallbackError), reusando a mesma logica de traducao pra OutputRecord/OutputFormatter que ja existe (parseBindToCloseThreadError). TERRITORIO: so src/cli/RunCommand.luau + spec.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 52,
@@ -2703,7 +2703,8 @@
         "task-runtime-038"
       ],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO. Revisor confirmou 258/258 no restante da suite e bindtoclose-overlap estavel em 21 rodadas (100%). Reproduziu antes/depois de forma real via git stash: com o fix, --timeout 0.1 produz 1 error(s) em 3 execucoes; revertendo so RunCommand.luau, reproduz 2 error(s) em 3 execucoes -- prova concreta, nao alegacao. Confirmou parseBindToCloseThreadError fora de qualquer hunk do diff (so a conexao do callback mudou, formatacao identica). Regressoes confirmadas: bindtoclose (0 erros), bindtoclose-error isolado (1 erro), erro normal de script sem BindToClose (1 erro). Contrato com DataModel.RunBindToCloseCallbacks confirmado batendo exatamente com task-runtime-038, sem gambiarra de tipo. --strict, zero any real, territorio limpo. 2 achados nao bloqueantes: (1) flakiness de testes de processo real e mais ampla que so http-audit (tambem viu 2 falhas em testes de persistencia, task-cli-030 PARTE 4) -- escopo de task-cli-034 ampliado; (2) 1 diagnostico pre-existente do luau-lsp em RunCommand.luau:470, fora do diff desta task, ja existia antes. Relatorio: .claude/agents-memory/revisor-cli-task-cli-035-2026-09-06.md"
     }
   ]
 }
