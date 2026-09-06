@@ -246,29 +246,34 @@ end
 -- olhando `typeof(raw)` -- as duas são `"string"`. É por isso que `resolvePropertyValue`, abaixo,
 -- também consulta este `MemberDescriptor` para o caso `string`, não só array/objeto.
 --
--- LIMITAÇÃO DECLARADA (API FALTANTE, ver relatório da tarefa): `Runtime.ClassRegistry.Get`
--- devolve só o `Schema` PRÓPRIO de uma classe -- o que ELA declara, NUNCA o herdado (ver o
--- comentário de `ClassDescriptor.Schema` em `src/runtime/ClassRegistry.luau`: "Schema de
--- Property/Event/Callback que ESTA classe declara -- nunca os herdados"). O achatamento (própria +
--- toda a cadeia de superclasses) é feito só INTERNAMENTE por `ClassRegistry` (função privada
--- `resolveClassSchema`, nunca reexportada) para instalar na Instance no momento da criação --
--- `runtime`/`services` ainda NÃO expõem publicamente esse schema já ACHATADO por
--- (className, propertyName). Sem essa API, este módulo deliberadamente NÃO reimplementa o
--- achatamento andando a cadeia de `SuperClassName` por conta própria -- isso duplicaria, em `cli`,
--- o MESMO algoritmo que `ClassRegistry` já mantém internamente, e as duas cópias divergirem em
--- silêncio é exatamente o tipo de bug que a regra 00 proíbe (contornar o território em vez de
--- reportar a lacuna). Nenhuma classe hoje coberta por `services` (leva 1) precisa de herança para
--- uma propriedade DataType/Enum -- todas as ocorrências atuais (Lighting.Ambient,
--- Workspace.GlobalWind/InsertPoint, BaseScript.LinkedSource/RunContext) são declaradas na PRÓPRIA
--- classe -- mas isto deixa de valer no dia em que uma classe tipo "Part" herdar "Position" de
--- "BasePart": a chamada abaixo devolveria `nil` mesmo a propriedade sendo real, e
--- `resolvePropertyValue` trataria como `materialize/property-shape-unknown` em vez de decodificar.
+-- task-cli-027 (fecha a limitação declarada em task-cli-025, ver `.claude/agents-memory/
+-- revisor-cli-task-cli-025-2026-09-05.md`): `runtime` passou a expor `ClassRegistry.
+-- GetFlattenedSchema(className)` (task-runtime-036) -- o MESMO achatamento (própria classe + toda a
+-- cadeia de superclasses) que `ClassRegistry.new`/`NewEngineInstance` já usava só internamente para
+-- instalar o schema na Instance no momento da criação. Antes desta tarefa, `findMemberDescriptor`
+-- só enxergava `ClassRegistry.Get(className).Schema` -- o schema PRÓPRIO, nunca o herdado (mesmo
+-- espelhamento do campo `Superclass` do dump que o comentário de `ClassDescriptor.Schema` documenta)
+-- -- então uma propriedade herdada (ex.: `Instance.Capabilities`, presente em TODA classe;
+-- `BaseScript.LinkedSource`, herdada por `Script`/`LocalScript`) caía sempre no diagnóstico genérico
+-- `materialize/property-shape-unknown`, mesmo sendo uma propriedade real e conhecida.
+--
+-- `GetFlattenedSchema` devolve SEMPRE uma tabela indexável (nunca `nil` -- `EMPTY_SCHEMA` congelada
+-- quando nenhum elo da cadeia declara `Schema`, ver `ClassRegistry.luau`), mas ERRA (nível 2) para
+-- `className` NÃO REGISTRADO -- distinção importante de "classe real sem esta propriedade". A ÚNICA
+-- Instance que chega aqui com um `ClassName` não registrado em `ClassRegistry` é `game`/`DataModel`
+-- (a raiz é construída à mão por `DataModel.luau`, NUNCA passa por `ClassRegistry.Register` -- ver
+-- `DATA_MODEL_CLASS_CHAIN` naquele módulo): toda OUTRA Instance que chega em `resolvePropertyValue`
+-- veio de `game:GetService(...)`, de um filho fixo adotado, ou de `Services.new(...)` -- os três
+-- exigem uma classe já registrada (`ClassRegistry.new`/`NewEngineInstance` recusam classe
+-- desconhecida). Por isso a checagem `IsRegistered` abaixo, ANTES de chamar `GetFlattenedSchema` --
+-- preserva o comportamento de antes desta tarefa para "DataModel" (devolvia `nil` via
+-- `ClassRegistry.Get`, modo LENIENTE) em vez de deixar o `error(..., 2)` de `GetFlattenedSchema`
+-- vazar e derrubar `Materialize` inteiro para um `$properties` de raiz não-primitivo.
 local function findMemberDescriptor(className: string, propertyName: string): Runtime.MemberDescriptor?
-	local descriptor = Runtime.ClassRegistry.Get(className)
-	if descriptor == nil or descriptor.Schema == nil then
+	if not Runtime.ClassRegistry.IsRegistered(className) then
 		return nil
 	end
-	return descriptor.Schema[propertyName]
+	return Runtime.ClassRegistry.GetFlattenedSchema(className)[propertyName]
 end
 
 -- task-cli-025 (item b, Decisão 5/seção 7 do desenho de valuetypes): devolve o valor FINAL pronto

@@ -2356,7 +2356,7 @@
       "id": "task-cli-027",
       "title": "TreeMaterializer.findMemberDescriptor usa schema achatado (ClassRegistry.GetFlattenedSchema)",
       "description": "Segunda metade do achado MEDIO de task-cli-025 (ver task-runtime-036, que precisa terminar primeiro). Depois que runtime expuser o schema achatado publicamente, trocar TreeMaterializer.findMemberDescriptor (hoje so schema proprio) para usar ClassRegistry.GetFlattenedSchema, e remover/reduzir a incidencia do diagnostico generico materialize/property-shape-unknown para os casos que agora resolvem certo (Instance.Capabilities, BaseScript.LinkedSource, etc). Atualizar specs de TreeMaterializer cobrindo propriedade HERDADA (nao so propria da classe) sendo decodificada corretamente.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 47,
@@ -2370,7 +2370,8 @@
         "task-runtime-036"
       ],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "APROVADO COM RESSALVAS, depois fix aplicado e reverificado. Revisor confirmou 218/218, Folder.Capabilities e Script.LinkedSource resolvendo com diagnostico correto (property-type-not-simulated, nao mais property-shape-unknown) via luaubench run real, guarda IsRegistered confirmada load-bearing (DataModel nao registrada, sem a guarda erra classe nao registrada), caminho feliz de propriedade propria intacto (Ambient/GlobalWind), Workspace.UnknownShape.Mystery continua o diagnostico generico correto. 1 achado ALTO: guarda IsRegistered sem NENHUM teste de regressao -- revisor removeu a guarda e a suite inteira (27/27) continuou passando, e sem ela luaubench run real crasha com stack trace cru vazando caminho absoluto em disco (violando a Regra 00, mesma classe de bug que task-cli-010/011 ja existem pra evitar). Corrigido: novo teste com properties nao-primitivo na raiz DataModel provando warning correto sem crash -- coder confirmou que o teste FALHA sem a guarda (reproduzindo o crash exato do revisor) e PASSA com ela restaurada. 1 achado MEDIO: comentarios afirmavam heranca de 2 niveis quando LinkedSource/Capabilities sao na verdade 1 hop (superclasse direta) -- corrigido o texto. Suite completa de cli: 28/28 no arquivo, 15 arquivos sem falha. Relatorio original: revisao embutida na resposta do revisor (task-cli-027, sem arquivo de memoria separado)."
     },
     {
       "id": "task-cli-028-fix",
@@ -2396,7 +2397,7 @@
       "id": "task-runtime-037-fix",
       "title": "BUG GRAVE: global type() ausente do sandbox de execucao",
       "description": "Bug real confirmado por reproducao (task-services-027, testador). src/runtime/Sandbox.luau, funcao buildEnvironment: a whitelist de globais do sandbox nunca inclui env.type. type() e global basico do Lua/Luau (distinto de typeof(), que ja existe e e fiel ao Roblox) -- usado por praticamente qualquer script real, nao peculiaridade do ProfileStore. Confirmado por grep em todo src/ que type nao e definido em lugar nenhum. Testador confirmou com um diagnostico isolado (monkeypatch temporario, nunca commitado) que adicionar type resolve: ProfileStore.New (que usa type(store_name) na primeira linha) passa a funcionar, sessao nova/persistencia intra-processo completam de ponta a ponta. TERRITORIO: so src/runtime/Sandbox.luau + spec. FIX: adicionar env.type = type (ou o equivalente correto se o Roblox real tiver alguma diferenca de type() vs Lua puro -- confirme antes de assumir identidade total, mas type() e uma das poucas funcoes base que o Roblox NAO modifica).",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 44,

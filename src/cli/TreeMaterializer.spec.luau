@@ -444,6 +444,94 @@ test("Materialize: $properties da raiz de TOPO (InstancePlan.RootProperties) é 
 end)
 
 --------------------------------------------------------------------------------------------------
+-- task-cli-027 (achado ALTO de revisão, revisor confirmando por experimento): a guarda
+-- `IsRegistered(className)` em `findMemberDescriptor` (ver comentário daquela função, acima) NUNCA
+-- tinha teste de regressão cobrindo o branch que ela protege -- o revisor comprovou isso removendo a
+-- guarda temporariamente e rodando a suíte inteira: 27/27 continuou passando, nenhum teste exercitava
+-- este caminho.
+--
+-- Sem a guarda, `Runtime.ClassRegistry.GetFlattenedSchema("DataModel")` ERRA (nível 2 -- "classe
+-- 'DataModel' não registrada") porque a raiz NUNCA passa por `ClassRegistry.Register` (é construída à
+-- mão por `DataModel.luau`, ver o próprio comentário de `findMemberDescriptor`). Esse erro NÃO está
+-- dentro de NENHUM `pcall` em `resolvePropertyValue`/`applyProperties` -- só a ESCRITA final
+-- (`writable[key] = valueToWrite`) está em `pcall`, nunca a RESOLUÇÃO do MemberDescriptor -- então ele
+-- se propagaria cru, sem tratamento nenhum, derrubando `Materialize` inteiro com um erro do LuauBench
+-- vazando caminho absoluto em disco (`D:\...\TreeMaterializer:273: classe 'DataModel' não
+-- registrada`) para um `.project.json` de usuário perfeitamente válido (qualquer `$properties`
+-- não-primitivo -- array/objeto -- na raiz de topo) -- exatamente a classe de bug que task-cli-010/011
+-- (documentadas no cabeçalho deste arquivo) existem para evitar, violando a regra 00 ("nunca stack
+-- trace cru", "nunca crash por entrada não confiável").
+--
+-- `$properties` NÃO-PRIMITIVO (array) na RAIZ (`InstancePlan.RootProperties`, mecanismo já usado pelo
+-- teste "$properties da raiz de TOPO" acima, task-cli-018 -- mas ali com um valor PRIMITIVO,
+-- `archivable: false`) é o único jeito de alcançar `findMemberDescriptor("DataModel", ...)`: toda
+-- OUTRA Instance que chega em `resolvePropertyValue` veio de `game:GetService(...)`/adoção de filho
+-- fixo/`Services.new(...)` -- as três exigem classe já registrada (ver o comentário de
+-- `findMemberDescriptor` para o raciocínio completo).
+--
+-- O teste envolve a chamada a `Materialize` num `pcall` PRÓPRIO -- nunca deixa o crash real
+-- (inalcançável sem a guarda) derrubar o script de teste inteiro sem diagnóstico legível. Com a
+-- guarda: `ok == true`. SEM a guarda (removida manualmente para confirmar, depois restaurada): `ok ==
+-- false`, e o `assert(ok, ...)` abaixo falha com uma mensagem clara -- é essa asserção que faz ESTE
+-- teste falhar caso a guarda seja removida de novo no futuro (confirmado por mim antes deste
+-- relatório: comentei a guarda, rodei só este teste, `assert(ok, ...)` falhou citando o erro cru de
+-- `GetFlattenedSchema`; restaurei a guarda, o teste voltou a passar).
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties NÃO-PRIMITIVO na raiz (DataModel, sem ClassSchema registrado) vira 'materialize/property-shape-unknown', NUNCA crasha (task-cli-027)", function()
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeRootNonPrimitiveProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		RootProperties = {
+			Capabilities = { 1, 2, 3 },
+		},
+		Roots = {},
+		Diagnostics = {},
+	}
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+
+	-- `pcall` PRÓPRIO deste teste (não o `assert` cru de dentro de `applyProperties`/`test()`) -- é o
+	-- que transforma "o processo inteiro crasha sem diagnóstico nenhum" (o bug real, sem a guarda)
+	-- numa FALHA DE TESTE legível (`ok == false`) em vez de um crash opaco levando o resto da suíte
+	-- junto.
+	local ok, treeOrError = pcall(function(): TreeMaterializer.MaterializedTree
+		return TreeMaterializer.Materialize(plan, game, bag)
+	end)
+
+	assert(ok, `Materialize NUNCA deveria crashar por $properties não-primitivo na raiz sem ClassSchema registrado -- crashou com: {tostring(treeOrError)}`)
+	if not ok then
+		return
+	end
+	local tree = treeOrError :: TreeMaterializer.MaterializedTree
+
+	-- Warning esperado (comportamento LENIENTE já documentado para a raiz sem schema instalado) --
+	-- NUNCA erro, e a propriedade nunca deveria ter sido escrita crua.
+	local diagnostic = findByCodeAndField(bag, "materialize/property-shape-unknown", "Capabilities")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/property-shape-unknown' para 'Capabilities' na raiz")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "forma desconhecida na raiz deveria ser Severity 'warning', nunca erro")
+		assert(diagnostic.NodePath == "tree", "Diagnostic da raiz deveria citar NodePath 'tree' (mesmo valor usado por Materialize para $properties da raiz de topo)")
+
+		-- Mesma disciplina de task-cli-010/011: nunca vaza caminho absoluto de disco nem
+		-- "TreeMaterializer:NNN:" -- confirma que, mesmo com a guarda funcionando, a mensagem de
+		-- warning em si continua limpa.
+		assert(string.match(diagnostic.Message, "%a:\\") == nil, `mensagem NÃO deveria conter um caminho absoluto de disco (letra:\\), achou: {diagnostic.Message}`)
+		assert(string.find(diagnostic.Message, ".luau:", 1, true) == nil, `mensagem NÃO deveria conter '.luau:' (chunk interno vazando), achou: {diagnostic.Message}`)
+		assert(string.find(diagnostic.Message, "TreeMaterializer:", 1, true) == nil, `mensagem NÃO deveria conter 'TreeMaterializer:' (call site interno vazando), achou: {diagnostic.Message}`)
+	end
+
+	-- `game` nunca deveria ter "Capabilities" gravado cru (array bruto do JSON) -- modo LENIENTE
+	-- significa "propriedade pulada com warning", nunca "escrita sem checar tipo".
+	local gameDot = (game :: unknown) :: { [string]: unknown }
+	assert(gameDot["Capabilities"] == nil, "'Capabilities' NUNCA deveria ter sido gravado cru no game -- a propriedade deveria ter sido pulada")
+
+	assert(#tree.Scripts == 0, "nenhum Root nesta fixture -- nenhum script deveria ter sido materializado")
+end)
+
+--------------------------------------------------------------------------------------------------
 -- Raiz com $className != DataModel -> erro dedicado (Decisão 14) -- InstancePlan montado à mão,
 -- porque TreePlanner nunca valida isto (ele só resolve ClassName, não decide se serve pra `game`).
 --------------------------------------------------------------------------------------------------
@@ -1278,6 +1366,151 @@ test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vir
 	if unknownShape ~= nil then
 		assert(unknownShape.ClassName == "Folder", "UnknownShape deveria ser um Folder")
 	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-027 (task-runtime-036 expôs Runtime.ClassRegistry.GetFlattenedSchema publicamente):
+-- propriedade HERDADA (declarada só numa SUPERCLASSE da cadeia, nunca redeclarada pela classe
+-- concreta) precisa resolver o MemberDescriptor CERTO -- diagnóstico ESPECÍFICO (aqui,
+-- property-type-not-simulated, porque "SecurityCapabilities"/"ContentId" continuam leva-2 em
+-- ValueTypes.Catalog), NUNCA mais o genérico 'property-shape-unknown' que a limitação antiga
+-- (findMemberDescriptor só olhando o schema PRÓPRIO da classe) produzia para os dois casos abaixo.
+-- InstancePlan MONTADO À MÃO (mesma disciplina das defesas em profundidade acima) -- não precisa de
+-- fixture em disco, só exercitar findMemberDescriptor com uma classe REAL cuja propriedade é
+-- herdada.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: propriedade HERDADA de Instance (Folder.Capabilities, Generated.Schema de Folder é vazio) resolve o MemberDescriptor certo -- 'materialize/property-type-not-simulated', NUNCA o genérico 'property-shape-unknown' (task-cli-027)", function()
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeInheritedPropertyProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		RootProperties = {},
+		Roots = {
+			{
+				Name = "ReplicatedStorage",
+				ClassName = "ReplicatedStorage",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						-- "Capabilities" NUNCA é declarada por "Folder" (Generated.Schema vazio, ver
+						-- src/services/generated/classes/Folder.luau) -- só existe na cadeia via
+						-- "Instance" (a superclasse universal, ver generated/classes/Instance.luau). Um
+						-- array (não-primitivo) força resolvePropertyValue a consultar
+						-- findMemberDescriptor -- boolean/number bypassariam sem nunca exercitar o bug.
+						Name = "InheritedPropsFolder",
+						ClassName = "Folder",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {
+							Capabilities = { "CoreScript" },
+						},
+						Children = {},
+						NodePath = "tree.ReplicatedStorage.InheritedPropsFolder",
+					},
+				},
+				NodePath = "tree.ReplicatedStorage",
+			},
+		},
+		Diagnostics = {},
+	}
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	-- ANTES desta tarefa: findMemberDescriptor só olhava ClassRegistry.Get("Folder").Schema (vazio)
+	-- -- "Capabilities" caía sempre no diagnóstico genérico, mesmo sendo uma propriedade real e
+	-- conhecida (só herdada). Prova que isso não acontece mais.
+	assert(findByCodeAndField(bag, "materialize/property-shape-unknown", "Capabilities") == nil, "'Capabilities' (herdada de Instance) NÃO deveria mais cair no diagnóstico genérico 'property-shape-unknown'")
+
+	-- "SecurityCapabilities" (o ValueType real de Instance.Capabilities no dump) continua leva-2 em
+	-- ValueTypes.Catalog -- o diagnóstico ESPECÍFICO correto, agora que o MemberDescriptor herdado é
+	-- encontrado, é o de tipo ainda não simulado (warning, nunca erro).
+	local diagnostic = findByCodeAndField(bag, "materialize/property-type-not-simulated", "Capabilities")
+	assert(diagnostic ~= nil, "'Capabilities' deveria produzir 'materialize/property-type-not-simulated', citando o ValueType real herdado de Instance")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "tipo não simulado deveria ser Severity 'warning', nunca erro")
+		assert(string.find(diagnostic.Message, "SecurityCapabilities", 1, true) ~= nil, `mensagem deveria citar o ValueType herdado 'SecurityCapabilities', recebeu: {diagnostic.Message}`)
+	end
+
+	local replicatedStorage = game:FindService("ReplicatedStorage")
+	assert(replicatedStorage ~= nil, "game deveria ter ReplicatedStorage")
+	if replicatedStorage == nil then
+		return
+	end
+	local folder = findChild(replicatedStorage, "InheritedPropsFolder")
+	assert(folder ~= nil, "deveria haver um 'InheritedPropsFolder' mesmo com a propriedade herdada ainda não simulada -- só a propriedade falha, não o nó inteiro")
+	if folder ~= nil then
+		local folderDot = (folder :: unknown) :: { [string]: unknown }
+		assert(folderDot["Capabilities"] == nil, "Capabilities deveria ter mantido o Default (nil) -- nunca gravar o array cru")
+	end
+end)
+
+test("Materialize: propriedade HERDADA de BaseScript (Script.LinkedSource, superclasse direta na cadeia) resolve o MemberDescriptor certo -- 'materialize/property-type-not-simulated', NUNCA o genérico 'property-shape-unknown' (task-cli-027)", function()
+	local plan: TreePlanner.InstancePlan = {
+		ProjectName = "FakeInheritedScriptPropertyProject",
+		ProjectPath = "fake/default.project.json",
+		RootClassName = "DataModel",
+		RootProperties = {},
+		Roots = {
+			{
+				Name = "ServerScriptService",
+				ClassName = "ServerScriptService",
+				IsServiceRoot = true,
+				Source = nil,
+				SourcePath = nil,
+				Properties = {},
+				Children = {
+					{
+						-- "LinkedSource" é declarada por "BaseScript" (a SUPERCLASSE DIRETA de "Script",
+						-- `Script.Superclass == "BaseScript"`, ver src/services/generated/classes/
+						-- Script.luau), NUNCA redeclarada em Script.Generated.Schema (vazio) -- 1 hop na
+						-- cadeia, não 2: CORREÇÃO de comentário anterior que afirmava erroneamente "dois
+						-- níveis acima"/"além do pai direto" (achado MÉDIO de revisão, task-cli-027).
+						-- BaseScript já É o pai direto de Script; um exemplo de achatamento
+						-- GENUINAMENTE multi-hop (vários níveis reais) seria Workspace.Capabilities
+						-- (Workspace -> WorldRoot -> Model -> PVInstance -> Instance, 4 hops).
+						Name = "InheritedPropsScript",
+						ClassName = "Script",
+						IsServiceRoot = false,
+						Source = nil,
+						SourcePath = nil,
+						Properties = {
+							LinkedSource = { "rbxassetid://0" },
+						},
+						Children = {},
+						NodePath = "tree.ServerScriptService.InheritedPropsScript",
+					},
+				},
+				NodePath = "tree.ServerScriptService",
+			},
+		},
+		Diagnostics = {},
+	}
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	local tree = TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(findByCodeAndField(bag, "materialize/property-shape-unknown", "LinkedSource") == nil, "'LinkedSource' (herdada da superclasse direta BaseScript) NÃO deveria mais cair no diagnóstico genérico 'property-shape-unknown'")
+
+	-- "ContentId" (o ValueType real de BaseScript.LinkedSource no dump) continua leva-2 em
+	-- ValueTypes.Catalog -- mesmo raciocínio do teste de "Capabilities" acima.
+	local diagnostic = findByCodeAndField(bag, "materialize/property-type-not-simulated", "LinkedSource")
+	assert(diagnostic ~= nil, "'LinkedSource' deveria produzir 'materialize/property-type-not-simulated', citando o ValueType real herdado de BaseScript")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "tipo não simulado deveria ser Severity 'warning', nunca erro")
+		assert(string.find(diagnostic.Message, "ContentId", 1, true) ~= nil, `mensagem deveria citar o ValueType herdado 'ContentId', recebeu: {diagnostic.Message}`)
+	end
+
+	-- O Script continua materializando e sendo listado em Scripts -- só a propriedade herdada falha,
+	-- nunca o nó inteiro (mesma disciplina de "nunca derrubar o resto por uma propriedade").
+	assert(#tree.Scripts == 1, "o Script deveria continuar sendo materializado e listado em Scripts mesmo com LinkedSource não simulado")
 end)
 
 --------------------------------------------------------------------------------------------------
