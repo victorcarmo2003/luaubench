@@ -2048,8 +2048,10 @@
       "result": null,
       "depends": [
         "task-services-016",
-        "task-runtime-034"
-      ]
+        "task-runtime-034",
+        "task-services-020"
+      ],
+      "coordinationNote": "NOTA DO ORQUESTRADOR (2026-09-05): depends inclui task-services-020 so por conflito de arquivo (behavior/Index.luau, o mapa curado ClassName->Behavior editado a mao) -- nao e dependencia logica real (021/MessagingService nao usa nada de OrderedDataStore). Serializacao pra nunca dar behavior/Index.luau a dois coder-services em paralelo, mesmo padrao do mutex de tools/coverage.luau em 017/022/023/025."
     },
     {
       "id": "task-services-022",
