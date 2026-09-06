@@ -2318,7 +2318,7 @@
       "id": "task-services-019-fix",
       "title": "Emitir classe DataStoreKey (item de ListKeysAsync) no gerador",
       "description": "Achado MEDIO de task-services-019 (revisor-services): a classe DataStoreKey existe no Full-API-Dump.json pinado (Superclass=Instance, NotCreatable, membro unico KeyName) mas nunca foi emitida por tools/generate-services.luau, porque ListKeysAsync/Pages:GetCurrentPage() retornam {Category:\"Group\", Name:\"Array\"} sem parametrizacao de item no dump, e o fecho do gerador so caminha por coverage.luau + Superclass, nunca por ValueType de retorno de metodo. Consequencia atual (nao um bug funcional, mas fidelidade incompleta): behavior/DataStore.luau (task-services-019) devolve strings cruas em ListKeysAsync em vez de instancias DataStoreKey reais. TERRITORIO: tools/generate-services.luau (ensinar o gerador a descobrir DataStoreKey via alguma heuristica -- ex: adicionar manualmente a tools/coverage.luau mesmo sem ser alcancada pelo fecho transitivo automatico) + generated/ (regenerar) + behavior/DataStore.luau (trocar string crua por DataStoreKey real via a mesma fabrica de Instance ja usada por DataStoreKeyInfo). Ver .claude/agents-memory/revisor-services-task-services-019-2026-09-05.md.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 46,
@@ -2607,7 +2607,7 @@
       "id": "task-cli-033",
       "title": "BUG (edge case real, confirmado): erro pode ser contado 2x se timeout expira durante BindToClose",
       "description": "Achado real confirmado por reproducao (revisor de task-cli-032): Sandbox.Run nunca desconecta seu proprio listener de scheduler.ThreadError apos scheduler:Run retornar. Se uma thread do script principal ficar suspensa alem do --timeout e for retomada (erra) DENTRO da janela de RunBindToCloseCallbacks (que agora tambem escuta o mesmo ThreadError, task-cli-032), o MESMO erro e capturado por AMBOS os listeners -- contado 2x no sumario/ErrorCount. Reproduzido com fixture externa (timeout curto + script principal em loop de task.wait + BindToClose que tambem cede). Cenario estreito (exige timeout+suspensao+erro coincidindo na mesma janela), mas real, nao hipotetico. TERRITORIO: provavelmente cruza runtime (Sandbox.Run desconectar seu listener ao sair, ou DataModel.RunBindToCloseCallbacks expor os thread handles que cria pra cli filtrar por identidade) + cli (RunCommand.luau consumir isso). Considerar arquiteto se a fronteira nao for obvia. Ver relatorio: .claude/agents-memory/revisor-cli-task-cli-032-2026-09-06.md.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 51,
@@ -2621,7 +2621,8 @@
       "acceptance": "Erro que ocorre uma unica vez e contado uma unica vez no sumario/ErrorCount, mesmo quando timeout expira e BindToClose roda na sequencia. Cenarios existentes (erro normal de script, erro em BindToClose isolado) continuam corretos -- regressao de task-cli-031/032. Specs cobrindo o cenario de sobreposicao. --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "result": "Investigacao concluida (nao um fix -- confirmado que cruza territorio de verdade). coder-runtime confirmou lendo Sandbox.luau/DataModel.luau/Scheduler.luau/RunCommand.luau/ScriptRunner.luau: Sandbox.Run devolve o controle quase instantaneamente (antes do scheduler:Run principal comecar), entao desconectar seu listener nesse ponto quebraria o relato de erro NORMAL de script (regressao de task-cli-031/032), nao so o overlap com BindToClose. Causa raiz real: RunCommand.Execute conecta um SEGUNDO listener pega-tudo no MESMO scheduler.ThreadError (sem filtro de identidade de thread) durante a janela de RunBindToCloseCallbacks, que por sua vez chama scheduler:Run de novo -- um laço GENERICO que drena TODAS as threads vivas do Scheduler, nao so as de BindToClose. Se uma thread do script principal for retomada e errar nessa janela, os dois listeners disparam pro mesmo erro. Nao existe fronteira dentro de runtime sozinho pra saber quando a fase de BindToClose comeca -- so cli tem essa informacao (as duas chamadas de scheduler:Run). Fix real exige mudar a API PUBLICA de DataModel.RunBindToCloseCallbacks (runtime) e o wiring em RunCommand.luau (cli) em conjunto. Quebrado em task-runtime-038 (runtime, sequencial) -> task-cli-035 (cli, depende da primeira). Ver relatorio embutido na resposta do coder-runtime."
     },
     {
       "id": "task-services-033",
@@ -2659,6 +2660,46 @@
       "priority": "medium",
       "acceptance": "lune run src/cli/RunCommand.spec.luau passa de forma estavel em pelo menos 10 execucoes consecutivas (nao so 1). Causa raiz da instabilidade documentada no codigo/relatorio. --strict sem any.",
       "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-runtime-038",
+      "title": "DataModel.RunBindToCloseCallbacks ganha filtro proprio de erro (onCallbackError), corrigindo contagem dupla",
+      "description": "Fix real do achado de task-cli-033 (investigacao ja fechou o desenho, nao precisa de arquiteto). Causa raiz: RunCommand.luau conecta um listener PEGA-TUDO em scheduler.ThreadError durante a janela de RunBindToCloseCallbacks, mas essa funcao chama scheduler:Run de novo -- um laco GENERICO que drena TODAS as threads vivas do Scheduler (nao so as de BindToClose), entao uma thread do script principal retomada durante essa janela dispara o MESMO erro nos dois listeners (o de Sandbox.Run, nunca desconectado, e o novo de RunCommand). FIX: DataModel.RunBindToCloseCallbacks ganha um parametro novo opcional, algo como onCallbackError: ((thread, string) -> ())?, e passa a filtrar erros pela sua PROPRIA lista de thread handles que ela mesma cria pros callbacks de BindToClose (mesmo padrao ownThreads que Sandbox.Run ja usa) -- conecta/desconecta esse listener filtrado INTERNAMENTE, repassando so os erros que sao dela via o callback novo. Como os conjuntos de threads (script principal vs callbacks de BindToClose) sao disjuntos por construcao, cada erro passa a cair em exatamente um listener. TERRITORIO: so src/runtime/DataModel.luau + spec.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 51,
+      "tags": [
+        "runtime",
+        "bug",
+        "correcao-de-revisao"
+      ],
+      "priority": "medium",
+      "acceptance": "DataModel.RunBindToCloseCallbacks(dataModel, scheduler, onCallbackError?) filtra erro por identidade de thread propria (so os handles que ela mesma spawna pros callbacks registrados), nunca captura erro de thread alheia mesmo que o Scheduler:Run interno drene threads vivas de outras origens. onCallbackError e opcional -- omitido, comportamento observavel identico ao de hoje (nenhuma regressao de task-runtime-033). Specs cobrindo: erro de callback de BindToClose dispara onCallbackError; erro de thread alheia (nao criada por RunBindToCloseCallbacks) NAO dispara onCallbackError mesmo que resolvida durante a janela. --strict sem any. Suite de runtime sem regressao.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-035",
+      "title": "RunCommand.luau consome onCallbackError em vez de listener pega-tudo (fecha contagem dupla)",
+      "description": "Segunda metade do fix de task-cli-033 (depende de task-runtime-038). RunCommand.Execute troca o listener pega-tudo que hoje conecta direto em scheduler.ThreadError (Connect antes de RunBindToCloseCallbacks, Disconnect depois -- introduzido em task-cli-032) por passar onCallbackError diretamente pra DataModel.RunBindToCloseCallbacks(game, scheduler, onCallbackError), reusando a mesma logica de traducao pra OutputRecord/OutputFormatter que ja existe (parseBindToCloseThreadError). TERRITORIO: so src/cli/RunCommand.luau + spec.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 52,
+      "tags": [
+        "cli",
+        "bug",
+        "correcao-de-revisao"
+      ],
+      "priority": "medium",
+      "acceptance": "Cenario de sobreposicao (timeout expira + thread do script principal retomada durante a janela de BindToClose, ambas errando) conta CADA erro exatamente uma vez no sumario/ErrorCount -- teste dedicado reproduzindo o cenario exato que o revisor de task-cli-032 usou. Erro normal de script (sem BindToClose) continua contado uma vez (regressao). Erro isolado dentro de BindToClose (sem overlap com timeout) continua contado uma vez (regressao de task-cli-032). --strict sem any. Suite de cli sem regressao.",
+      "depends": [
+        "task-runtime-038"
+      ],
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06"
     }
