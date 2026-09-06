@@ -29,26 +29,59 @@
 -- implementado dentro de `services`). Fechar e reabrir o `lune run` perde todo o dado -- isso é
 -- esperado nesta leva, não um bug.
 --
--- ACHADO DESTA RODADA (reportado como gap, NÃO contornado com stub -- regra do papel de testador):
--- o ProfileStore real chama `game:GetService("MessagingService")` E `game:GetService("HttpService")`
--- INCONDICIONALMENTE no topo do módulo (fixture, linhas ~337-338 -- correspondem às linhas 317-318
--- do arquivo original antes do cabeçalho de atribuição), ANTES de qualquer chamada de
--- `StartSessionAsync`. Confirmado empiricamente (não inferido): rodando este cenário HOJE contra
--- `src/services` no estado atual, `Runtime.Sandbox.Load(...)()` (o require síncrono do fixture)
--- erra com `[LuauBench] MessagingService exists in the Roblox API Dump (...) but is not simulated
--- by LuauBench yet` -- MessagingService está em task-services-021 (in-progress no momento desta
--- rodada) e HttpService está em task-services-022 (todo, sem agente designado). NENHUM dos dois
--- estava listado em `depends` de task-services-027 (só task-services-018/019 e task-runtime-033) --
--- é uma dependência transitiva real que faltou no board, não uma suposição. Sem os dois, o módulo
--- ProfileStore não CARREGA -- não é possível chegar nem ao passo 1 sem inventar um stub de
--- HttpService/MessagingService, o que este agente está proibido de fazer. Ver o bloco "GATE" abaixo:
--- o cenário TENTA carregar o fixture de verdade a cada execução (nunca assume o gap sem checar) e
--- reporta a mensagem de erro real capturada -- assim que os dois Services existirem, os passos 1-3
--- abaixo rodam automaticamente, sem precisar de nenhuma edição neste arquivo.
+-- ACHADO DE RODADA ANTERIOR (2026-09-05, RESOLVIDO): o ProfileStore real chama
+-- `game:GetService("MessagingService")` e `game:GetService("HttpService")` incondicionalmente no
+-- topo do módulo, e nenhum dos dois estava simulado ainda -- o GATE abaixo travava no require. Ambos
+-- existem de verdade agora (task-services-021/022, commitadas) -- confirmado nesta rodada
+-- (2026-09-06): o GATE passa, `Runtime.Sandbox.Load(...)()` carrega o ProfileStore real com sucesso.
 --
--- Status: pending -- falta HttpService (task-services-022, sub-leva A) e MessagingService
--- (task-services-021) simulados. Os passos 1-3 estão implementados e prontos (não gaveta de texto,
--- código real) mas não foram executados de ponta a ponta ainda -- ver GATE abaixo.
+-- ACHADO NOVO DESTA RODADA (2026-09-06, BUG REAL, NÃO contornado com stub -- regra do papel de
+-- testador): com o require funcionando, os passos 1-3 falham TODOS com o MESMO erro, reproduzido
+-- ao rodar `lune run tests/scenarios/datastore-profilestore-pattern.scenario.luau`:
+--   [string "ProfileStore"]:1274: attempt to call a nil value
+-- Linha 1274 do fixture é `if type(store_name) ~= "string" then` -- `ProfileStore.New` (a PRIMEIRA
+-- coisa que qualquer chamador faz). Causa raiz confirmada por leitura de código, território
+-- `src/runtime/Sandbox.luau`, função `buildEnvironment`: a whitelist de globais do sandbox
+-- (`env.typeof`, `env.tostring`, `env.tonumber`, `env.pairs`, `env.ipairs`, `env.select`, ...)
+-- NUNCA inclui `env.type` -- confirmado por grep (`\btype\b\s*=`) em todo `src/`: nenhuma linha
+-- define esse global em lugar nenhum do projeto. `type()` é o global Lua/Luau BASE (distinto de
+-- `typeof()`, que já existe) -- todo script Roblox real usa `type(x) == "table"` o tempo todo,
+-- não é peculiaridade do ProfileStore. Confirmado que é a ÚNICA causa dos 3 passos falharem: um
+-- diagnóstico isolado (fora de tests/scenarios, nunca commitado, descartado após o teste) que
+-- monkeypatchou SÓ `type` em cima de `ScriptEnvironment.Build(...)` -- nunca dentro deste
+-- arquivo -- fez `ProfileStore.New`/`StartSessionAsync`/`EndSession`/`IsActive`/reload rodarem de
+-- ponta a ponta com sucesso (Data == template na sessão nova; Coins == 100 persistindo
+-- intra-processo depois de EndSession + reabrir a mesma chave). Território do bug: `runtime`
+-- (`src/runtime/Sandbox.luau`, `buildEnvironment`) -- fora do território deste agente, reportado
+-- para `coder-runtime` corrigir, não contornado aqui.
+--
+-- ACHADO SECUNDÁRIO (arquitetura, não bug): com `type` hipoteticamente corrigido, o mesmo
+-- diagnóstico mostrou que o passo 3 (session lock cross-server) tal como desenhado por
+-- task-services-027 -- duas chamadas de `chunk()` da MESMA fonte simulando "dois servidores" --
+-- NÃO consegue exercitar o Steal/Cancel de verdade: o servidor B (sem `Steal`) adquiriu a sessão
+-- de A imediatamente, sem disputa. Causa: `IsThisSession(session_tag)` no ProfileStore real
+-- (fixture linha 679-681) compara só `PlaceId`/`JobId` (NÃO o `unique_session_id` de 3 elementos)
+-- -- e `JobId` no LuauBench é uma CONSTANTE POR PROCESSO por desenho deliberado e já documentado
+-- (task-runtime-034, `DataModel.luau` "DIVERGÊNCIA DECLARADA": "um processo Lune == um servidor").
+-- Como as duas chamadas de `chunk()` compartilham o MESMO `game`/`JobId`, o ProfileStore real
+-- (corretamente, do ponto de vista dele) enxerga a sessão de B como pertencendo ao MESMO servidor
+-- de A, não a um servidor concorrente -- então não há disputa pra resolver. Isto não é bug de
+-- `runtime`/`services` (a divergência já está declarada e é intencional); é uma limitação do
+-- DESENHO deste passo 3: "dois `chunk()` no mesmo processo" não representa "dois servidores" pra
+-- qualquer biblioteca que derive identidade de sessão de `JobId`. Testar o Steal/Cancel de verdade
+-- exigiria ou (a) rodar dois processos `lune` separados contra armazenamento persistido entre eles
+-- (não existe ainda -- persistência é só intra-processo, ver divergência já declarada acima) ou
+-- (b) redesenhar o passo pra semear diretamente um `ActiveSession` de PlaceId/JobId FORJADOS (não
+-- os do processo real) na estrutura de dados do DataStore, simulando uma sessão de terceiro sem
+-- depender de dois `chunk()` -- não implementado nesta rodada por já ter achado o bug de `type`
+-- como bloqueador anterior a este ponto; fica registrado como recomendação, não como stub.
+--
+-- Status: pending -- falta `env.type` em `src/runtime/Sandbox.luau` (`buildEnvironment`), bug real
+-- de território `runtime`, bloqueia os passos 1-3 (todo `ProfileStore.New`/`StartSessionAsync`
+-- passa por `type()` logo na entrada). Depois que `type` existir, os passos 1-2 devem passar sem
+-- nenhuma edição neste arquivo (confirmado por diagnóstico descartável) -- o passo 3, tal como está
+-- escrito, provavelmente continuará falhando por um motivo DIFERENTE (arquitetura de JobId acima,
+-- não um bug), e vai precisar de redesenho numa rodada futura.
 
 local process = require("@lune/process")
 local fs = require("@lune/fs")
