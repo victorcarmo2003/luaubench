@@ -39,6 +39,20 @@
 	listar. `Behavior` novo: `src/services/behavior/WorldRoot.luau` (dono do estado -- os 8 métodos
 	de grupo de colisão, POR INSTÂNCIA de `Workspace`) e `src/services/behavior/PhysicsService.luau`
 	(vista legada, delegando ao registro de `WorldRoot`).
+
+	task-services-025 (LER .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.5.3", ANTES
+	de mexer aqui) acrescenta `SoundService` -- `Superclass: "Instance"` no dump (confirmado por
+	leitura direta de `.cache/api-dump/28360dea....json`), sem puxar nenhuma classe nova pelo fecho
+	de superclasses. 17 membros sobrevivem ao filtro (13 Property, 4 Function, 0 Event) -- cobertura
+	de SUPERFÍCIE, deliberadamente sem `Behavior` próprio para a maioria: propriedades guardam e
+	devolvem (dado morto, como o resto de `Lighting`), e os métodos ficam com o stub `[LuauBench]`
+	do `ClassBuilder`. ÚNICA EXCEÇÃO: `PlayLocalSound` ganhou um `src/services/behavior/
+	SoundService.luau` MÍNIMO (só esse método, nada mais) para errar com a string EXATA confirmada
+	por citação ao vivo (pesquisa `task-services-028`): "SoundService:PlayLocalSound only works on
+	a client." -- ver o cabeçalho daquele arquivo para o raciocínio completo (reabertura da decisão
+	original de L2.5.3, que previa NENHUM `Behavior` para esta classe). DISCREPÂNCIA dump x doc
+	registrada aqui e no relatório do gerador: `RespectFilteringEnabled` tem `Default` `"false"` no
+	dump e `true` na doc oficial -- o dump vence (regra 03, fonte única), nunca "corrigido" à mão.
 ]]
 
 local Coverage: { string } = {
@@ -98,6 +112,9 @@ local Coverage: { string } = {
 	-- PhysicsService (task-services-023, L2.5.1) -- WorldRoot já vem pelo fecho de superclasses
 	-- de Workspace, ver comentário acima.
 	"PhysicsService",
+
+	-- SoundService (task-services-025, L2.5.3) -- Superclass "Instance" direto, não puxa nada novo.
+	"SoundService",
 }
 
 return Coverage

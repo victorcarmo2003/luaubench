@@ -3,12 +3,19 @@
 --[[
 	Teste de task-services-003 para `src/services/behavior/Index.luau`, ATUALIZADO por
 	task-services-004, task-services-024, task-services-018, task-services-019, task-services-020,
-	task-services-021, task-services-022, task-services-023 e task-services-026.
+	task-services-021, task-services-022, task-services-023, task-services-026 e task-services-025.
 
 	task-services-026 (`HttpService` sub-leva B: rede real): NÃO muda a contagem de entradas
 	(continuam 17 -- `HttpService` já existia desde task-services-022) -- só o teste
 	`behavior/Index.luau['HttpService']`, abaixo, que agora exige `Initialize ~= nil` (antes:
 	`Initialize == nil`). Ver cabeçalho de `Index.luau` e de `./HttpService.luau`.
+
+	task-services-025 (`SoundService`): acrescenta a 18ª entrada -- `Methods` cobrindo SÓ
+	`PlayLocalSound` (a string EXATA confirmada por citação ao vivo, task-services-028), NENHUM
+	`Initialize`. Ver cabeçalho de `Index.luau` e de `./SoundService.luau` para o raciocínio
+	completo (por que esta é a ÚNICA exceção à decisão original de L2.5.3, que previa NENHUM
+	`Behavior` para `SoundService`).
+
 	O mapa deixou de estar vazio na retomada de task-services-003 (ver o cabeçalho de `Index.luau`,
 	seção "HISTÓRICO", para o porquê) com UMA entrada (`StarterPlayer`), ganhou mais DUAS em
 	task-services-004 (`RunService`/`Players`), mais UMA em task-services-024 (`Lighting`), mais
@@ -16,14 +23,15 @@
 	`DataStoreOptions`/`DataStoreSetOptions`/`DataStoreIncrementOptions`), mais DUAS em
 	task-services-019 (`DataStore`/`Pages`), mais UMA em task-services-020 (`OrderedDataStore`),
 	mais UMA em task-services-021 (`MessagingService`), mais UMA em task-services-022
-	(`HttpService`) e mais DUAS em task-services-023 (`WorldRoot`/`PhysicsService`) -- 17 entradas
-	ao todo. `Initialize`/`Methods` de cada uma (cobertura de comportamento própria) é testado em
-	`./StarterPlayer.spec.luau`/`./RunService.spec.luau`/`./Players.spec.luau`/
+	(`HttpService`), mais DUAS em task-services-023 (`WorldRoot`/`PhysicsService`) e mais UMA em
+	task-services-025 (`SoundService`) -- 18 entradas ao todo. `Initialize`/`Methods` de cada uma
+	(cobertura de comportamento própria) é testado em `./StarterPlayer.spec.luau`/
+	`./RunService.spec.luau`/`./Players.spec.luau`/
 	`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/`./GlobalDataStore.spec.luau`/
 	`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/`./DataStoreSetOptions.spec.luau`/
 	`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/`./Pages.spec.luau`/
 	`./OrderedDataStore.spec.luau`/`./MessagingService.spec.luau`/`./HttpService.spec.luau`/
-	`./WorldRoot.spec.luau`/`./PhysicsService.spec.luau`. Este arquivo cobre só a FORMA do mapa
+	`./WorldRoot.spec.luau`/`./PhysicsService.spec.luau`/`./SoundService.spec.luau`. Este arquivo cobre só a FORMA do mapa
 	(tipado corretamente, requerível, exatamente as entradas esperadas -- nem mais nem menos) e que
 	`Services.Register()` (src/services/init.luau) consegue iterar `generated/Index.luau` cruzando
 	com este mapa sem erro -- essa segunda parte já está coberta em `../Integration.spec.luau`
@@ -50,12 +58,12 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
-test("behavior/Index.luau tem EXATAMENTE 17 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService, HttpService, WorldRoot, PhysicsService", function()
+test("behavior/Index.luau tem EXATAMENTE 18 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService, HttpService, WorldRoot, PhysicsService, SoundService", function()
 	local count = 0
 	for _ in BehaviorIndex do
 		count += 1
 	end
-	assert(count == 17, `esperava 17 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
+	assert(count == 18, `esperava 18 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
 end)
 
 test("behavior/Index.luau['StarterPlayer'] existe e tem Initialize; classes-contêiner puro continuam sem entrada", function()
@@ -212,6 +220,18 @@ test("behavior/Index.luau['PhysicsService'] existe, tem Methods (os mesmos 8, de
 	assert(methods.SetPartCollisionGroup == nil, "PhysicsService.Methods NÃO deveria implementar SetPartCollisionGroup (Deprecated, depende de BasePart)")
 	assert(methods.CollisionGroupContainsPart == nil, "PhysicsService.Methods NÃO deveria implementar CollisionGroupContainsPart (Deprecated, depende de BasePart)")
 	assert(physicsServiceBehavior.Initialize == nil, "PhysicsService não precisa de Initialize -- delega ao Registry da instância de Workspace, sem estado próprio")
+end)
+
+test("behavior/Index.luau['SoundService'] existe, tem Methods (SÓ PlayLocalSound) e NENHUM Initialize (task-services-025)", function()
+	local soundServiceBehavior = BehaviorIndex["SoundService"]
+	assert(soundServiceBehavior ~= nil, "SoundService deveria ter Behavior a partir de task-services-025 -- ÚNICA exceção à decisão original de L2.5.3 (ver cabeçalho de SoundService.luau)")
+	assert(soundServiceBehavior.Methods ~= nil, "SoundService.Methods deveria existir")
+	local methods = soundServiceBehavior.Methods :: { [string]: unknown }
+	assert(methods.PlayLocalSound ~= nil, "SoundService.Methods.PlayLocalSound deveria existir -- string EXATA confirmada, task-services-028")
+	assert(methods.GetListener == nil, "SoundService.Methods NÃO deveria implementar GetListener -- fica com o stub do ClassBuilder, de propósito (decisão original de L2.5.3, inalterada)")
+	assert(methods.SetListener == nil, "SoundService.Methods NÃO deveria implementar SetListener -- fica com o stub do ClassBuilder, de propósito")
+	assert(methods.GetMixerTime == nil, "SoundService.Methods NÃO deveria implementar GetMixerTime -- fica com o stub do ClassBuilder, de propósito")
+	assert(soundServiceBehavior.Initialize == nil, "SoundService não precisa de Initialize -- as 13 Property são dado morto, sem sincronia nenhuma (ao contrário de Lighting)")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

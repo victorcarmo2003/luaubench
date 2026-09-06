@@ -2,8 +2,9 @@
 
 --[[
 	Teste da task-services-002 (leva 1), ESTENDIDO por task-services-017 (leva 2 -- as 16 classes
-	de DataStoreService entraram em tools/coverage.luau, ver L2.1.7) e por task-services-022
-	(`HttpService`/`MessagingService`, L2.2/L2.3): verifica os FATOS que
+	de DataStoreService entraram em tools/coverage.luau, ver L2.1.7), por task-services-022
+	(`HttpService`/`MessagingService`, L2.2/L2.3), por task-services-023 (`PhysicsService`, L2.5.1)
+	e por task-services-025 (`SoundService`, L2.5.3): verifica os FATOS que
 	`lune run tools/generate-services` deve produzir em `src/services/generated/` -- não roda o
 	gerador (que baixa/lê o dump e pode demorar e depende de rede na ausência de cache), só
 	INSPECIONA a saída já commitada. Rode `lune run tools/generate-services` antes desta suíte
@@ -15,26 +16,30 @@
 	`Integration.spec.luau`.
 
 	Cobre os números exatos do acceptance de task-services-002 + task-services-017 +
-	task-services-022:
+	task-services-022 + task-services-023 + task-services-025:
 	- Manifest.luau com exatamente 916 entradas (as 916 classes do dump -- não muda entre levas)
-	- fecho de 42 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
+	- fecho de 44 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
 	  WorldRoot/Model/PVInstance/BasePlayerGui, puxadas por herança sem estarem listadas em
 	  coverage.luau) + as 16 de DataStoreService da leva 2 (task-services-017 -- todas listadas
 	  EXPLICITAMENTE em coverage.luau, nenhuma puxada por herança desta vez: L2.1.7 confirma que
 	  nenhuma tem superclasse fora da lista, exceto `Pages`, que já está listada) + as 2 de
 	  task-services-022 (`HttpService`/`MessagingService` -- as duas terminam em `Instance` direto
-	  no dump, nenhuma puxa classe nova pelo fecho de superclasses)
+	  no dump, nenhuma puxa classe nova pelo fecho de superclasses) + 1 de task-services-023
+	  (`PhysicsService` -- idem, `Instance` direto) + 1 de task-services-025 (`SoundService` --
+	  idem, `Instance` direto, ver L2.5.3)
 	- exatamente 4 membros de schema excluídos pelo eixo Capabilities na leva 1 (Script.Source,
 	  ModuleScript.Source, RunService.Misprediction, RunService.FrameNumber) -- nem a leva 2 nem
-	  task-services-022 acrescentam exclusão nova por este eixo (pesquisa-datastore-2026-09-05.md,
-	  seção A, e pesquisa-http-messaging-2026-09-05.md, seção A: `HttpService`/`MessagingService`
-	  não têm membro excluído por Capability -- `Network`/`ServerCommunication` são grantable)
-	  fora de `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são `Property`, não
-	  afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo)
-	- 197 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
+	  task-services-022/023/025 acrescentam exclusão nova por este eixo (pesquisa-datastore-
+	  2026-09-05.md, seção A, e pesquisa-http-messaging-2026-09-05.md, seção A: `HttpService`/
+	  `MessagingService` não têm membro excluído por Capability -- `Network`/`ServerCommunication`
+	  são grantable; `PhysicsService`/`SoundService` idem, ver pesquisa-lighting-sound-physics-
+	  2026-09-05.md) fora de `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são
+	  `Property`, não afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo)
+	- 201 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
 	  2 de `MessagingService`, task-services-022 (182) + 15 de `PhysicsService` (8 de grupo de
-	  colisão + 7 `Deprecated`), task-services-023 -- conferido por inspeção direta do `Index`
-	  gerado)
+	  colisão + 7 `Deprecated`), task-services-023 (197) + 4 de `SoundService` (`GetListener`/
+	  `SetListener`/`GetMixerTime`/`PlayLocalSound`), task-services-025 -- conferido por inspeção
+	  direta do `Index` gerado)
 	- Lighting/Players/StarterPlayer com schema COMPLETO (nenhuma exclusão por Capability -- prova
 	  de que a regra ingênua "capability != Basic é restritiva" não foi implementada)
 	- RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema
@@ -87,7 +92,7 @@ test("Manifest distingue classe não coberta (mas conhecida) de classe coberta",
 	assert(frameEntry.Covered == false, "Frame NÃO deveria estar coberto nesta leva")
 end)
 
-test("O fecho tem exatamente 43 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService (task-services-022) + 1 de PhysicsService (task-services-023))", function()
+test("O fecho tem exatamente 44 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService (task-services-022) + 1 de PhysicsService (task-services-023) + 1 de SoundService (task-services-025))", function()
 	local expected = {
 		-- Leva 1 (task-services-002) -- 24 classes, 4 delas (WorldRoot/Model/PVInstance/
 		-- BasePlayerGui) puxadas por herança sem estarem em coverage.luau (ver prova abaixo).
@@ -106,13 +111,16 @@ test("O fecho tem exatamente 43 classes (24 da leva 1 + 16 de DataStoreService d
 		"HttpService", "MessagingService",
 		-- task-services-023 (L2.5.1) -- 1 classe, listada explicitamente em coverage.luau.
 		"PhysicsService",
+		-- task-services-025 (L2.5.3) -- 1 classe, "Instance" direto no dump, listada
+		-- explicitamente em coverage.luau, nenhuma classe nova puxada pelo fecho.
+		"SoundService",
 	}
 	local indexCount = 0
 	for _ in Index do
 		indexCount += 1
 	end
-	assert(#expected == 43, `sanity check da própria lista 'expected' deste teste -- deveria ter 43 nomes, tem {#expected}`)
-	assert(indexCount == 43, `Index deveria ter 43 classes, tem {indexCount}`)
+	assert(#expected == 44, `sanity check da própria lista 'expected' deste teste -- deveria ter 44 nomes, tem {#expected}`)
+	assert(indexCount == 44, `Index deveria ter 44 classes, tem {indexCount}`)
 	for _, name in expected do
 		assert(Index[name] ~= nil, `Index deveria conter "{name}"`)
 		assert(Manifest.Classes[name].Covered == true, `Manifest deveria marcar "{name}" como Covered`)
@@ -171,12 +179,12 @@ test("RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema (
 	end
 end)
 
-test("197 métodos emitidos no total no fecho (182 até task-services-022 + 15 de PhysicsService, task-services-023)", function()
+test("201 métodos emitidos no total no fecho (197 até task-services-023 + 4 de SoundService, task-services-025)", function()
 	local total = 0
 	for _, generated in Index do
 		total += #generated.MethodNames
 	end
-	assert(total == 197, `esperava 197 métodos no total do fecho, contei {total}`)
+	assert(total == 201, `esperava 201 métodos no total do fecho, contei {total}`)
 end)
 
 test("HttpService.HttpEnabled semeada Default=false/ReadOnly=true pelo schema gerado (task-services-022, L2.2.1)", function()

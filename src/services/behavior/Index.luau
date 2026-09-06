@@ -182,6 +182,14 @@
 	  `ClassBuilder`, de propósito -- ver cabeçalho de `./PhysicsService.luau` para a razão de cada
 	  um (modelo de id numérico abandonado, ou dependência de `BasePart`, não coberta).
 
+	task-services-025 (`SoundService` -- LER .claude/agents-memory/arquiteto-services-2026-09-05.md,
+	"L2.5.3", e `./SoundService.luau`, cabeçalho, ANTES de mexer aqui) adiciona a última entrada:
+	- `SoundService` (ver `./SoundService.luau`): `Methods` cobre SÓ `PlayLocalSound` -- string
+	  EXATA confirmada por citação ao vivo (task-services-028): "SoundService:PlayLocalSound only
+	  works on a client." `GetListener`/`SetListener`/`GetMixerTime` ficam com o stub `[LuauBench]`
+	  do `ClassBuilder`, de propósito (decisão original de L2.5.3, inalterada). As 13 Property
+	  continuam SEM `Behavior` -- dado morto, guardam e devolvem via o schema genérico.
+
 	Todas as outras classes desta e das levas anteriores continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
 	`Initialize`/`Methods` próprio.
@@ -207,6 +215,7 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	HttpService = require("./HttpService") :: Types.Behavior,
 	WorldRoot = require("./WorldRoot") :: Types.Behavior,
 	PhysicsService = require("./PhysicsService") :: Types.Behavior,
+	SoundService = require("./SoundService") :: Types.Behavior,
 }
 
 return BehaviorIndex

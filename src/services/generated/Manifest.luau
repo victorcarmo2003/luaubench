@@ -728,7 +728,7 @@ local Manifest: Manifest = {
 		["Sound"] = { Superclass = "Instance", IsService = false, IsAbstract = false, Covered = false },
 		["SoundEffect"] = { Superclass = "Instance", IsService = false, IsAbstract = true, Covered = false },
 		["SoundGroup"] = { Superclass = "Instance", IsService = false, IsAbstract = false, Covered = false },
-		["SoundService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
+		["SoundService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = true },
 		["SoundShimService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
 		["Sparkles"] = { Superclass = "Instance", IsService = false, IsAbstract = false, Covered = false },
 		["SpawnLocation"] = { Superclass = "Part", IsService = false, IsAbstract = false, Covered = false },

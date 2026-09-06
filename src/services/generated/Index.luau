@@ -46,6 +46,7 @@ local Index: { [string]: Types.GeneratedClass } = {
 	["Script"] = require("./classes/Script") :: Types.GeneratedClass,
 	["ServerScriptService"] = require("./classes/ServerScriptService") :: Types.GeneratedClass,
 	["ServerStorage"] = require("./classes/ServerStorage") :: Types.GeneratedClass,
+	["SoundService"] = require("./classes/SoundService") :: Types.GeneratedClass,
 	["StarterCharacterScripts"] = require("./classes/StarterCharacterScripts") :: Types.GeneratedClass,
 	["StarterGui"] = require("./classes/StarterGui") :: Types.GeneratedClass,
 	["StarterPack"] = require("./classes/StarterPack") :: Types.GeneratedClass,
