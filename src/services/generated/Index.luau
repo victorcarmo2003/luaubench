@@ -38,6 +38,7 @@ local Index: { [string]: Types.GeneratedClass } = {
 	["OrderedDataStore"] = require("./classes/OrderedDataStore") :: Types.GeneratedClass,
 	["PVInstance"] = require("./classes/PVInstance") :: Types.GeneratedClass,
 	["Pages"] = require("./classes/Pages") :: Types.GeneratedClass,
+	["PhysicsService"] = require("./classes/PhysicsService") :: Types.GeneratedClass,
 	["Players"] = require("./classes/Players") :: Types.GeneratedClass,
 	["ReplicatedFirst"] = require("./classes/ReplicatedFirst") :: Types.GeneratedClass,
 	["ReplicatedStorage"] = require("./classes/ReplicatedStorage") :: Types.GeneratedClass,

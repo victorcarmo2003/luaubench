@@ -548,7 +548,7 @@ local Manifest: Manifest = {
 		["PausedStateException"] = { Superclass = "PausedState", IsService = false, IsAbstract = true, Covered = false },
 		["PerformanceControlService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
 		["PermissionsService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
-		["PhysicsService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
+		["PhysicsService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = true },
 		["PhysicsSettings"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
 		["PinShortcutService"] = { Superclass = "Instance", IsService = true, IsAbstract = true, Covered = false },
 		["PitchShiftSoundEffect"] = { Superclass = "SoundEffect", IsService = false, IsAbstract = false, Covered = false },

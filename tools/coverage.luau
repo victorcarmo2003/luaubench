@@ -29,6 +29,16 @@
 	`RequestAsync` errando com a família "HTTP não habilitado" -- `HttpEnabled` semeada `false` e
 	`ReadOnly` pelo próprio schema gerado (Security Read=None/Write=LocalUserSecurity -> passo 5 da
 	tabela A.4 do gerador, sem behavior explícito nenhum).
+
+	task-services-023 (LER .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.5.1", ANTES
+	de mexer aqui) acrescenta `PhysicsService` -- `Superclass: "Instance"` no dump (confirmado por
+	leitura direta de `.cache/api-dump/28360dea....json`), sem puxar nenhuma classe nova pelo fecho
+	de superclasses. `WorldRoot` NÃO entra aqui -- já está na lista desde a leva 1, puxada
+	automaticamente pelo fecho de superclasses de `Workspace` (`Workspace -> WorldRoot -> Model ->
+	... -> Instance`), exatamente como o comentário do topo deste arquivo já avisa para não
+	listar. `Behavior` novo: `src/services/behavior/WorldRoot.luau` (dono do estado -- os 8 métodos
+	de grupo de colisão, POR INSTÂNCIA de `Workspace`) e `src/services/behavior/PhysicsService.luau`
+	(vista legada, delegando ao registro de `WorldRoot`).
 ]]
 
 local Coverage: { string } = {
@@ -84,6 +94,10 @@ local Coverage: { string } = {
 	-- HttpService + MessagingService (task-services-022, L2.2/L2.3)
 	"HttpService",
 	"MessagingService",
+
+	-- PhysicsService (task-services-023, L2.5.1) -- WorldRoot já vem pelo fecho de superclasses
+	-- de Workspace, ver comentário acima.
+	"PhysicsService",
 }
 
 return Coverage

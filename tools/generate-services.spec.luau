@@ -31,9 +31,10 @@
 	  não têm membro excluído por Capability -- `Network`/`ServerCommunication` são grantable)
 	  fora de `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são `Property`, não
 	  afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo)
-	- 182 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
-	  2 de `MessagingService`, task-services-022 -- conferido por inspeção direta do `Index`
-	  gerado nesta tarefa, e batendo com o relatório impresso pelo gerador: "182 mantidos")
+	- 197 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
+	  2 de `MessagingService`, task-services-022 (182) + 15 de `PhysicsService` (8 de grupo de
+	  colisão + 7 `Deprecated`), task-services-023 -- conferido por inspeção direta do `Index`
+	  gerado)
 	- Lighting/Players/StarterPlayer com schema COMPLETO (nenhuma exclusão por Capability -- prova
 	  de que a regra ingênua "capability != Basic é restritiva" não foi implementada)
 	- RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema
@@ -86,7 +87,7 @@ test("Manifest distingue classe não coberta (mas conhecida) de classe coberta",
 	assert(frameEntry.Covered == false, "Frame NÃO deveria estar coberto nesta leva")
 end)
 
-test("O fecho tem exatamente 42 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService, task-services-022)", function()
+test("O fecho tem exatamente 43 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService (task-services-022) + 1 de PhysicsService (task-services-023))", function()
 	local expected = {
 		-- Leva 1 (task-services-002) -- 24 classes, 4 delas (WorldRoot/Model/PVInstance/
 		-- BasePlayerGui) puxadas por herança sem estarem em coverage.luau (ver prova abaixo).
@@ -103,13 +104,15 @@ test("O fecho tem exatamente 42 classes (24 da leva 1 + 16 de DataStoreService d
 		"DataStoreVersionPages", "DataStoreObjectVersionInfo", "DataStoreInfo",
 		-- task-services-022 (L2.2/L2.3) -- 2 classes, ambas terminam em "Instance" direto no dump.
 		"HttpService", "MessagingService",
+		-- task-services-023 (L2.5.1) -- 1 classe, listada explicitamente em coverage.luau.
+		"PhysicsService",
 	}
 	local indexCount = 0
 	for _ in Index do
 		indexCount += 1
 	end
-	assert(#expected == 42, `sanity check da própria lista 'expected' deste teste -- deveria ter 42 nomes, tem {#expected}`)
-	assert(indexCount == 42, `Index deveria ter 42 classes, tem {indexCount}`)
+	assert(#expected == 43, `sanity check da própria lista 'expected' deste teste -- deveria ter 43 nomes, tem {#expected}`)
+	assert(indexCount == 43, `Index deveria ter 43 classes, tem {indexCount}`)
 	for _, name in expected do
 		assert(Index[name] ~= nil, `Index deveria conter "{name}"`)
 		assert(Manifest.Classes[name].Covered == true, `Manifest deveria marcar "{name}" como Covered`)
@@ -168,12 +171,12 @@ test("RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema (
 	end
 end)
 
-test("182 métodos emitidos no total no fecho (171 até task-services-017 + 9 de HttpService + 2 de MessagingService, task-services-022)", function()
+test("197 métodos emitidos no total no fecho (182 até task-services-022 + 15 de PhysicsService, task-services-023)", function()
 	local total = 0
 	for _, generated in Index do
 		total += #generated.MethodNames
 	end
-	assert(total == 182, `esperava 182 métodos no total do fecho, contei {total}`)
+	assert(total == 197, `esperava 197 métodos no total do fecho, contei {total}`)
 end)
 
 test("HttpService.HttpEnabled semeada Default=false/ReadOnly=true pelo schema gerado (task-services-022, L2.2.1)", function()

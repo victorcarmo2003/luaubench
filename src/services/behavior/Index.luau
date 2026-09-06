@@ -135,9 +135,52 @@
 	  `UrlEncode`/`GenerateGUID` (sem rede, funcionam com `HttpEnabled == false`) e
 	  `GetAsync`/`PostAsync`/`RequestAsync` (erram com a família "HTTP não habilitado" -- SEM
 	  REDE nesta sub-leva, `@lune/net` nunca é `require`d). `HttpEnabled` (Property) NÃO precisa de
-	  `Initialize` -- o schema gerado já semeia `false`/`ReadOnly` sozinho (ver cabeçalho de
-	  `./HttpService.luau`). `GetSecret`/`CreateWebStreamClient` ficam com o stub `[LuauBench]` do
-	  `ClassBuilder`, de propósito.
+	  `Initialize` NESTA sub-leva -- o schema gerado já semeia `false`/`ReadOnly` sozinho (ver
+	  cabeçalho de `./HttpService.luau`). `GetSecret`/`CreateWebStreamClient` ficam com o stub
+	  `[LuauBench]` do `ClassBuilder`, de propósito. **Ver task-services-026, abaixo -- esta
+	  afirmação de "NÃO precisa de Initialize" deixa de valer a partir de lá.**
+
+	task-services-026 (`HttpService` sub-leva B: rede real via `@lune/net` -- LER
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.2.2"/"L2.2.4"/"L2.2.5", e
+	`./HttpService.luau`, cabeçalho, ANTES de mexer aqui) NÃO adiciona entrada nova (continua
+	sendo a mesma entrada `HttpService` de task-services-022, atualizada) -- mas MUDA sua forma:
+	- `HttpService` (ver `./HttpService.luau`) GANHA `Initialize`: lê `Context.IsHttpAllowed()`
+	  (novo campo `BootstrapOptions.AllowHttp`, populado por `cli` a partir de `--allow-http`) e,
+	  se `true`, sobrescreve `HttpEnabled` para `true` via `SetPropertyRaw` -- só então
+	  `GetAsync`/`PostAsync`/`RequestAsync` deixam de errar "not enabled" e passam a fazer
+	  requisição REAL sobre `net.request`, atrás também de um endurecimento de destino (loopback/
+	  link-local/privado recusado sem `AllowHttpLocal`). Sem a flag, o comportamento continua
+	  IDÊNTICO ao de task-services-022 (HttpEnabled `false`, três métodos errando "not enabled").
+	  `Methods` continua com a MESMA lista de nomes (`JSONEncode`/`JSONDecode`/`UrlEncode`/
+	  `GenerateGUID`/`GetAsync`/`PostAsync`/`RequestAsync`) -- só o CORPO de `GetAsync`/
+	  `PostAsync`/`RequestAsync` mudou, de "sempre erra" para "erra sem a permissão, requisita de
+	  verdade com ela".
+
+	task-services-023 (`CollisionGroups`/`WorldRoot`/`PhysicsService` -- LER
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.5.1", e
+	.claude/agents-memory/pesquisa-services-leva2-pendencias-2026-09-05.md, item 3, ANTES de mexer
+	aqui) adiciona as duas últimas entradas:
+	- `WorldRoot` (ver `./WorldRoot.luau`): DONA do estado -- `Methods` cobre os oito métodos de
+	  grupo de colisão (`RegisterCollisionGroup`/`UnregisterCollisionGroup`/
+	  `IsCollisionGroupRegistered`/`RenameCollisionGroup`/`GetRegisteredCollisionGroups`/
+	  `GetMaxCollisionGroups`/`CollisionGroupSetCollidable`/`CollisionGroupsAreCollidable`), um
+	  `../CollisionGroups.luau` `Registry` POR INSTÂNCIA (get-or-create preguiçoso via
+	  `../InstanceState`, SEM `Initialize` -- `Runtime.ClassRegistry.NewEngineInstance` só chama o
+	  `Initialize` da classe EXATA "Workspace", nunca o de uma superclasse no meio da cadeia; só
+	  `Methods`/`Schema` são achatados pela cadeia inteira, ver cabeçalho de `./WorldRoot.luau` para
+	  o raciocínio completo). É A PRIMEIRA VEZ que `Workspace` ganha comportamento de verdade --
+	  antes desta tarefa não havia entrada nenhuma para ela neste mapa. `getRegistry` é exportado
+	  ALÉM do contrato `Types.Behavior` (mesmo padrão de `StoreIdState` em `./GlobalDataStore.luau`)
+	  para `./PhysicsService.luau` reusar o MESMO registro.
+	- `PhysicsService` (ver `./PhysicsService.luau`): vista LEGADA -- os MESMOS oito métodos,
+	  DELEGANDO ao `Registry` da instância de `Workspace` corrente (`Context.GetDataModel():GetService("Workspace")`
+	  + `WorldRoot.GetRegistry(...)`), nunca criando um registro próprio -- é o que garante que
+	  `PhysicsService:RegisterCollisionGroup("X")` e `workspace:IsCollisionGroupRegistered("X")`
+	  enxerguem o MESMO estado. Os 7 métodos `Deprecated` (`CreateCollisionGroup`/
+	  `GetCollisionGroupId`/`GetCollisionGroupName`/`GetCollisionGroups`/`RemoveCollisionGroup`/
+	  `SetPartCollisionGroup`/`CollisionGroupContainsPart`) ficam com o stub `[LuauBench]` do
+	  `ClassBuilder`, de propósito -- ver cabeçalho de `./PhysicsService.luau` para a razão de cada
+	  um (modelo de id numérico abandonado, ou dependência de `BasePart`, não coberta).
 
 	Todas as outras classes desta e das levas anteriores continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
@@ -162,6 +205,8 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	OrderedDataStore = require("./OrderedDataStore") :: Types.Behavior,
 	MessagingService = require("./MessagingService") :: Types.Behavior,
 	HttpService = require("./HttpService") :: Types.Behavior,
+	WorldRoot = require("./WorldRoot") :: Types.Behavior,
+	PhysicsService = require("./PhysicsService") :: Types.Behavior,
 }
 
 return BehaviorIndex

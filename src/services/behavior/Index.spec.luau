@@ -3,22 +3,28 @@
 --[[
 	Teste de task-services-003 para `src/services/behavior/Index.luau`, ATUALIZADO por
 	task-services-004, task-services-024, task-services-018, task-services-019, task-services-020,
-	task-services-021 e task-services-022.
+	task-services-021, task-services-022, task-services-023 e task-services-026.
+
+	task-services-026 (`HttpService` sub-leva B: rede real): NÃO muda a contagem de entradas
+	(continuam 17 -- `HttpService` já existia desde task-services-022) -- só o teste
+	`behavior/Index.luau['HttpService']`, abaixo, que agora exige `Initialize ~= nil` (antes:
+	`Initialize == nil`). Ver cabeçalho de `Index.luau` e de `./HttpService.luau`.
 	O mapa deixou de estar vazio na retomada de task-services-003 (ver o cabeçalho de `Index.luau`,
 	seção "HISTÓRICO", para o porquê) com UMA entrada (`StarterPlayer`), ganhou mais DUAS em
 	task-services-004 (`RunService`/`Players`), mais UMA em task-services-024 (`Lighting`), mais
 	SEIS em task-services-018 (`DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo`/
 	`DataStoreOptions`/`DataStoreSetOptions`/`DataStoreIncrementOptions`), mais DUAS em
 	task-services-019 (`DataStore`/`Pages`), mais UMA em task-services-020 (`OrderedDataStore`),
-	mais UMA em task-services-021 (`MessagingService`) e mais UMA em task-services-022
-	(`HttpService`) -- 15 entradas ao todo. `Initialize`/`Methods` de cada uma (cobertura de
-	comportamento própria) é testado em `./StarterPlayer.spec.luau`/`./RunService.spec.luau`/
-	`./Players.spec.luau`/`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/
-	`./GlobalDataStore.spec.luau`/`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/
-	`./DataStoreSetOptions.spec.luau`/`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/
-	`./Pages.spec.luau`/`./OrderedDataStore.spec.luau`/`./MessagingService.spec.luau`/
-	`./HttpService.spec.luau`. Este arquivo cobre só a FORMA do mapa (tipado corretamente,
-	requerível, exatamente as entradas esperadas -- nem mais nem menos) e que
+	mais UMA em task-services-021 (`MessagingService`), mais UMA em task-services-022
+	(`HttpService`) e mais DUAS em task-services-023 (`WorldRoot`/`PhysicsService`) -- 17 entradas
+	ao todo. `Initialize`/`Methods` de cada uma (cobertura de comportamento própria) é testado em
+	`./StarterPlayer.spec.luau`/`./RunService.spec.luau`/`./Players.spec.luau`/
+	`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/`./GlobalDataStore.spec.luau`/
+	`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/`./DataStoreSetOptions.spec.luau`/
+	`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/`./Pages.spec.luau`/
+	`./OrderedDataStore.spec.luau`/`./MessagingService.spec.luau`/`./HttpService.spec.luau`/
+	`./WorldRoot.spec.luau`/`./PhysicsService.spec.luau`. Este arquivo cobre só a FORMA do mapa
+	(tipado corretamente, requerível, exatamente as entradas esperadas -- nem mais nem menos) e que
 	`Services.Register()` (src/services/init.luau) consegue iterar `generated/Index.luau` cruzando
 	com este mapa sem erro -- essa segunda parte já está coberta em `../Integration.spec.luau`
 	(24 classes registradas com sucesso, `StarterPlayer` nascendo com os dois filhos fixos, e
@@ -44,12 +50,12 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
-test("behavior/Index.luau tem EXATAMENTE 15 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService, HttpService", function()
+test("behavior/Index.luau tem EXATAMENTE 17 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore, MessagingService, HttpService, WorldRoot, PhysicsService", function()
 	local count = 0
 	for _ in BehaviorIndex do
 		count += 1
 	end
-	assert(count == 15, `esperava 15 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
+	assert(count == 17, `esperava 17 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
 end)
 
 test("behavior/Index.luau['StarterPlayer'] existe e tem Initialize; classes-contêiner puro continuam sem entrada", function()
@@ -148,7 +154,7 @@ test("behavior/Index.luau['MessagingService'] existe, tem Methods (PublishAsync/
 	assert(messagingServiceBehavior.Initialize == nil, "MessagingService não precisa de Initialize -- estado (assinaturas por tópico) é local de módulo, não por instância")
 end)
 
-test("behavior/Index.luau['HttpService'] existe, tem Methods (JSONEncode/JSONDecode/UrlEncode/GenerateGUID/GetAsync/PostAsync/RequestAsync) e NENHUM Initialize (task-services-022)", function()
+test("behavior/Index.luau['HttpService'] existe, tem Methods (JSONEncode/JSONDecode/UrlEncode/GenerateGUID/GetAsync/PostAsync/RequestAsync) e TEM Initialize (task-services-026)", function()
 	local httpServiceBehavior = BehaviorIndex["HttpService"]
 	assert(httpServiceBehavior ~= nil, "HttpService deveria ter Behavior a partir de task-services-022")
 	assert(httpServiceBehavior.Methods ~= nil, "HttpService.Methods deveria existir")
@@ -162,7 +168,50 @@ test("behavior/Index.luau['HttpService'] existe, tem Methods (JSONEncode/JSONDec
 	assert(methods.RequestAsync ~= nil, "HttpService.Methods.RequestAsync deveria existir")
 	assert(methods.GetSecret == nil, "HttpService.Methods NÃO deveria implementar GetSecret -- fica com o stub do ClassBuilder, de propósito")
 	assert(methods.CreateWebStreamClient == nil, "HttpService.Methods NÃO deveria implementar CreateWebStreamClient -- fica com o stub do ClassBuilder, de propósito")
-	assert(httpServiceBehavior.Initialize == nil, "HttpService não precisa de Initialize -- HttpEnabled já é semeado false/ReadOnly pelo schema gerado")
+	-- task-services-026 (sub-leva B): ATUALIZADO -- HttpService GANHOU Initialize (lê
+	-- Context.IsHttpAllowed() para decidir se HttpEnabled nasce true). A afirmação anterior
+	-- ("não precisa de Initialize", task-services-022) valia só enquanto HttpEnabled não podia
+	-- nascer true de verdade -- ver cabeçalho de Index.luau e de HttpService.luau.
+	assert(httpServiceBehavior.Initialize ~= nil, "HttpService DEVERIA ter Initialize a partir de task-services-026 -- é o que lê AllowHttp e liga HttpEnabled de verdade")
+end)
+
+test("behavior/Index.luau['WorldRoot'] existe, tem Methods (os 8 de grupo de colisão) e NENHUM Initialize (task-services-023)", function()
+	local worldRootBehavior = BehaviorIndex["WorldRoot"]
+	assert(worldRootBehavior ~= nil, "WorldRoot deveria ter Behavior a partir de task-services-023")
+	assert(worldRootBehavior.Methods ~= nil, "WorldRoot.Methods deveria existir")
+	local methods = worldRootBehavior.Methods :: { [string]: unknown }
+	assert(methods.RegisterCollisionGroup ~= nil, "WorldRoot.Methods.RegisterCollisionGroup deveria existir")
+	assert(methods.UnregisterCollisionGroup ~= nil, "WorldRoot.Methods.UnregisterCollisionGroup deveria existir")
+	assert(methods.IsCollisionGroupRegistered ~= nil, "WorldRoot.Methods.IsCollisionGroupRegistered deveria existir")
+	assert(methods.RenameCollisionGroup ~= nil, "WorldRoot.Methods.RenameCollisionGroup deveria existir")
+	assert(methods.GetRegisteredCollisionGroups ~= nil, "WorldRoot.Methods.GetRegisteredCollisionGroups deveria existir")
+	assert(methods.GetMaxCollisionGroups ~= nil, "WorldRoot.Methods.GetMaxCollisionGroups deveria existir")
+	assert(methods.CollisionGroupSetCollidable ~= nil, "WorldRoot.Methods.CollisionGroupSetCollidable deveria existir")
+	assert(methods.CollisionGroupsAreCollidable ~= nil, "WorldRoot.Methods.CollisionGroupsAreCollidable deveria existir")
+	assert(worldRootBehavior.Initialize == nil, "WorldRoot não precisa de Initialize -- o Registry é criado preguiçosamente (get-or-create) na 1ª chamada de qualquer método (ver cabeçalho de WorldRoot.luau, 'MECANISMO')")
+end)
+
+test("behavior/Index.luau['PhysicsService'] existe, tem Methods (os mesmos 8, delegando) e NENHUM Initialize (task-services-023)", function()
+	local physicsServiceBehavior = BehaviorIndex["PhysicsService"]
+	assert(physicsServiceBehavior ~= nil, "PhysicsService deveria ter Behavior a partir de task-services-023")
+	assert(physicsServiceBehavior.Methods ~= nil, "PhysicsService.Methods deveria existir")
+	local methods = physicsServiceBehavior.Methods :: { [string]: unknown }
+	assert(methods.RegisterCollisionGroup ~= nil, "PhysicsService.Methods.RegisterCollisionGroup deveria existir")
+	assert(methods.UnregisterCollisionGroup ~= nil, "PhysicsService.Methods.UnregisterCollisionGroup deveria existir")
+	assert(methods.IsCollisionGroupRegistered ~= nil, "PhysicsService.Methods.IsCollisionGroupRegistered deveria existir")
+	assert(methods.RenameCollisionGroup ~= nil, "PhysicsService.Methods.RenameCollisionGroup deveria existir")
+	assert(methods.GetRegisteredCollisionGroups ~= nil, "PhysicsService.Methods.GetRegisteredCollisionGroups deveria existir")
+	assert(methods.GetMaxCollisionGroups ~= nil, "PhysicsService.Methods.GetMaxCollisionGroups deveria existir")
+	assert(methods.CollisionGroupSetCollidable ~= nil, "PhysicsService.Methods.CollisionGroupSetCollidable deveria existir")
+	assert(methods.CollisionGroupsAreCollidable ~= nil, "PhysicsService.Methods.CollisionGroupsAreCollidable deveria existir")
+	assert(methods.CreateCollisionGroup == nil, "PhysicsService.Methods NÃO deveria implementar CreateCollisionGroup (Deprecated) -- fica com o stub do ClassBuilder, de propósito")
+	assert(methods.GetCollisionGroupId == nil, "PhysicsService.Methods NÃO deveria implementar GetCollisionGroupId (Deprecated)")
+	assert(methods.GetCollisionGroupName == nil, "PhysicsService.Methods NÃO deveria implementar GetCollisionGroupName (Deprecated)")
+	assert(methods.GetCollisionGroups == nil, "PhysicsService.Methods NÃO deveria implementar GetCollisionGroups (Deprecated)")
+	assert(methods.RemoveCollisionGroup == nil, "PhysicsService.Methods NÃO deveria implementar RemoveCollisionGroup (Deprecated)")
+	assert(methods.SetPartCollisionGroup == nil, "PhysicsService.Methods NÃO deveria implementar SetPartCollisionGroup (Deprecated, depende de BasePart)")
+	assert(methods.CollisionGroupContainsPart == nil, "PhysicsService.Methods NÃO deveria implementar CollisionGroupContainsPart (Deprecated, depende de BasePart)")
+	assert(physicsServiceBehavior.Initialize == nil, "PhysicsService não precisa de Initialize -- delega ao Registry da instância de Workspace, sem estado próprio")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
