@@ -58,6 +58,34 @@
 	  `GetMoonDirection` permanecem com o stub `[LuauBench]` do `ClassBuilder` de propósito (sem
 	  fórmula pública, ver o cabeçalho de `Lighting.luau`).
 
+	task-services-018 (`DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo`/as 3 classes de
+	options -- LER .claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.1.3" a "L2.1.7",
+	antes de mexer aqui) adiciona seis entradas:
+	- `DataStoreService` (ver `./DataStoreService.luau`): `Methods` cobre `GetDataStore`/
+	  `GetGlobalDataStore`/`GetOrderedDataStore` (memoizados por `(name, scope)`, um cache
+	  compartilhado por `Kind`) e `GetRequestBudgetForRequestType`/`SetRateLimitForRequestType`
+	  (constante fixa/no-op). `ListDataStoresAsync` fica com o stub `[LuauBench]`.
+	- `GlobalDataStore` (ver `./GlobalDataStore.luau`): `Methods` cobre `GetAsync`/`SetAsync`/
+	  `UpdateAsync`/`RemoveAsync`/`IncrementAsync` (herdados por `DataStore`/`OrderedDataStore` via
+	  o achatamento de classe do `runtime`) -- todo yield passa por `../AsyncCall.luau`, toda
+	  validação/versionamento por `../datastore/Value.luau`/`../datastore/Store.luau`. `OnUpdate`/
+	  `BatchGetAsync` ficam com o stub `[LuauBench]`.
+	- `DataStoreKeyInfo` (ver `./DataStoreKeyInfo.luau`): `Methods` cobre `GetMetadata`/
+	  `GetUserIds`; a fábrica `New` (fora do contrato `Types.Behavior`, consumida direto por
+	  `./GlobalDataStore.luau`) constrói a instância e escreve `CreatedTime`/`UpdatedTime`/`Version`
+	  via `SetPropertyRaw`.
+	- `DataStoreOptions` (ver `./DataStoreOptions.luau`): `SetExperimentalFeatures` no-op (o
+	  `ProfileStore` chama sempre).
+	- `DataStoreSetOptions`/`DataStoreIncrementOptions` (ver `./DataStoreSetOptions.luau`/
+	  `./DataStoreIncrementOptions.luau`): `GetMetadata`/`SetMetadata`, metadata como estado
+	  privado por instância (nenhuma propriedade no schema gerado das duas).
+	`DataStore`/`OrderedDataStore`/`Pages`/as classes de paginação NÃO entram nesta leva (sub-leva
+	B: `GetVersionAsync`/`ListVersionsAsync`/`ListKeysAsync`/`GetSortedAsync`, fora do território de
+	task-services-018) -- ficam SEM entrada aqui, cobertas pelo stub `[LuauBench]` do `ClassBuilder`
+	método a método (a HERANÇA de `GlobalDataStore` continua funcionando para `DataStore`/
+	`OrderedDataStore` mesmo sem entrada própria neste mapa -- ver cabeçalho de
+	`./GlobalDataStore.luau`).
+
 	Todas as outras classes desta e da leva anterior continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
 	`Initialize`/`Methods` próprio.
@@ -70,6 +98,12 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	RunService = require("./RunService") :: Types.Behavior,
 	Players = require("./Players") :: Types.Behavior,
 	Lighting = require("./Lighting") :: Types.Behavior,
+	DataStoreService = require("./DataStoreService") :: Types.Behavior,
+	GlobalDataStore = require("./GlobalDataStore") :: Types.Behavior,
+	DataStoreKeyInfo = require("./DataStoreKeyInfo") :: Types.Behavior,
+	DataStoreOptions = require("./DataStoreOptions") :: Types.Behavior,
+	DataStoreSetOptions = require("./DataStoreSetOptions") :: Types.Behavior,
+	DataStoreIncrementOptions = require("./DataStoreIncrementOptions") :: Types.Behavior,
 }
 
 return BehaviorIndex
