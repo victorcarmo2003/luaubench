@@ -354,9 +354,33 @@ end
 -- `./services/datastore/Snapshot.luau`/`../cli/CloudStore.luau` para o mesmo tipo de erro) --
 -- usado só por `Services.FlushCloudState`, abaixo, para nunca deixar um erro de I/O do port vazar
 -- um `stack traceback:` cru de várias linhas na mensagem que devolve para `cli`.
+--
+-- task-services-033 (achado residual de revisão de task-cli-030,
+-- `.claude/agents-memory/revisor-cli-task-cli-030-2026-09-06.md`, achado ALTO): esta função
+-- SÓ cortava a primeira quebra de linha -- nunca removia o prefixo `<caminho>:<linha>: ` que
+-- `error(msg, level)` antepõe quando `level ~= 0` (é exatamente esse prefixo, não o
+-- `stack traceback:`, que carrega o caminho absoluto de instalação do LuauBench em disco, ex.:
+-- `D:\...\src\cli\CloudStore:170: CloudStore: could not create ...`). Hoje isso era MITIGADO só
+-- porque `RunCommand.luau` (`cli`) aplica um segundo strip correto por fora (via
+-- `TreeMaterializer.StripEngineErrorLocation`, defesa em profundidade) -- mas `services` NUNCA
+-- pode depender de `cli` aplicar essa segunda camada para não vazar path (regra 03, "Contrato com
+-- runtime": nunca `services` depende de comportamento de `cli`) -- qualquer chamador de
+-- `Services.FlushCloudState` que não repita esse strip veria o caminho de novo.
+--
+-- `services` NÃO pode importar `src/cli/TreeMaterializer.luau` (territórios não se sobrepõem,
+-- regra 05) -- por isso esta é uma CÓPIA local da mesma lógica (mesmo padrão de duplicação
+-- deliberada já existente entre `Sandbox.splitErrorMessage`/`OutputFormatter.tryReattributeModuleError`/
+-- o `firstLineOf` original de `cli`, três cópias antes desta correção) -- não um `require`
+-- cruzado novo. O padrão `^.-:%d+: (.*)$` é IDÊNTICO ao de
+-- `TreeMaterializer.StripEngineErrorLocation` (`src/cli/TreeMaterializer.luau:242-248`): `.-`
+-- não-guloso garante casar o PRIMEIRO `:<número>: ` da string (o prefixo de localização real),
+-- nunca um `: ` qualquer que a mensagem substantiva do erro possa conter depois; se o padrão não
+-- casar (erro sem prefixo de localização reconhecível), devolve a linha inalterada.
 local function firstLineOf(err: unknown): string
 	local text = tostring(err)
-	return string.match(text, "^[^\n]*") or text
+	local line = string.match(text, "^[^\n]*") or text
+	local withoutLocation = string.match(line, "^.-:%d+: (.*)$")
+	return withoutLocation or line
 end
 
 --[[

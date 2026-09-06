@@ -2129,7 +2129,7 @@
       "id": "task-services-025",
       "title": "SoundService: cobertura de superficie, sem Behavior proprio",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.5.3. Acrescentar SoundService a tools/coverage.luau e regerar -- e so. 17 membros sobrevivem ao filtro (13 propriedades, 4 funcoes, zero eventos). Para o publico-alvo declarado do LuauBench (logica pura, data manager, state machine) SoundService e irrelevante, e a pesquisa confirmou isso ao procurar uso real. Decisao: propriedades guardam e devolvem (dado morto, como o resto de Lighting); os quatro metodos (GetListener, SetListener, PlayLocalSound, GetMixerTime) ficam com o stub [LuauBench] do ClassBuilder. DUAS NOTAS QUE NAO VIRAM EXCECAO: (a) PlayLocalSound e client-only e erra no servidor real, mas NAO recebe tratamento tipo RejectingSignal -- a regra B.5.5 exige citacao AO VIVO de erro naquele membro para recortar uma excecao do balde de superficie client-only, e a pesquisa so achou relato de comunidade sem string verbatim; o stub [LuauBench] ja erra alto, e trocar o texto sem evidencia seria alargar a excecao por analogia, exatamente o que B.5 proibiu. (b) DISCREPANCIA dump x doc: RespectFilteringEnabled tem Default 'false' no dump e true na doc oficial -- O DUMP VENCE (regra 03, fonte unica); o valor gerado e false e a discrepancia fica registrada no relatorio. Nenhum agente 'corrige' um Default gerado a mao. ATUALIZACAO (pesquisa task-services-028): string verbatim confirmada para PlayLocalSound chamado no servidor: \"SoundService:PlayLocalSound only works on a client.\" -- ISSO REABRE A DECISAO original de L2.5.3: como agora ha citacao viva, a regra B.5.5 SE APLICA (RejectingSignal-like, mensagem exata em vez do stub generico [LuauBench]). Usar essa string exata em vez do stub generico do ClassBuilder para PlayLocalSound especificamente.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 48,
@@ -2565,7 +2565,7 @@
       "id": "task-test-cloud-001",
       "title": "Cenario: estado cloud sobrevive entre duas execucoes de luaubench run",
       "description": "Cenario de ponta a ponta em tests/scenarios/ provando a promessa da feature do ponto de vista de quem usa: rodar luaubench run duas vezes contra o MESMO projeto-fixture e confirmar que o DataStore persistiu entre elas, enquanto a arvore de Instance/scripts foi reconstruida do zero (que e o comportamento correto e nao muda). Cobrir tambem: --no-persist nao persiste nem le; historico de versao (ListVersionsAsync) sobrevive ao restart na ordem certa; OrderedDataStore mantem a ordenacao depois do restart. VALOR EXTRA se der: este e o unico caminho que finalmente permite testar o Steal/Cancel de sessao do ProfileStore de verdade -- o cabecalho de tests/scenarios/datastore-profilestore-pattern.scenario.luau (linhas 63-83) documenta que o passo 3 nao pode passar hoje porque JobId e constante por processo e a persistencia era so intra-processo; com dois PROCESSOS lune separados contra armazenamento persistido, a opcao (a) que aquele cabecalho lista passa a existir. Avaliar se da pra tirar o passo 3 do estado conhecido de falha, e se NAO der, dizer no relatorio por que (nao forcar). TERRITORIO: so tests/scenarios/ (mais fixtures proprias); read-only em src/**.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "testador",
       "reviewer": null,
       "wave": 54,
@@ -2626,7 +2626,7 @@
       "id": "task-services-033",
       "title": "Aplicar stripEngineErrorLocation em services/init.luau (mesmo vazamento de caminho, mitigado mas nao corrigido na fonte)",
       "description": "Achado residual de task-cli-030 (fix do achado ALTO). src/services/init.luau linhas ~357-360 tem sua propria copia de firstLineOf (so corta na primeira quebra de linha, nao remove o prefixo caminho:linha: que error() antepoe), usada por Services.FlushCloudState ao envolver cloudPersistence.Save(...) em pcall. Hoje mitigado porque RunCommand.luau (cli) aplica o strip correto de novo por fora (defesa em profundidade) -- mas se outro chamador de Services.FlushCloudState nao fizer esse segundo strip, o vazamento de caminho absoluto de instalacao reaparece. TERRITORIO: so src/services/init.luau + spec. FIX: aplicar a mesma logica de stripEngineErrorLocation (services nao pode importar de src/cli/TreeMaterializer.luau -- teria que existir uma copia propria em services, ou avaliar se vale a pena extrair pra um modulo verdadeiramente compartilhado fora dos dois territorios; decida com bom senso dado que services/cli ja tem essa duplicacao ocorrendo organicamente, nao invente uma dependencia cruzada nova).",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 52,
@@ -2639,7 +2639,8 @@
       "acceptance": "Mensagem de erro devolvida por Services.FlushCloudState/Bootstrap ao falhar nunca contem caminho absoluto de instalacao do LuauBench, mesmo quando chamada sem a defesa em profundidade que cli hoje aplica por fora. Specs cobrindo. --strict sem any. Suite de services sem regressao.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO, zero achados. Revisor reproduziu tudo independentemente: chamou FlushCloudState direto com port fake lancando erro com prefixo real de caminho, confirmou mensagem final sem caminho de instalacao mas preservando conteudo substantivo (inclusive caminho do projeto do usuario e os error real). Testou a regex de strip com 5 variacoes (conteudo com : extra, sem prefixo, multiplos : apos o prefixo, unidade de disco antes do numero de linha) -- corta so o primeiro prefixo, nunca mais nem menos, equivalente comportamental confirmado contra TreeMaterializer.StripEngineErrorLocation. Confirmou decisao de escopo (so caminho de escrita corrigido, leitura propaga por design ja testado em task-031) e territorio limpo (git diff --stat mostra so o trabalho concorrente de SoundService no resto). Index.spec/HttpService.spec confirmados nao-relacionados (SoundService concorrente e timeout ambiental de DNS, respectivamente). 30/30 init.spec. Relatorio: .claude/agents-memory/revisor-services-task-services-033-2026-09-06.md"
     },
     {
       "id": "task-cli-034",

@@ -988,6 +988,97 @@ test(
 	end
 )
 
+--------------------------------------------------------------------------------------------------
+-- task-services-033 (achado residual de revisão de task-cli-030,
+-- `.claude/agents-memory/revisor-cli-task-cli-030-2026-09-06.md`, achado ALTO): o `firstLineOf`
+-- interno deste arquivo só cortava a primeira quebra de linha, nunca o prefixo `<caminho>:<linha>: `
+-- que `error(msg, level)` antepõe -- vazando o caminho absoluto de instalação do LuauBench (ex.:
+-- `D:\...\src\cli\CloudStore:170: ...`) na mensagem que `Services.FlushCloudState` devolve. Hoje
+-- mitigado só porque `RunCommand.luau` (`cli`) aplica um segundo strip por fora -- mas `services`
+-- não pode depender disso (`cli` é um chamador entre outros possíveis). Teste ISOLADO abaixo:
+-- chama `Services.FlushCloudState()` DIRETAMENTE, nunca passando por `RunCommand.luau` -- ou seja,
+-- SEM a defesa em profundidade que `cli` aplica hoje por fora -- com um port FAKE cujo `Save` lança
+-- um erro `error(texto, 0)` já formatado EXATAMENTE como o erro real reproduzido pelo revisor
+-- (prefixo `<caminho absoluto>:<linha>: ` + mensagem substantiva). `level = 0` dá controle total
+-- sobre o texto (Luau não acrescenta nenhum prefixo próprio por cima), então a asserção não
+-- depende de onde este arquivo de teste mora em disco no momento em que os testes rodam.
+--------------------------------------------------------------------------------------------------
+
+test(
+	"Services.FlushCloudState() com port FAKE cujo Save lança erro COM prefixo de localização (formato real que error(msg, level) do Lune produz): a mensagem devolvida NUNCA contém o caminho absoluto de instalação do LuauBench, mesmo chamada DIRETAMENTE (sem a defesa em profundidade que cli aplica por fora)",
+	function()
+		-- Formato reproduzido ao vivo pelo revisor de task-cli-030 (achado ALTO) contra um erro
+		-- real de `CloudStore.Save` -- reproduzido aqui como string fixa, sob controle total via
+		-- `error(_, 0)`, para o teste não depender do caminho de instalação real desta máquina.
+		-- DOIS caminhos absolutos DIFERENTES de propósito: o prefixo de localização
+		-- (`D:\...\luaubench\src\cli\CloudStore:170: `, o caminho de INSTALAÇÃO do LuauBench --
+		-- este é o vazamento, tem que sumir) e o caminho do documento "cloud" citado DENTRO da
+		-- mensagem substantiva (`C:\Users\...\MyRobloxGame\...`, o PROJETO do usuário -- este é
+		-- informação legítima para o usuário ver, tem que sobreviver ao strip). De propósito SEM
+		-- a palavra "luaubench" no caminho do usuário (usa "cloud-cache" em vez do nome real
+		-- `.luaubench/cloud`) -- só assim a asserção "a mensagem não pode citar 'luaubench'",
+		-- abaixo, fica inequívoca (só o prefixo de localização cortado citaria essa palavra).
+		local fakeRawError =
+			[[D:\UserData\Documents\GitHub\luaubench\src\cli\CloudStore:170: CloudStore: could not create "C:\Users\SomeUser\MyRobloxGame\cloud-cache\datastore.json": Cannot create a file when that file already exists. (os error 183)]]
+
+		local errorSavePort: Types.CloudPersistence = {
+			Load = function(_document: string): string?
+				return nil
+			end,
+			Save = function(_document: string, _contents: string): ()
+				error(fakeRawError, 0)
+			end,
+		}
+
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game, CloudPersistence = errorSavePort })
+
+		local dataStoreService = (game:GetService("DataStoreService") :: unknown) :: Dynamic
+		local getDataStore = dataStoreService.GetDataStore :: (self: Dynamic, name: string, scope: string?, options: unknown?) -> Dynamic
+		local store = getDataStore(dataStoreService, "FlushSaveLocationLeakTest", nil, nil)
+		local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+
+		scheduler:Spawn(function()
+			setAsync(store, "K", { v = 1 }, nil, nil)
+		end)
+		scheduler:StepOnce(0)
+
+		assert(
+			GlobalDataStoreBehavior.Store:IsDirty(),
+			"o Store deveria estar sujo depois de um SetAsync bem-sucedido -- pré-condição deste teste"
+		)
+
+		local ok, saved, message = pcall(function()
+			return Services.FlushCloudState()
+		end)
+		assert(
+			ok,
+			`FlushCloudState NÃO deveria propagar a exceção de Save, mesmo com prefixo de localização na mensagem: {tostring(saved)}`
+		)
+		assert(saved == false, "FlushCloudState com Save que lança erro deveria devolver false")
+		assert(message ~= nil, "FlushCloudState com Save que lança erro deveria devolver uma mensagem não-nil")
+
+		local safeMessage = message :: string
+		assert(
+			string.find(string.lower(safeMessage), "luaubench", 1, true) == nil,
+			`achado task-services-033: a mensagem NUNCA pode citar "luaubench" -- prova que o caminho de INSTALAÇÃO do LuauBench (prefixo de localização) foi removido, recebeu: {safeMessage}`
+		)
+		assert(
+			string.find(safeMessage, "D:\\UserData\\Documents\\GitHub", 1, true) == nil,
+			`achado task-services-033: a mensagem NUNCA pode conter o caminho absoluto de instalação do LuauBench, recebeu: {safeMessage}`
+		)
+		assert(
+			string.find(safeMessage, "CloudStore: could not create", 1, true) ~= nil,
+			`a mensagem devolvida deveria PRESERVAR o texto substantivo do erro real -- só o prefixo de localização é cortado, recebeu: {safeMessage}`
+		)
+		assert(
+			string.find(safeMessage, "C:\\Users\\SomeUser\\MyRobloxGame", 1, true) ~= nil,
+			`a mensagem devolvida deveria PRESERVAR o caminho do PROJETO DO USUÁRIO citado dentro do texto substantivo do erro -- só o prefixo de localização é cortado, nunca o conteúdo depois dele, recebeu: {safeMessage}`
+		)
+	end
+)
+
 test(
 	"Services.Bootstrap com port FAKE cujo Load lança erro: PROPAGA a exceção (nunca engole -- perder estado do usuário em silêncio é proibido pela regra 00)",
 	function()
