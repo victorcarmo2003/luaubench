@@ -6,13 +6,14 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
 
 -- Tipo público de "Workspace". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type Workspace = Runtime.Instance & {
 	["AirDensity"]: unknown,
 	["AirTurbulenceIntensity"]: unknown,
@@ -35,7 +36,7 @@ export type Workspace = Runtime.Instance & {
 	["GetPhysicsThrottling"]: (self: Workspace) -> number,
 	["GetRealPhysicsFPS"]: (self: Workspace) -> number,
 	["GetServerTimeNow"]: (self: Workspace) -> number,
-	["JoinToOutsiders"]: (self: Workspace, objects: unknown, jointType: unknown) -> (),
+	["JoinToOutsiders"]: (self: Workspace, objects: unknown, jointType: ValueTypes.EnumItem) -> (),
 	["PGSIsEnabled"]: (self: Workspace) -> boolean,
 	["UnjoinFromOutsiders"]: (self: Workspace, objects: unknown) -> (),
 }
@@ -46,23 +47,23 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["AirDensity"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["AirTurbulenceIntensity"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["AllowThirdPartySales"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["ClientAnimatorThrottling"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["CurrentCamera"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["DistributedGameTime"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["FallHeightEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["FallenPartsDestroyHeight"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["FilteringEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["GlobalWind"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["Gravity"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["InsertPoint"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["InterpolationThrottling"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["Retargeting"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["StreamingEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["Terrain"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["PersistentLoaded"] = { Kind = "Event", Default = nil, ReadOnly = true },
+		["AirDensity"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["AirTurbulenceIntensity"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["AllowThirdPartySales"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["ClientAnimatorThrottling"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ClientAnimatorThrottlingMode", ValueCategory = "Enum" },
+		["CurrentCamera"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "Camera", ValueCategory = "Class" },
+		["DistributedGameTime"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "double", ValueCategory = "Primitive" },
+		["FallHeightEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["FallenPartsDestroyHeight"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "float", ValueCategory = "Primitive" },
+		["FilteringEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["GlobalWind"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "Vector3", ValueCategory = "DataType" },
+		["Gravity"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["InsertPoint"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "Vector3", ValueCategory = "DataType" },
+		["InterpolationThrottling"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "InterpolationThrottlingMode", ValueCategory = "Enum" },
+		["Retargeting"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "AnimatorRetargetingMode", ValueCategory = "Enum" },
+		["StreamingEnabled"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["Terrain"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "Terrain", ValueCategory = "Class" },
+		["PersistentLoaded"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetNumAwakeParts",

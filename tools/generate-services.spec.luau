@@ -42,6 +42,7 @@ local process = require("@lune/process")
 
 local Manifest = require("../src/services/generated/Manifest")
 local Index = require("../src/services/generated/Index")
+local ValueTypes = require("../src/valuetypes")
 
 local passedCount = 0
 local totalCount = 0
@@ -217,6 +218,168 @@ test("Instance.Schema dobra Property/Event de Object (ClassName/className/Change
 	assert(schema["Changed"] ~= nil, "Changed (de Object) deveria estar dobrado no schema de Instance")
 	assert(schema["className"] ~= nil, "className (alias deprecated de Object) deveria estar dobrado no schema de Instance")
 end)
+
+-- ================================================================================================
+-- task-services-015 -- ponte com `valuetypes`: (a) ValueType/ValueCategory emitidos por Property,
+-- (b) Default REAL de DataType/Enum já simulado (leva 1) em vez de nil, (c) DataType da leva 2
+-- (sem módulo em src/valuetypes/types/) NUNCA ganha um Default inventado. Testes de INTEGRAÇÃO
+-- contra a saída REALMENTE commitada (mesmo estilo do resto deste arquivo) -- as funções de
+-- gramática do gerador (`computeDefault`/`computeDataTypeDefaultExpr`) são locais ao script
+-- `tools/generate-services.luau` (não um módulo que devolve tabela), então não há como
+-- importá-las isoladamente pra um teste unitário puro sem rodar o gerador de novo (que baixa/lê o
+-- dump -- o mesmo motivo já documentado no cabeçalho deste arquivo pra não rodar o gerador aqui).
+-- ================================================================================================
+
+-- Os 6 DataType que já têm módulo em src/valuetypes/types/ hoje (Enum é o 7º, mas é
+-- ValueCategory "Enum", testado à parte) -- espelha LEVA1_DATATYPE_ARITY/LEVA1_DATATYPE_LUAU_TYPE
+-- de tools/generate-services.luau (cópia deliberada, não um require: este teste verifica o
+-- CONTRATO externo -- "que nomes o gerador considera já simulados" -- não a constante interna do
+-- gerador).
+local LEVA1_SIMULATED_DATATYPES: { [string]: boolean } =
+	{ Vector3 = true, Vector2 = true, Color3 = true, UDim = true, UDim2 = true, CFrame = true }
+
+test("ValueType/ValueCategory aparecem em toda Property; nil nos dois pra Event/Callback", function()
+	local lightingSchema = Index["Lighting"].Schema
+
+	local brightness = lightingSchema["Brightness"]
+	assert(brightness.ValueType == "float", `Brightness.ValueType esperado "float", recebeu {tostring(brightness.ValueType)}`)
+	assert(
+		brightness.ValueCategory == "Primitive",
+		`Brightness.ValueCategory esperado "Primitive", recebeu {tostring(brightness.ValueCategory)}`
+	)
+
+	local ambient = lightingSchema["Ambient"]
+	assert(ambient.ValueType == "Color3", `Ambient.ValueType esperado "Color3", recebeu {tostring(ambient.ValueType)}`)
+	assert(
+		ambient.ValueCategory == "DataType",
+		`Ambient.ValueCategory esperado "DataType", recebeu {tostring(ambient.ValueCategory)}`
+	)
+
+	local lightingStyle = lightingSchema["LightingStyle"]
+	assert(
+		lightingStyle.ValueType == "LightingStyle",
+		`LightingStyle.ValueType esperado "LightingStyle", recebeu {tostring(lightingStyle.ValueType)}`
+	)
+	assert(
+		lightingStyle.ValueCategory == "Enum",
+		`LightingStyle.ValueCategory esperado "Enum", recebeu {tostring(lightingStyle.ValueCategory)}`
+	)
+
+	local camera = Index["Workspace"].Schema["CurrentCamera"]
+	assert(camera.ValueType == "Camera", `CurrentCamera.ValueType esperado "Camera", recebeu {tostring(camera.ValueType)}`)
+	assert(
+		camera.ValueCategory == "Class",
+		`CurrentCamera.ValueCategory esperado "Class", recebeu {tostring(camera.ValueCategory)}`
+	)
+
+	local lightingChanged = lightingSchema["LightingChanged"]
+	assert(lightingChanged.Kind == "Event", "LightingChanged deveria ser Kind=\"Event\" (sanity do próprio teste)")
+	assert(lightingChanged.ValueType == nil, "Event não tem ValueType -- deveria ser nil")
+	assert(lightingChanged.ValueCategory == nil, "Event não tem ValueCategory -- deveria ser nil")
+end)
+
+test("Color3: Lighting.Ambient/FogColor ganham Default REAL (deixaram de ser nil)", function()
+	local schema = Index["Lighting"].Schema
+
+	local ambient = schema["Ambient"].Default
+	assert(ambient ~= nil, "Lighting.Ambient.Default não deveria mais ser nil")
+	assert(
+		ValueTypes.TypeNameOf(ambient) == "Color3",
+		`Lighting.Ambient.Default deveria ser um Color3, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(ambient))}`
+	)
+	-- `ambient`/`fogColor` chegam tipados `unknown` (Runtime.MemberDescriptor.Default) -- cast
+	-- explícito pro tipo opaco real ANTES de comparar (`unknown == Color3` não tipa: Luau exige
+	-- metatable compatível dos dois lados do `==`, mesma disciplina de `Userdata.Unwrap`/
+	-- `Decode.asStringIndexable`, nunca `any`).
+	assert(
+		(ambient :: ValueTypes.Color3) == ValueTypes.Color3.new(0.5, 0.5, 0.5),
+		"Lighting.Ambient.Default deveria ser Color3.new(0.5, 0.5, 0.5) (grafia real do dump: \"0.5, 0.5, 0.5\")"
+	)
+
+	local fogColor = schema["FogColor"].Default
+	assert(
+		(fogColor :: ValueTypes.Color3) == ValueTypes.Color3.new(0.75, 0.75, 0.75),
+		"Lighting.FogColor.Default deveria ser Color3.new(0.75, 0.75, 0.75)"
+	)
+end)
+
+test("CFrame: Model.WorldPivot ganha Default REAL (identidade, 12 componentes do dump)", function()
+	local worldPivot = Index["Model"].Schema["WorldPivot"].Default
+	assert(worldPivot ~= nil, "Model.WorldPivot.Default não deveria mais ser nil")
+	assert(
+		ValueTypes.TypeNameOf(worldPivot) == "CFrame",
+		`Model.WorldPivot.Default deveria ser um CFrame, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(worldPivot))}`
+	)
+	assert(
+		(worldPivot :: ValueTypes.CFrame) == ValueTypes.CFrame.identity,
+		"Model.WorldPivot.Default deveria ser a CFrame identidade (dump: \"0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1\")"
+	)
+end)
+
+test("Enum: Lighting.LightingStyle ganha Default REAL (EnumItem pelo NOME do item)", function()
+	local lightingStyle = Index["Lighting"].Schema["LightingStyle"].Default
+	assert(lightingStyle ~= nil, "Lighting.LightingStyle.Default não deveria mais ser nil")
+	assert(
+		ValueTypes.TypeNameOf(lightingStyle) == "EnumItem",
+		`Lighting.LightingStyle.Default deveria ser um EnumItem, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(lightingStyle))}`
+	)
+	-- `ValueTypes.Enum` (o global "Enum" do Roblox real) é um datatype OPACO por desenho -- não tem
+	-- indexador estático por nome de enum (mesmo motivo de `Decode.luau:asStringIndexable`: existem
+	-- itens de enum literalmente chamados "Name"/"Value"). Resolve pelo mesmo
+	-- `ValueTypes.Decode.FromRojoJson` que o PRÓPRIO gerador usa em tempo de execução pra este
+	-- exato par (nome do enum, nome do item) -- não reimplementa aqui uma segunda forma de indexar.
+	local expected = ValueTypes.Decode.FromRojoJson("LightingStyle", "Enum", "Realistic")
+	assert(expected.Ok, "sanity check do teste -- Decode.FromRojoJson deveria resolver Enum.LightingStyle.Realistic")
+	assert(lightingStyle == expected.Value, "Lighting.LightingStyle.Default deveria ser Enum.LightingStyle.Realistic")
+
+	-- Outra classe/enum, pra provar que não é um caso isolado hard-coded: StarterPlayer tem 6
+	-- Enum com Default real (ver relatório do gerador, "Defaults REAIS ... ponte com valuetypes").
+	local cameraMode = Index["StarterPlayer"].Schema["CameraMode"].Default
+	local expectedCameraMode = ValueTypes.Decode.FromRojoJson("CameraMode", "Enum", "Classic")
+	assert(expectedCameraMode.Ok, "sanity check do teste -- Decode.FromRojoJson deveria resolver Enum.CameraMode.Classic")
+	assert(
+		cameraMode == expectedCameraMode.Value,
+		"StarterPlayer.CameraMode.Default deveria ser Enum.CameraMode.Classic"
+	)
+end)
+
+test("Sentinela em DataType/Enum já simulado continua nil -- ValueType/ValueCategory continuam preenchidos", function()
+	-- Workspace.GlobalWind: ValueType Vector3 (já simulado), mas o dump não serializa um Default
+	-- utilizável pra este membro (sentinela) -- prova de que "categoria simulada" não força um
+	-- Default fabricado quando a FORMA do dump não é a esperada.
+	local globalWind = Index["Workspace"].Schema["GlobalWind"]
+	assert(globalWind.ValueType == "Vector3", `GlobalWind.ValueType esperado "Vector3", recebeu {tostring(globalWind.ValueType)}`)
+	assert(globalWind.ValueCategory == "DataType", "GlobalWind.ValueCategory esperado \"DataType\"")
+	assert(globalWind.Default == nil, "GlobalWind.Default deveria continuar nil (sentinela no dump, não \"x, y, z\")")
+
+	-- Workspace.ClientAnimatorThrottling: Enum sentinela -- mesma prova do lado Enum.
+	local throttling = Index["Workspace"].Schema["ClientAnimatorThrottling"]
+	assert(throttling.ValueCategory == "Enum", "ClientAnimatorThrottling.ValueCategory esperado \"Enum\"")
+	assert(throttling.Default == nil, "ClientAnimatorThrottling.Default deveria continuar nil (sentinela no dump)")
+end)
+
+test(
+	"DataType da leva 2 (sem módulo em src/valuetypes/types/) NUNCA ganha Default inventado, em NENHUMA classe do fecho",
+	function()
+		local checked = 0
+		for className, generated in Index do
+			for memberName, descriptor in generated.Schema do
+				if descriptor.ValueCategory == "DataType" and descriptor.ValueType ~= nil then
+					checked += 1
+					if not LEVA1_SIMULATED_DATATYPES[descriptor.ValueType] then
+						assert(
+							descriptor.Default == nil,
+							`{className}.{memberName} (DataType leva 2, "{descriptor.ValueType}") deveria ter Default nil, tem {typeof(
+								descriptor.Default
+							)}`
+						)
+					end
+				end
+			end
+		end
+		assert(checked > 0, "sanity check do próprio teste -- deveria ter encontrado ao menos uma Property DataType no fecho")
+	end
+)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

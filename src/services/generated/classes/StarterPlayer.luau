@@ -6,19 +6,39 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
+
+-- Resolve o Default de uma Property Enum a partir do NOME do item -- gramática confirmada por
+-- inspeção direta do dump pinado nesta geração (Default de uma Property "Enum" é sempre o
+-- `Name` de um EnumItem, ex.: "Realistic" em Lighting.LightingStyle). Reusa
+-- `ValueTypes.Decode.FromRojoJson` (a MESMA resolução nome->EnumItem que `cli` usa pra
+-- decodificar `$properties` do Rojo, task-valuetypes-007) em vez de reimplementar aqui uma
+-- segunda forma de indexar `ValueTypes.Enum` por nome dinâmico de enum -- ver
+-- tools/generate-services.luau, computeDefault. Nunca falha em uso normal: o par
+-- (enum, item) já foi confirmado contra o MESMO Full-API-Dump.json nesta geração; só erra se
+-- o dump mudar sem o gerador ser revisado (mesmo protocolo de falha alta e cedo do resto
+-- deste arquivo).
+local function enumDefault(enumName: string, itemName: string): unknown
+	local result = ValueTypes.Decode.FromRojoJson(enumName, "Enum", itemName)
+	if result.Ok then
+		return result.Value
+	else
+		error(`generated/StarterPlayer: Default de Enum inválido ({enumName}.{itemName}): {result.Reason}`)
+	end
+end
 
 -- Tipo público de "StarterPlayer". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type StarterPlayer = Runtime.Instance & {
 	["AllowCustomAnimations"]: boolean,
 	["AutoJumpEnabled"]: boolean,
 	["CameraMaxZoomDistance"]: number,
 	["CameraMinZoomDistance"]: number,
-	["CameraMode"]: unknown,
+	["CameraMode"]: ValueTypes.EnumItem,
 	["CharacterBreakJointsOnDeath"]: boolean,
 	["CharacterJumpHeight"]: number,
 	["CharacterJumpPower"]: number,
@@ -26,15 +46,15 @@ export type StarterPlayer = Runtime.Instance & {
 	["CharacterUseJumpPower"]: boolean,
 	["CharacterWalkSpeed"]: number,
 	["ClassicDeath"]: boolean,
-	["DevCameraOcclusionMode"]: unknown,
-	["DevComputerCameraMovementMode"]: unknown,
-	["DevComputerMovementMode"]: unknown,
-	["DevTouchCameraMovementMode"]: unknown,
-	["DevTouchMovementMode"]: unknown,
+	["DevCameraOcclusionMode"]: ValueTypes.EnumItem,
+	["DevComputerCameraMovementMode"]: ValueTypes.EnumItem,
+	["DevComputerMovementMode"]: ValueTypes.EnumItem,
+	["DevTouchCameraMovementMode"]: ValueTypes.EnumItem,
+	["DevTouchMovementMode"]: ValueTypes.EnumItem,
 	["EnableMouseLockOption"]: boolean,
 	["HealthDisplayDistance"]: number,
 	["LoadCharacterAppearance"]: boolean,
-	["LuaCharacterController"]: unknown,
+	["LuaCharacterController"]: ValueTypes.EnumItem,
 	["NameDisplayDistance"]: number,
 	["UserEmotesEnabled"]: boolean,
 }
@@ -45,29 +65,29 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["AllowCustomAnimations"] = { Kind = "Property", Default = true, ReadOnly = true },
-		["AutoJumpEnabled"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["CameraMaxZoomDistance"] = { Kind = "Property", Default = 400, ReadOnly = false },
-		["CameraMinZoomDistance"] = { Kind = "Property", Default = 0.5, ReadOnly = false },
-		["CameraMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["CharacterBreakJointsOnDeath"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["CharacterJumpHeight"] = { Kind = "Property", Default = 7.19999981, ReadOnly = false },
-		["CharacterJumpPower"] = { Kind = "Property", Default = 50, ReadOnly = false },
-		["CharacterMaxSlopeAngle"] = { Kind = "Property", Default = 89, ReadOnly = false },
-		["CharacterUseJumpPower"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["CharacterWalkSpeed"] = { Kind = "Property", Default = 16, ReadOnly = false },
-		["ClassicDeath"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["DevCameraOcclusionMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["DevComputerCameraMovementMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["DevComputerMovementMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["DevTouchCameraMovementMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["DevTouchMovementMode"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["EnableMouseLockOption"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["HealthDisplayDistance"] = { Kind = "Property", Default = 100, ReadOnly = false },
-		["LoadCharacterAppearance"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["LuaCharacterController"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["NameDisplayDistance"] = { Kind = "Property", Default = 100, ReadOnly = false },
-		["UserEmotesEnabled"] = { Kind = "Property", Default = true, ReadOnly = false },
+		["AllowCustomAnimations"] = { Kind = "Property", Default = true, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["AutoJumpEnabled"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["CameraMaxZoomDistance"] = { Kind = "Property", Default = 400, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["CameraMinZoomDistance"] = { Kind = "Property", Default = 0.5, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["CameraMode"] = { Kind = "Property", Default = enumDefault("CameraMode", "Classic"), ReadOnly = false, ValueType = "CameraMode", ValueCategory = "Enum" },
+		["CharacterBreakJointsOnDeath"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["CharacterJumpHeight"] = { Kind = "Property", Default = 7.19999981, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["CharacterJumpPower"] = { Kind = "Property", Default = 50, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["CharacterMaxSlopeAngle"] = { Kind = "Property", Default = 89, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["CharacterUseJumpPower"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["CharacterWalkSpeed"] = { Kind = "Property", Default = 16, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["ClassicDeath"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["DevCameraOcclusionMode"] = { Kind = "Property", Default = enumDefault("DevCameraOcclusionMode", "Zoom"), ReadOnly = false, ValueType = "DevCameraOcclusionMode", ValueCategory = "Enum" },
+		["DevComputerCameraMovementMode"] = { Kind = "Property", Default = enumDefault("DevComputerCameraMovementMode", "UserChoice"), ReadOnly = false, ValueType = "DevComputerCameraMovementMode", ValueCategory = "Enum" },
+		["DevComputerMovementMode"] = { Kind = "Property", Default = enumDefault("DevComputerMovementMode", "UserChoice"), ReadOnly = false, ValueType = "DevComputerMovementMode", ValueCategory = "Enum" },
+		["DevTouchCameraMovementMode"] = { Kind = "Property", Default = enumDefault("DevTouchCameraMovementMode", "UserChoice"), ReadOnly = false, ValueType = "DevTouchCameraMovementMode", ValueCategory = "Enum" },
+		["DevTouchMovementMode"] = { Kind = "Property", Default = enumDefault("DevTouchMovementMode", "UserChoice"), ReadOnly = false, ValueType = "DevTouchMovementMode", ValueCategory = "Enum" },
+		["EnableMouseLockOption"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["HealthDisplayDistance"] = { Kind = "Property", Default = 100, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["LoadCharacterAppearance"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["LuaCharacterController"] = { Kind = "Property", Default = enumDefault("CharacterControlMode", "Default"), ReadOnly = false, ValueType = "CharacterControlMode", ValueCategory = "Enum" },
+		["NameDisplayDistance"] = { Kind = "Property", Default = 100, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["UserEmotesEnabled"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

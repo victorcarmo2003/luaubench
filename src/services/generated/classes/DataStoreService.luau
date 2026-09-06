@@ -6,19 +6,20 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
 
 -- Tipo público de "DataStoreService". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type DataStoreService = Runtime.Instance & {
 	["GetDataStore"]: (self: DataStoreService, name: string, scope: string?, options: unknown?) -> unknown,
 	["GetGlobalDataStore"]: (self: DataStoreService) -> unknown,
 	["GetOrderedDataStore"]: (self: DataStoreService, name: string, scope: string?) -> unknown,
-	["GetRequestBudgetForRequestType"]: (self: DataStoreService, requestType: unknown) -> number,
-	["SetRateLimitForRequestType"]: (self: DataStoreService, requestType: unknown, baseLimit: number, perPlayerLimit: number) -> (),
+	["GetRequestBudgetForRequestType"]: (self: DataStoreService, requestType: ValueTypes.EnumItem) -> number,
+	["SetRateLimitForRequestType"]: (self: DataStoreService, requestType: ValueTypes.EnumItem, baseLimit: number, perPlayerLimit: number) -> (),
 	["ListDataStoresAsync"]: (self: DataStoreService, prefix: string?, pageSize: number?, cursor: string?) -> unknown,
 }
 

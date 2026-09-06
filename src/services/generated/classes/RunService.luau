@@ -6,13 +6,14 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
 
 -- Tipo público de "RunService". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type RunService = Runtime.Instance & {
 	["Heartbeat"]: Runtime.Signal<number>,
 	["PostSimulation"]: Runtime.Signal<number>,
@@ -23,15 +24,15 @@ export type RunService = Runtime.Instance & {
 	["Rollback"]: Runtime.Signal<number>,
 	["Stepped"]: Runtime.Signal<number, number>,
 	["BindToRenderStep"]: (self: RunService, name: string, priority: number, function_: unknown) -> (),
-	["BindToSimulation"]: (self: RunService, function_: unknown, frequency: unknown?, priority: number?) -> unknown,
-	["GetPredictionStatus"]: (self: RunService, context: unknown) -> unknown,
+	["BindToSimulation"]: (self: RunService, function_: unknown, frequency: ValueTypes.EnumItem?, priority: number?) -> unknown,
+	["GetPredictionStatus"]: (self: RunService, context: unknown) -> ValueTypes.EnumItem,
 	["IsClient"]: (self: RunService) -> boolean,
 	["IsResimulating"]: (self: RunService) -> boolean,
 	["IsRunMode"]: (self: RunService) -> boolean,
 	["IsRunning"]: (self: RunService) -> boolean,
 	["IsServer"]: (self: RunService) -> boolean,
 	["IsStudio"]: (self: RunService) -> boolean,
-	["SetPredictionMode"]: (self: RunService, context: unknown, mode: unknown) -> (),
+	["SetPredictionMode"]: (self: RunService, context: unknown, mode: ValueTypes.EnumItem) -> (),
 	["UnbindFromRenderStep"]: (self: RunService, name: string) -> (),
 }
 
@@ -41,14 +42,14 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["Heartbeat"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PostSimulation"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PreAnimation"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PreRender"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PreSimulation"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["RenderStepped"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["Rollback"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["Stepped"] = { Kind = "Event", Default = nil, ReadOnly = true },
+		["Heartbeat"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PostSimulation"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PreAnimation"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PreRender"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PreSimulation"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["RenderStepped"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["Rollback"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["Stepped"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"BindToRenderStep",

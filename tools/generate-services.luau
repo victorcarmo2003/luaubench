@@ -115,8 +115,8 @@ type CapabilitiesLock = {
 -- statement é exatamente essa chamada) como "todo codepath retorna never" -- reporta
 -- "Not all codepaths in this function return 'never'" mesmo assim. Por isso `abort` NÃO é anotada
 -- como `-> never`: toda função que precisa de exaustividade depois de chamar `abort` (ex.:
--- `computeDefault`/`luaValueLiteral`, abaixo) tem um `return` explícito logo depois, nunca depende
--- de inferência de fluxo através deste helper. Em tempo de EXECUÇÃO isso não muda nada:
+-- `computeDefault`/`computeDataTypeDefaultExpr`, abaixo) tem um `return` explícito logo depois,
+-- nunca depende de inferência de fluxo através deste helper. Em tempo de EXECUÇÃO isso não muda nada:
 -- `process.exit` encerra o processo Lune de verdade, então nenhum código depois dele roda.
 local function abort(message: string): ()
 	print(`[generate-services] ERRO: {message}`)
@@ -487,85 +487,217 @@ local function classifyMethodMember(member: RawMember): MethodClassification
 end
 
 -- ============================================================================================
--- Default: parseado por ValueType.Category (nunca a string bruta do dump). Sentinela
--- "__api_dump_*" (qualquer variante -- 5 formas distintas confirmadas por inspeção: nao aparece
--- sempre a mesma) vira nil independente da categoria; Enum/DataType/Class viram nil NESTA FASE
--- mesmo quando o dump traz um valor real (ex.: "Unknown" para um Enum) -- emitir a string mentiria
--- (part.Shape == Enum.PartType.Block falharia sem Enum simulado).
--- ============================================================================================
-
-local function isSentinelDefault(raw: unknown): boolean
-	return type(raw) == "string" and string.match(raw :: string, "^__api_dump") ~= nil
-end
-
--- devolve (valor, representável)
-local function computeDefault(member: RawMember): (unknown, boolean)
-	if member.MemberType ~= "Property" then
-		return nil, true -- Event/Callback não têm Default; "representável" não se aplica aqui
-	end
-
-	local raw = member.Default
-	if raw == nil or isSentinelDefault(raw) then
-		return nil, false
-	end
-
-	local vt = member.ValueType
-	if vt == nil or vt.Category ~= "Primitive" then
-		return nil, false -- Enum/DataType/Class -- nesta fase
-	end
-
-	local rawStr = raw :: string
-	if vt.Name == "bool" then
-		if rawStr == "true" then
-			return true, true
-		elseif rawStr == "false" then
-			return false, true
-		end
-		abort(`Default booleano inesperado em {member.Name}: "{rawStr}"`)
-		return nil, false
-	elseif vt.Name == "string" then
-		return rawStr, true
-	elseif vt.Name == "int" or vt.Name == "int64" or vt.Name == "float" or vt.Name == "double" then
-		local n = tonumber(rawStr)
-		if n == nil then
-			abort(`Default numérico ilegível em {member.Name}: "{rawStr}"`)
-		end
-		return n, true
-	end
-
-	return nil, false
-end
-
--- ============================================================================================
 -- Emissão de literais Luau -- string.format("%q", ...) escapa QUALQUER conteúdo com segurança
 -- (aspas embutidas, espaço -- confirmado no dump real: PVInstance."Pivot Offset" -- etc.), por
 -- isso todo nome de membro vira chave em colchetes (`["Nome"] = ...`) em vez de `.Nome`, nunca
--- assumindo que é um identificador Luau válido.
+-- assumindo que é um identificador Luau válido. Movido pra ANTES de `computeDefault`
+-- (task-services-015): `computeDefault`/`computeDataTypeDefaultExpr` passaram a EMITIR TEXTO Luau
+-- diretamente (em vez de um valor Lua cru convertido depois por um `luaValueLiteral` central) e
+-- chamam `luaStringLiteral` internamente -- precisa estar em escopo ANTES, não depois (Luau não
+-- "hoista" `local function`).
 -- ============================================================================================
 
 local function luaStringLiteral(value: string): string
 	return string.format("%q", value)
 end
 
-local function luaValueLiteral(value: unknown): string
-	if value == nil then
-		return "nil"
-	elseif type(value) == "boolean" then
-		return tostring(value)
-	elseif type(value) == "number" then
-		return tostring(value)
-	elseif type(value) == "string" then
-		return luaStringLiteral(value :: string)
-	end
-	abort(`valor de Default com tipo Luau inesperado: {type(value)}`)
-	return "nil"
+-- ============================================================================================
+-- Default: parseado por ValueType.Category (nunca a string bruta do dump). Sentinela
+-- "__api_dump_*" (qualquer variante -- 5 formas distintas confirmadas por inspeção: nao aparece
+-- sempre a mesma) vira nil independente da categoria. Class/Group e DataType da leva 2 (sem módulo
+-- em src/valuetypes/types/) continuam nil NESTA FASE mesmo quando o dump traz um valor real --
+-- inventar um `ValueTypes.Rect.new(...)` sem o módulo existir violaria a invariante 1 (regra 00).
+-- DataType/Enum JÁ SIMULADOS pela leva 1 (task-services-015, ponte com src/valuetypes/) passam a
+-- emitir uma chamada de construtor/resolução REAL em vez de nil -- ver
+-- LEVA1_DATATYPE_ARITY/computeDataTypeDefaultExpr/enumDefault abaixo.
+-- ============================================================================================
+
+local function isSentinelDefault(raw: unknown): boolean
+	return type(raw) == "string" and string.match(raw :: string, "^__api_dump") ~= nil
 end
 
+-- Aridade (quantos números separados por vírgula) dos DataType da leva 1 cuja gramática de Default
+-- é "N números separados por vírgula" -- confirmado por inspeção DIRETA do dump pinado nesta
+-- sessão (tools/api-dump.lock.json, commit citado em FILE_HEADER): Vector3 "0, 0, 0" (3), Vector2
+-- "1000, 1000" (2), Color3 "0.5, 0.5, 0.5" (3), UDim "0, 8" (2), CFrame "0, 0, 0, 1, 0, 0, 0, 1, 0,
+-- 0, 0, 1" (posição xyz + matriz de rotação 3x3, 12 -- MESMA ordem que o 12º overload de
+-- `CFrame.new`, já usada por src/valuetypes/Decode.luau). `UDim2` NÃO está aqui -- gramática
+-- diferente, tratada à parte em `computeDataTypeDefaultExpr` (chaves, não lista plana).
+local LEVA1_DATATYPE_ARITY: { [string]: number } = {
+	Vector3 = 3,
+	Vector2 = 2,
+	Color3 = 3,
+	UDim = 2,
+	CFrame = 12,
+}
+
+-- Faz parse de EXATAMENTE `expectedCount` números separados por vírgula (com espaço opcional em
+-- volta de cada um, forma real do dump: "0.5, 0.5, 0.5"). `nil` se a forma não bater -- nunca
+-- inventa um valor parcial.
+local function parseCommaNumbers(raw: string, expectedCount: number): { number }?
+	local pieces = string.split(raw, ",")
+	if #pieces ~= expectedCount then
+		return nil
+	end
+	local values: { number } = table.create(expectedCount)
+	for index, piece in pieces do
+		local trimmed = string.match(piece, "^%s*(.-)%s*$")
+		local n = if trimmed ~= nil then tonumber(trimmed) else nil
+		if n == nil then
+			return nil
+		end
+		values[index] = n :: number
+	end
+	return values
+end
+
+-- `{0.5, 0.5, 0.5}` (a lista de argumentos de uma chamada `X.new(...)`) -- `tostring` de um
+-- `number` do Lua/Luau faz round-trip exato pra literais decimais razoáveis (confirmado nesta
+-- sessão com `lune run` sobre as strings reais do dump: "0.5"/"0.72"/"41.7332993"/"-0.7" todas
+-- voltam idênticas), mesma técnica já usada pelo Default numérico de Primitive logo abaixo.
+local function numbersToArgs(values: { number }): string
+	local parts: { string } = table.create(#values)
+	for index, n in values do
+		parts[index] = tostring(n)
+	end
+	return table.concat(parts, ", ")
+end
+
+-- Constrói o TEXTO Luau (não um valor -- é código-fonte emitido no arquivo gerado) do Default de
+-- um DataType já simulado pela leva 1. Devolve (texto, representável). Nunca chamada para um
+-- DataType da leva 2 (ver despacho em `computeDefault`, abaixo) -- `LEVA1_DATATYPE_ARITY`/`UDim2`
+-- são os ÚNICOS nomes tratados aqui, mesmos 6 (Vector3/Vector2/Color3/UDim/UDim2/CFrame) que têm
+-- módulo hoje em src/valuetypes/types/ (Enum é o 7º, mas é ValueCategory "Enum", tratado à parte).
+-- Grafia inesperada (não bate com a aridade/forma confirmada) ABORTA -- mesma disciplina de
+-- "Default booleano/numérico ilegível" logo abaixo: se a forma real do dump divergir do que foi
+-- confirmado nesta sessão, é melhor travar a geração alto e cedo do que gerar um `nil` silencioso
+-- pra um tipo que sabemos que deveria ter default real.
+local function computeDataTypeDefaultExpr(className: string, memberName: string, name: string, rawStr: string): (string, boolean)
+	local arity = LEVA1_DATATYPE_ARITY[name]
+	if arity ~= nil then
+		local values = parseCommaNumbers(rawStr, arity)
+		if values == nil then
+			abort(
+				`Default de {className}.{memberName} (DataType {name}) não bate com a gramática "{arity} números separados por vírgula" confirmada no dump: "{rawStr}"`
+			)
+			return "nil", false
+		end
+		return `ValueTypes.{name}.new({numbersToArgs(values)})`, true
+	end
+
+	if name == "UDim2" then
+		-- Gramática DIFERENTE, confirmada por inspeção direta do dump pinado (nenhuma classe da
+		-- leva atual tem UDim2 com Default real, mas outras classes do MESMO dump têm --
+		-- ex.: ScrollingFrame.CanvasSize "{0, 0}, {2, 0}", ImageButton.TileSize "{1, 0}, {1, 0}"):
+		-- dois grupos entre chaves, cada um "scale, offset" -- {xScale,xOffset}, {yScale,yOffset}.
+		-- MESMA ordem posicional do 2º overload numérico de `UDim2.new` (já usada por
+		-- src/valuetypes/Decode.luau: `UDim2.new(xScale, xOffset, yScale, yOffset)`).
+		local groups: { string } = {}
+		for group in string.gmatch(rawStr, "{(.-)}") do
+			table.insert(groups, group)
+		end
+		if #groups == 2 then
+			local xValues = parseCommaNumbers(groups[1], 2)
+			local yValues = parseCommaNumbers(groups[2], 2)
+			if xValues ~= nil and yValues ~= nil then
+				return `ValueTypes.UDim2.new({numbersToArgs(xValues)}, {numbersToArgs(yValues)})`, true
+			end
+		end
+		abort(
+			`Default de {className}.{memberName} (DataType UDim2) não bate com a gramática "\{scale, offset\}, \{scale, offset\}" confirmada no dump: "{rawStr}"`
+		)
+		return "nil", false
+	end
+
+	return "nil", false -- DataType da leva 2 (Rect/NumberRange/TweenInfo/Faces/Axes/...) -- nunca inventar
+end
+
+-- devolve (texto da expressão Luau do Default, representável). Para Primitive continua sendo um
+-- LITERAL puro (`true`/`14`/`"14:00:00"`); para DataType/Enum já simulados vira uma chamada de
+-- construtor/resolução real (`ValueTypes.Vector3.new(0, 0, 0)`, `enumDefault("LightingStyle",
+-- "Realistic")`) -- texto emitido DIRETAMENTE (nunca um valor Lua construído aqui e convertido
+-- depois -- não há como um `number`/`boolean`/`string` cru representar "chame este construtor").
+local function computeDefault(className: string, member: RawMember): (string, boolean)
+	if member.MemberType ~= "Property" then
+		return "nil", true -- Event/Callback não têm Default; "representável" não se aplica aqui
+	end
+
+	local raw = member.Default
+	if raw == nil or isSentinelDefault(raw) then
+		return "nil", false
+	end
+
+	local vt = member.ValueType
+	if vt == nil then
+		return "nil", false
+	end
+
+	local rawStr = raw :: string
+
+	if vt.Category == "Primitive" then
+		if vt.Name == "bool" then
+			if rawStr == "true" then
+				return "true", true
+			elseif rawStr == "false" then
+				return "false", true
+			end
+			abort(`Default booleano inesperado em {member.Name}: "{rawStr}"`)
+			return "nil", false
+		elseif vt.Name == "string" then
+			return luaStringLiteral(rawStr), true
+		elseif vt.Name == "int" or vt.Name == "int64" or vt.Name == "float" or vt.Name == "double" then
+			local n = tonumber(rawStr)
+			if n == nil then
+				abort(`Default numérico ilegível em {member.Name}: "{rawStr}"`)
+			end
+			return tostring(n :: number), true
+		end
+		return "nil", false
+	end
+
+	if vt.Category == "Enum" then
+		-- Todo enum é simulado (629 enums, src/valuetypes/types/Enum.luau) -- a gramática do dump
+		-- é sempre "Default = nome do item" (ex.: "Realistic" em Lighting.LightingStyle).
+		-- `enumDefault` é um helper LOCAL emitido só nos arquivos que precisam dele (ver
+		-- generateClassFile) -- reusa `ValueTypes.Decode.FromRojoJson`, a MESMA resolução
+		-- nome->EnumItem que `cli` vai usar pra decodificar `$properties` (task-valuetypes-007),
+		-- em vez de reimplementar aqui uma segunda forma de indexar `ValueTypes.Enum` por nome
+		-- dinâmico.
+		return `enumDefault({luaStringLiteral(vt.Name)}, {luaStringLiteral(rawStr)})`, true
+	end
+
+	if vt.Category == "DataType" then
+		return computeDataTypeDefaultExpr(className, member.Name, vt.Name, rawStr)
+	end
+
+	return "nil", false -- Class/Group -- fora de escopo desta ponte
+end
+
+-- Nome real de `valuetypes` (`require("../../../valuetypes")`) pros 6 DataType que já têm módulo
+-- em src/valuetypes/types/ hoje (task-services-015 -- ponte com o território `valuetypes`). `Enum`
+-- é o 7º módulo existente, mas é ValueCategory "Enum", não "DataType" -- tratado à parte, sempre
+-- "ValueTypes.EnumItem" (os 629 enums do dump são TODOS simulados, ver src/valuetypes/types/
+-- Enum.luau -- não há "leva 2" pra Enum). DataType fora deste mapa (Rect/NumberRange/TweenInfo/
+-- Faces/Axes/BrickColor/...) ainda não tem módulo -- continua `unknown`.
+local LEVA1_DATATYPE_LUAU_TYPE: { [string]: string } = {
+	Vector3 = "ValueTypes.Vector3",
+	Vector2 = "ValueTypes.Vector2",
+	Color3 = "ValueTypes.Color3",
+	UDim = "ValueTypes.UDim",
+	UDim2 = "ValueTypes.UDim2",
+	CFrame = "ValueTypes.CFrame",
+}
+
 -- Mapeia um ValueType do dump pro tipo Luau mais fiel possível: Primitive vira o tipo real
--- (boolean/string/number); qualquer outra categoria (Enum/DataType/Class/Group/desconhecida) vira
--- `unknown` -- NUNCA `any` (regra 01), e nunca uma aproximação solta tipo string genérica para um
--- Enum/DataType real (regra 03: sem Enum/DataType simulados nesta fase, mentir o tipo seria pior
--- que admitir `unknown`).
+-- (boolean/string/number); DataType já simulado (tabela acima) vira o tipo real de `valuetypes`;
+-- Enum vira `ValueTypes.EnumItem` (todo enum é simulado); qualquer outra categoria (DataType da
+-- leva 2/Class/Group/desconhecida) vira `unknown` -- NUNCA `any` (regra 01), e nunca uma
+-- aproximação solta tipo string genérica para um Enum/DataType real (regra 03: sem módulo
+-- simulado, mentir o tipo seria pior que admitir `unknown`). Usada tanto pro TIPO de campo de
+-- Property (gerada abaixo, condicionado a `representable`) quanto pra parâmetro/retorno de método
+-- e tipo de sinal de Event -- estes últimos não têm conceito de "Default representável" (um
+-- parâmetro de método não tem Default de instância), então recebem o tipo real incondicionalmente
+-- sempre que a categoria for simulada.
 local function luauTypeForValueType(vt: { Category: string, Name: string }?): string
 	if vt == nil then
 		return "unknown"
@@ -578,8 +710,41 @@ local function luauTypeForValueType(vt: { Category: string, Name: string }?): st
 		elseif vt.Name == "int" or vt.Name == "int64" or vt.Name == "float" or vt.Name == "double" then
 			return "number"
 		end
+	elseif vt.Category == "DataType" then
+		local luauName = LEVA1_DATATYPE_LUAU_TYPE[vt.Name]
+		if luauName ~= nil then
+			return luauName
+		end
+	elseif vt.Category == "Enum" then
+		return "ValueTypes.EnumItem"
 	end
 	return "unknown"
+end
+
+-- Literais Luau ("nil" ou string entre aspas) do par ValueType/ValueCategory de um membro, pro
+-- `Runtime.MemberDescriptor` (task-runtime-032: `ValueType: string?`, `ValueCategory:
+-- MemberValueCategory?`). `nil` nos dois pra Kind ~= "Property" (Event/Callback não têm ValueType,
+-- mesmo contrato do runtime) ou se a Property não tiver `ValueType` no dump (não observado no
+-- dump real -- defensivo, RawMember.ValueType é opcional). ABORTA se `vt.Category` for um valor
+-- fora dos 5 que `Runtime.MemberValueCategory` cobre -- nunca emite uma categoria que o runtime não
+-- reconhece silenciosamente (mesmo protocolo do abort de capability desconhecida).
+local function valueTypeFieldLiterals(member: RawMember): (string, string)
+	if member.MemberType ~= "Property" or member.ValueType == nil then
+		return "nil", "nil"
+	end
+	local vt = member.ValueType
+	if
+		vt.Category ~= "Primitive"
+		and vt.Category ~= "DataType"
+		and vt.Category ~= "Enum"
+		and vt.Category ~= "Class"
+		and vt.Category ~= "Group"
+	then
+		abort(
+			`ValueType.Category desconhecida em {member.Name}: "{vt.Category}" -- Runtime.MemberValueCategory não cobre esse valor, revise tools/generate-services.luau e src/runtime/Instance.luau antes de gerar`
+		)
+	end
+	return luaStringLiteral(vt.Name), luaStringLiteral(vt.Category)
 end
 
 -- Tipo de RETORNO de método: Primitive/"null" (convenção do dump pra "sem retorno") vira `()`;
@@ -719,6 +884,10 @@ local report = {
 	totalMethodsExcludedSecurity = 0,
 	totalMethodsExcludedCapability = 0,
 	schemaExcludedByCapability = {} :: { string },
+	-- task-services-015 (ponte com `valuetypes`): Property de DataType/Enum já simulado cujo
+	-- Default deixou de nascer `nil` e passou a ser um construtor/EnumItem real -- entradas
+	-- "ClasseName.Membro (Vector3 default)"/"(Enum default)", uma por membro afetado.
+	realValueTypeDefaultsEmitted = {} :: { string },
 }
 
 local function classTagFlag(class: RawClass, tag: string): boolean
@@ -873,21 +1042,36 @@ local function generateClassFile(className: string): string
 			emittedSchemaCount += 1
 			local kind = member.MemberType -- "Property" | "Event" | "Callback"
 
-			local defaultValue, representable = computeDefault(member)
+			local defaultExpr, representable = computeDefault(className, member)
 			if member.MemberType == "Property" and not representable then
 				report.nonRepresentableDefaultsByClass[className] = (report.nonRepresentableDefaultsByClass[className] or 0)
 					+ 1
+			end
+			-- task-services-015: conta só os casos NOVOS (DataType/Enum já simulados que antes
+			-- desta tarefa SEMPRE eram `nil`/não-representáveis) -- Primitive representável já
+			-- existia antes, não é "ganho" desta ponte.
+			if
+				representable
+				and member.MemberType == "Property"
+				and member.ValueType ~= nil
+				and (member.ValueType.Category == "DataType" or member.ValueType.Category == "Enum")
+			then
+				table.insert(
+					report.realValueTypeDefaultsEmitted,
+					`{className}.{member.Name} ({member.ValueType.Category} {member.ValueType.Name})`
+				)
 			end
 
 			if hasStringTag(member.Tags, "Deprecated") then
 				table.insert(report.deprecatedEmitted, `{className}.{member.Name} ({member.MemberType})`)
 			end
 
+			local valueTypeLiteral, valueCategoryLiteral = valueTypeFieldLiterals(member)
 			table.insert(
 				schemaValueLines,
-				`\t\t[{luaStringLiteral(member.Name)}] = \{ Kind = {luaStringLiteral(kind)}, Default = {luaValueLiteral(
-					defaultValue
-				)}, ReadOnly = {tostring(classification.readOnly)} \},\n`
+				`\t\t[{luaStringLiteral(member.Name)}] = \{ Kind = {luaStringLiteral(kind)}, Default = {defaultExpr}, ReadOnly = {tostring(
+					classification.readOnly
+				)}, ValueType = {valueTypeLiteral}, ValueCategory = {valueCategoryLiteral} \},\n`
 			)
 
 			-- Só entra no TIPO público se `runtime/Instance.luau` ainda não cobre nativamente
@@ -951,19 +1135,71 @@ local function generateClassFile(className: string): string
 		table.insert(report.emptyClasses, className)
 	end
 
+	-- task-services-015: `ValueTypes`/o helper `enumDefault` só são emitidos nos arquivos que
+	-- REALMENTE usam algo de `valuetypes` -- detectado por varredura textual do corpo já montado
+	-- (typeFieldLines/schemaValueLines), em vez de threadar uma flag extra por todas as funções de
+	-- classificação/emissão acima. É seguro: o único jeito do texto "ValueTypes." aparecer aí é
+	-- `luauTypeForValueType`/`computeDefault`/`computeDataTypeDefaultExpr` terem emitido de
+	-- propósito (nenhum outro trecho deste gerador produz essa substring).
+	local bodyPreview = table.concat(typeFieldLines) .. table.concat(schemaValueLines)
+	local usesValueTypes = string.find(bodyPreview, "ValueTypes.", 1, true) ~= nil
+	local usesEnumHelper = string.find(bodyPreview, "enumDefault(", 1, true) ~= nil
+
 	local lines: { string } = {}
 	table.insert(lines, FILE_HEADER)
 	table.insert(lines, `\nlocal Types = require("../../Types")\n`)
-	table.insert(lines, `local Runtime = require("../../../runtime")\n\n`)
+	table.insert(lines, `local Runtime = require("../../../runtime")\n`)
+	if usesValueTypes then
+		-- Ponte com o território `valuetypes` (task-services-015/task-runtime-032): só requerido
+		-- quando alguma Property/parâmetro/retorno desta classe é um DataType/Enum já simulado
+		-- (`ValueTypes.Vector3`/`ValueTypes.EnumItem`/etc. em vez de `unknown`) -- ver
+		-- LEVA1_DATATYPE_LUAU_TYPE/luauTypeForValueType. `services` passa a depender de
+		-- `valuetypes` (direção CORRETA do grafo -- nunca o contrário, ver desenho
+		-- arquiteto-valuetypes-2026-09-05.md §2).
+		table.insert(lines, `local ValueTypes = require("../../../valuetypes")\n`)
+	end
+	table.insert(lines, "\n")
+
+	if usesEnumHelper then
+		table.insert(
+			lines,
+			"-- Resolve o Default de uma Property Enum a partir do NOME do item -- gramática confirmada por\n"
+				.. "-- inspeção direta do dump pinado nesta geração (Default de uma Property \"Enum\" é sempre o\n"
+				.. "-- `Name` de um EnumItem, ex.: \"Realistic\" em Lighting.LightingStyle). Reusa\n"
+				.. "-- `ValueTypes.Decode.FromRojoJson` (a MESMA resolução nome->EnumItem que `cli` usa pra\n"
+				.. "-- decodificar `$properties` do Rojo, task-valuetypes-007) em vez de reimplementar aqui uma\n"
+				.. "-- segunda forma de indexar `ValueTypes.Enum` por nome dinâmico de enum -- ver\n"
+				.. "-- tools/generate-services.luau, computeDefault. Nunca falha em uso normal: o par\n"
+				.. "-- (enum, item) já foi confirmado contra o MESMO Full-API-Dump.json nesta geração; só erra se\n"
+				.. "-- o dump mudar sem o gerador ser revisado (mesmo protocolo de falha alta e cedo do resto\n"
+				.. "-- deste arquivo).\n"
+				.. "local function enumDefault(enumName: string, itemName: string): unknown\n"
+				.. "\tlocal result = ValueTypes.Decode.FromRojoJson(enumName, \"Enum\", itemName)\n"
+				.. "\tif result.Ok then\n"
+				.. "\t\treturn result.Value\n"
+				.. "\telse\n"
+				-- Escrito por concatenação normal (nunca string interpolada `` `...` `` do
+				-- GERADOR) de propósito: `{enumName}`/`{itemName}`/`{result.Reason}` precisam
+				-- sobreviver como texto LITERAL de interpolação Luau no ARQUIVO GERADO (avaliados
+				-- lá, em runtime, contra as variáveis locais da própria `enumDefault`) -- se
+				-- estivessem dentro de uma string interpolada AQUI, o gerador tentaria avaliá-los
+				-- como expressão SUA (e falharia: não existe `enumName` neste escopo do gerador).
+				.. "\t\terror(`generated/"
+				.. className
+				.. ": Default de Enum inválido ({enumName}.{itemName}): {result.Reason}`)\n"
+				.. "\tend\n"
+				.. "end\n\n"
+		)
+	end
 
 	table.insert(
 		lines,
 		`-- Tipo público de "{className}". Campos/métodos que \`src/runtime/Instance.luau\` já cobre nativamente\n`
 			.. `-- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm\n`
 			.. `-- de \`Runtime.Instance &\` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.\n`
-			.. `-- \`unknown\` (nunca \`any\`) para ValueType não representável nesta fase (Enum/DataType/Class) e para\n`
-			.. `-- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,\n`
-			.. `-- luauTypeForValueType/luauReturnType.\n`
+			.. `-- \`unknown\` (nunca \`any\`) para ValueType não representável/ainda não simulado (DataType da leva\n`
+			.. `-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já\n`
+			.. `-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.\n`
 	)
 	table.insert(lines, `export type {className} = Runtime.Instance & \{\n`)
 	for _, line in typeFieldLines do
@@ -1057,9 +1293,21 @@ local classesWithNonRepresentable = sortedKeys((function(): { [string]: boolean 
 	end
 	return set
 end)())
-print(`\n  Defaults não representáveis nesta fase (Enum/DataType/Class/sentinela), por classe:`)
+print(
+	`\n  Defaults não representáveis (sentinela/DataType leva 2 sem módulo/Class), por classe:`
+)
 for _, className in classesWithNonRepresentable do
 	print(`    {className}: {report.nonRepresentableDefaultsByClass[className]}`)
+end
+
+-- task-services-015 (ponte com `valuetypes`): Default de DataType/Enum já simulado que deixou de
+-- nascer `nil` nesta geração.
+table.sort(report.realValueTypeDefaultsEmitted)
+print(
+	`\n  Defaults REAIS de DataType/Enum já simulados (deixaram de ser nil, ponte com valuetypes) ({#report.realValueTypeDefaultsEmitted}):`
+)
+for _, entry in report.realValueTypeDefaultsEmitted do
+	print(`    {entry}`)
 end
 
 table.sort(report.notCoveredByRuntimeInstance)

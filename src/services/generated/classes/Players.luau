@@ -6,13 +6,14 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
 
 -- Tipo público de "Players". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type Players = Runtime.Instance & {
 	["BubbleChat"]: unknown,
 	["CharacterAutoLoads"]: unknown,
@@ -26,7 +27,7 @@ export type Players = Runtime.Instance & {
 	["numPlayers"]: unknown,
 	["PlayerAdded"]: Runtime.Signal<unknown>,
 	["PlayerMembershipChanged"]: Runtime.Signal<unknown>,
-	["PlayerRemoving"]: Runtime.Signal<unknown, unknown>,
+	["PlayerRemoving"]: Runtime.Signal<unknown, ValueTypes.EnumItem>,
 	["UserSubscriptionStatusChanged"]: Runtime.Signal<unknown, string>,
 	["GetPlayerByUserId"]: (self: Players, userId: unknown) -> unknown,
 	["GetPlayerFromCharacter"]: (self: Players, character: unknown) -> unknown,
@@ -35,8 +36,8 @@ export type Players = Runtime.Instance & {
 	["playerFromCharacter"]: (self: Players, character: unknown) -> unknown,
 	["players"]: (self: Players) -> unknown,
 	["BanAsync"]: (self: Players, config: unknown) -> (),
-	["CreateHumanoidModelFromDescription"]: (self: Players, description: unknown, rigType: unknown, assetTypeVerification: unknown?) -> unknown,
-	["CreateHumanoidModelFromDescriptionAsync"]: (self: Players, description: unknown, rigType: unknown, assetTypeVerification: unknown?) -> unknown,
+	["CreateHumanoidModelFromDescription"]: (self: Players, description: unknown, rigType: ValueTypes.EnumItem, assetTypeVerification: ValueTypes.EnumItem?) -> unknown,
+	["CreateHumanoidModelFromDescriptionAsync"]: (self: Players, description: unknown, rigType: ValueTypes.EnumItem, assetTypeVerification: ValueTypes.EnumItem?) -> unknown,
 	["CreateHumanoidModelFromUserId"]: (self: Players, userId: unknown) -> unknown,
 	["CreateHumanoidModelFromUserIdAsync"]: (self: Players, userId: unknown) -> unknown,
 	["GetBanHistoryAsync"]: (self: Players, userId: unknown) -> unknown,
@@ -50,7 +51,7 @@ export type Players = Runtime.Instance & {
 	["GetNameFromUserIdAsync"]: (self: Players, userId: unknown) -> string,
 	["GetProfileConfigurationFromUserIdAsync"]: (self: Players, userId: unknown) -> { [string]: unknown },
 	["GetUserIdFromNameAsync"]: (self: Players, userName: string) -> number,
-	["GetUserThumbnailAsync"]: (self: Players, userId: unknown, thumbnailType: unknown, thumbnailSize: unknown) -> ...unknown,
+	["GetUserThumbnailAsync"]: (self: Players, userId: unknown, thumbnailType: ValueTypes.EnumItem, thumbnailSize: ValueTypes.EnumItem) -> ...unknown,
 	["UnbanAsync"]: (self: Players, config: unknown) -> (),
 }
 
@@ -60,20 +61,20 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["BubbleChat"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["CharacterAutoLoads"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["ClassicChat"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["LocalPlayer"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["MaxPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["NumPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["PreferredPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["RespawnTime"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["localPlayer"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["numPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["PlayerAdded"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PlayerMembershipChanged"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["PlayerRemoving"] = { Kind = "Event", Default = nil, ReadOnly = true },
-		["UserSubscriptionStatusChanged"] = { Kind = "Event", Default = nil, ReadOnly = true },
+		["BubbleChat"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["CharacterAutoLoads"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["ClassicChat"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["LocalPlayer"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "Player", ValueCategory = "Class" },
+		["MaxPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int", ValueCategory = "Primitive" },
+		["NumPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int", ValueCategory = "Primitive" },
+		["PreferredPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int", ValueCategory = "Primitive" },
+		["RespawnTime"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["localPlayer"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "Player", ValueCategory = "Class" },
+		["numPlayers"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int", ValueCategory = "Primitive" },
+		["PlayerAdded"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PlayerMembershipChanged"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["PlayerRemoving"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
+		["UserSubscriptionStatusChanged"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetPlayerByUserId",

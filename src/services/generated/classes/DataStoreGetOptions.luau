@@ -10,9 +10,9 @@ local Runtime = require("../../../runtime")
 -- Tipo público de "DataStoreGetOptions". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type DataStoreGetOptions = Runtime.Instance & {
 	["UseCache"]: boolean,
 }
@@ -23,7 +23,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = false,
 	Schema = {
-		["UseCache"] = { Kind = "Property", Default = true, ReadOnly = false },
+		["UseCache"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

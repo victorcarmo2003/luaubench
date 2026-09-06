@@ -6,39 +6,59 @@
 
 local Types = require("../../Types")
 local Runtime = require("../../../runtime")
+local ValueTypes = require("../../../valuetypes")
+
+-- Resolve o Default de uma Property Enum a partir do NOME do item -- gramática confirmada por
+-- inspeção direta do dump pinado nesta geração (Default de uma Property "Enum" é sempre o
+-- `Name` de um EnumItem, ex.: "Realistic" em Lighting.LightingStyle). Reusa
+-- `ValueTypes.Decode.FromRojoJson` (a MESMA resolução nome->EnumItem que `cli` usa pra
+-- decodificar `$properties` do Rojo, task-valuetypes-007) em vez de reimplementar aqui uma
+-- segunda forma de indexar `ValueTypes.Enum` por nome dinâmico de enum -- ver
+-- tools/generate-services.luau, computeDefault. Nunca falha em uso normal: o par
+-- (enum, item) já foi confirmado contra o MESMO Full-API-Dump.json nesta geração; só erra se
+-- o dump mudar sem o gerador ser revisado (mesmo protocolo de falha alta e cedo do resto
+-- deste arquivo).
+local function enumDefault(enumName: string, itemName: string): unknown
+	local result = ValueTypes.Decode.FromRojoJson(enumName, "Enum", itemName)
+	if result.Ok then
+		return result.Value
+	else
+		error(`generated/Lighting: Default de Enum inválido ({enumName}.{itemName}): {result.Reason}`)
+	end
+end
 
 -- Tipo público de "Lighting". Campos/métodos que `src/runtime/Instance.luau` já cobre nativamente
 -- (ClassName/Name/Parent, os 5 sinais fixos, os 13 métodos base) NÃO são redeclarados aqui -- já vêm
 -- de `Runtime.Instance &` com o tipo real; redeclarar criaria redundância/risco de conflito de tipo.
--- `unknown` (nunca `any`) para ValueType não representável nesta fase (Enum/DataType/Class) e para
--- retorno/parametro de método cuja categoria não é Primitive -- ver tools/generate-services.luau,
--- luauTypeForValueType/luauReturnType.
+-- `unknown` (nunca `any`) para ValueType não representável/ainda não simulado (DataType da leva
+-- 2/Class) e para retorno/parâmetro de método cuja categoria não é Primitive/DataType já
+-- simulado/Enum -- ver tools/generate-services.luau, luauTypeForValueType/luauReturnType.
 export type Lighting = Runtime.Instance & {
-	["Ambient"]: unknown,
+	["Ambient"]: ValueTypes.Color3,
 	["Brightness"]: number,
 	["ClockTime"]: number,
-	["ColorShift_Bottom"]: unknown,
-	["ColorShift_Top"]: unknown,
+	["ColorShift_Bottom"]: ValueTypes.Color3,
+	["ColorShift_Top"]: ValueTypes.Color3,
 	["EnvironmentDiffuseScale"]: number,
 	["EnvironmentSpecularScale"]: number,
 	["ExposureCompensation"]: number,
-	["FogColor"]: unknown,
+	["FogColor"]: ValueTypes.Color3,
 	["FogEnd"]: number,
 	["FogStart"]: number,
 	["GeographicLatitude"]: number,
 	["GlobalShadows"]: boolean,
-	["LightingStyle"]: unknown,
-	["OutdoorAmbient"]: unknown,
+	["LightingStyle"]: ValueTypes.EnumItem,
+	["OutdoorAmbient"]: ValueTypes.Color3,
 	["Outlines"]: boolean,
 	["PrioritizeLightingQuality"]: boolean,
-	["ShadowColor"]: unknown,
+	["ShadowColor"]: ValueTypes.Color3,
 	["ShadowSoftness"]: number,
 	["TimeOfDay"]: string,
 	["LightingChanged"]: Runtime.Signal<boolean>,
 	["GetMinutesAfterMidnight"]: (self: Lighting) -> number,
-	["GetMoonDirection"]: (self: Lighting) -> unknown,
+	["GetMoonDirection"]: (self: Lighting) -> ValueTypes.Vector3,
 	["GetMoonPhase"]: (self: Lighting) -> number,
-	["GetSunDirection"]: (self: Lighting) -> unknown,
+	["GetSunDirection"]: (self: Lighting) -> ValueTypes.Vector3,
 	["SetMinutesAfterMidnight"]: (self: Lighting, minutes: number) -> (),
 	["getMinutesAfterMidnight"]: (self: Lighting) -> number,
 	["setMinutesAfterMidnight"]: (self: Lighting, minutes: number) -> (),
@@ -50,27 +70,27 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["Ambient"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["Brightness"] = { Kind = "Property", Default = 1, ReadOnly = false },
-		["ClockTime"] = { Kind = "Property", Default = 14, ReadOnly = false },
-		["ColorShift_Bottom"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["ColorShift_Top"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["EnvironmentDiffuseScale"] = { Kind = "Property", Default = 0, ReadOnly = false },
-		["EnvironmentSpecularScale"] = { Kind = "Property", Default = 0, ReadOnly = false },
-		["ExposureCompensation"] = { Kind = "Property", Default = 0, ReadOnly = false },
-		["FogColor"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["FogEnd"] = { Kind = "Property", Default = 100000, ReadOnly = false },
-		["FogStart"] = { Kind = "Property", Default = 0, ReadOnly = false },
-		["GeographicLatitude"] = { Kind = "Property", Default = 41.7332993, ReadOnly = false },
-		["GlobalShadows"] = { Kind = "Property", Default = false, ReadOnly = false },
-		["LightingStyle"] = { Kind = "Property", Default = nil, ReadOnly = true },
-		["OutdoorAmbient"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["Outlines"] = { Kind = "Property", Default = true, ReadOnly = false },
-		["PrioritizeLightingQuality"] = { Kind = "Property", Default = true, ReadOnly = true },
-		["ShadowColor"] = { Kind = "Property", Default = nil, ReadOnly = false },
-		["ShadowSoftness"] = { Kind = "Property", Default = 0.5, ReadOnly = false },
-		["TimeOfDay"] = { Kind = "Property", Default = "14:00:00", ReadOnly = false },
-		["LightingChanged"] = { Kind = "Event", Default = nil, ReadOnly = true },
+		["Ambient"] = { Kind = "Property", Default = ValueTypes.Color3.new(0.5, 0.5, 0.5), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["Brightness"] = { Kind = "Property", Default = 1, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["ClockTime"] = { Kind = "Property", Default = 14, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["ColorShift_Bottom"] = { Kind = "Property", Default = ValueTypes.Color3.new(0, 0, 0), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["ColorShift_Top"] = { Kind = "Property", Default = ValueTypes.Color3.new(0, 0, 0), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["EnvironmentDiffuseScale"] = { Kind = "Property", Default = 0, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["EnvironmentSpecularScale"] = { Kind = "Property", Default = 0, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["ExposureCompensation"] = { Kind = "Property", Default = 0, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["FogColor"] = { Kind = "Property", Default = ValueTypes.Color3.new(0.75, 0.75, 0.75), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["FogEnd"] = { Kind = "Property", Default = 100000, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["FogStart"] = { Kind = "Property", Default = 0, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["GeographicLatitude"] = { Kind = "Property", Default = 41.7332993, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["GlobalShadows"] = { Kind = "Property", Default = false, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["LightingStyle"] = { Kind = "Property", Default = enumDefault("LightingStyle", "Realistic"), ReadOnly = true, ValueType = "LightingStyle", ValueCategory = "Enum" },
+		["OutdoorAmbient"] = { Kind = "Property", Default = ValueTypes.Color3.new(0.5, 0.5, 0.5), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["Outlines"] = { Kind = "Property", Default = true, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["PrioritizeLightingQuality"] = { Kind = "Property", Default = true, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["ShadowColor"] = { Kind = "Property", Default = ValueTypes.Color3.new(0.7, 0.7, 0.72), ReadOnly = false, ValueType = "Color3", ValueCategory = "DataType" },
+		["ShadowSoftness"] = { Kind = "Property", Default = 0.5, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive" },
+		["TimeOfDay"] = { Kind = "Property", Default = "14:00:00", ReadOnly = false, ValueType = "string", ValueCategory = "Primitive" },
+		["LightingChanged"] = { Kind = "Event", Default = nil, ReadOnly = true, ValueType = nil, ValueCategory = nil },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetMinutesAfterMidnight",
