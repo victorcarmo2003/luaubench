@@ -3,8 +3,9 @@
 --[[
 	Teste da task-services-002 (leva 1), ESTENDIDO por task-services-017 (leva 2 -- as 16 classes
 	de DataStoreService entraram em tools/coverage.luau, ver L2.1.7), por task-services-022
-	(`HttpService`/`MessagingService`, L2.2/L2.3), por task-services-023 (`PhysicsService`, L2.5.1)
-	e por task-services-025 (`SoundService`, L2.5.3): verifica os FATOS que
+	(`HttpService`/`MessagingService`, L2.2/L2.3), por task-services-023 (`PhysicsService`, L2.5.1),
+	por task-services-025 (`SoundService`, L2.5.3) e por task-services-019-fix (`DataStoreKey`,
+	entrada MANUAL de coverage.luau -- ver o comentário lá): verifica os FATOS que
 	`lune run tools/generate-services` deve produzir em `src/services/generated/` -- não roda o
 	gerador (que baixa/lê o dump e pode demorar e depende de rede na ausência de cache), só
 	INSPECIONA a saída já commitada. Rode `lune run tools/generate-services` antes desta suíte
@@ -16,9 +17,9 @@
 	`Integration.spec.luau`.
 
 	Cobre os números exatos do acceptance de task-services-002 + task-services-017 +
-	task-services-022 + task-services-023 + task-services-025:
+	task-services-022 + task-services-023 + task-services-025 + task-services-019-fix:
 	- Manifest.luau com exatamente 916 entradas (as 916 classes do dump -- não muda entre levas)
-	- fecho de 44 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
+	- fecho de 45 classes: as 24 da leva 1 (task-services-002 -- as 20 de tools/coverage.luau +
 	  WorldRoot/Model/PVInstance/BasePlayerGui, puxadas por herança sem estarem listadas em
 	  coverage.luau) + as 16 de DataStoreService da leva 2 (task-services-017 -- todas listadas
 	  EXPLICITAMENTE em coverage.luau, nenhuma puxada por herança desta vez: L2.1.7 confirma que
@@ -26,7 +27,9 @@
 	  task-services-022 (`HttpService`/`MessagingService` -- as duas terminam em `Instance` direto
 	  no dump, nenhuma puxa classe nova pelo fecho de superclasses) + 1 de task-services-023
 	  (`PhysicsService` -- idem, `Instance` direto) + 1 de task-services-025 (`SoundService` --
-	  idem, `Instance` direto, ver L2.5.3)
+	  idem, `Instance` direto, ver L2.5.3) + 1 de task-services-019-fix (`DataStoreKey` -- entrada
+	  MANUAL de coverage.luau, `Instance` direto no dump, mas NUNCA seria descoberta pelo fecho
+	  automático -- ver o comentário de coverage.luau, "task-services-019-fix", para o porquê)
 	- exatamente 4 membros de schema excluídos pelo eixo Capabilities na leva 1 (Script.Source,
 	  ModuleScript.Source, RunService.Misprediction, RunService.FrameNumber) -- nem a leva 2 nem
 	  task-services-022/023/025 acrescentam exclusão nova por este eixo (pesquisa-datastore-
@@ -92,7 +95,7 @@ test("Manifest distingue classe não coberta (mas conhecida) de classe coberta",
 	assert(frameEntry.Covered == false, "Frame NÃO deveria estar coberto nesta leva")
 end)
 
-test("O fecho tem exatamente 44 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService (task-services-022) + 1 de PhysicsService (task-services-023) + 1 de SoundService (task-services-025))", function()
+test("O fecho tem exatamente 45 classes (24 da leva 1 + 16 de DataStoreService da leva 2 + 2 de HttpService/MessagingService (task-services-022) + 1 de PhysicsService (task-services-023) + 1 de SoundService (task-services-025) + 1 de DataStoreKey (task-services-019-fix))", function()
 	local expected = {
 		-- Leva 1 (task-services-002) -- 24 classes, 4 delas (WorldRoot/Model/PVInstance/
 		-- BasePlayerGui) puxadas por herança sem estarem em coverage.luau (ver prova abaixo).
@@ -114,13 +117,17 @@ test("O fecho tem exatamente 44 classes (24 da leva 1 + 16 de DataStoreService d
 		-- task-services-025 (L2.5.3) -- 1 classe, "Instance" direto no dump, listada
 		-- explicitamente em coverage.luau, nenhuma classe nova puxada pelo fecho.
 		"SoundService",
+		-- task-services-019-fix -- 1 classe, "Instance" direto no dump, entrada MANUAL de
+		-- coverage.luau (o fecho automático NUNCA a descobriria sozinho -- ver o comentário de
+		-- coverage.luau, "task-services-019-fix").
+		"DataStoreKey",
 	}
 	local indexCount = 0
 	for _ in Index do
 		indexCount += 1
 	end
-	assert(#expected == 44, `sanity check da própria lista 'expected' deste teste -- deveria ter 44 nomes, tem {#expected}`)
-	assert(indexCount == 44, `Index deveria ter 44 classes, tem {indexCount}`)
+	assert(#expected == 45, `sanity check da própria lista 'expected' deste teste -- deveria ter 45 nomes, tem {#expected}`)
+	assert(indexCount == 45, `Index deveria ter 45 classes, tem {indexCount}`)
 	for _, name in expected do
 		assert(Index[name] ~= nil, `Index deveria conter "{name}"`)
 		assert(Manifest.Classes[name].Covered == true, `Manifest deveria marcar "{name}" como Covered`)
@@ -417,6 +424,36 @@ test(
 		assert(checked > 0, "sanity check do próprio teste -- deveria ter encontrado ao menos uma Property DataType no fecho")
 	end
 )
+
+-- ================================================================================================
+-- task-services-019-fix -- `DataStoreKey` foi acrescentado À MÃO a tools/coverage.luau (nunca seria
+-- descoberto pelo fecho automático, ver o comentário lá). Teste dedicado: schema mínimo (só
+-- `KeyName`, ReadOnly, ValueType "string"/Primitive), classe abstrata (`NotCreatable` no dump), sem
+-- MethodNames -- consumido por `src/services/behavior/DataStore.luau` (`ListKeysAsync`).
+-- ================================================================================================
+
+test("DataStoreKey: schema mínimo com KeyName (ReadOnly, Primitive string), IsAbstract, sem MethodNames", function()
+	local generated = Index["DataStoreKey"]
+	assert(generated ~= nil, "DataStoreKey deveria estar no Index (entrada manual de coverage.luau)")
+	assert(generated.Superclass == "Instance", `DataStoreKey.Superclass esperado "Instance", recebeu {generated.Superclass}`)
+	assert(generated.IsAbstract == true, "DataStoreKey deveria ser IsAbstract (NotCreatable no dump)")
+	assert(generated.IsService == false, "DataStoreKey não é um Service")
+
+	local schemaCount = 0
+	for _ in generated.Schema do
+		schemaCount += 1
+	end
+	assert(schemaCount == 1, `DataStoreKey.Schema deveria ter exatamente 1 entrada (KeyName), tem {schemaCount}`)
+
+	local keyName = generated.Schema["KeyName"]
+	assert(keyName ~= nil, "DataStoreKey.Schema deveria conter KeyName")
+	assert(keyName.Kind == "Property", `KeyName.Kind esperado "Property", recebeu {keyName.Kind}`)
+	assert(keyName.ReadOnly == true, "KeyName deveria ser ReadOnly (tag ReadOnly no dump)")
+	assert(keyName.ValueType == "string", `KeyName.ValueType esperado "string", recebeu {tostring(keyName.ValueType)}`)
+	assert(keyName.ValueCategory == "Primitive", `KeyName.ValueCategory esperado "Primitive", recebeu {tostring(keyName.ValueCategory)}`)
+
+	assert(#generated.MethodNames == 0, `DataStoreKey.MethodNames deveria estar vazio, tem {#generated.MethodNames}`)
+end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

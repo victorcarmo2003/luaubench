@@ -259,7 +259,7 @@ end)
 
 -- ================= ListKeysAsync =================
 
-test("ListKeysAsync sem argumentos lista TODAS as chaves do store, paginando até IsFinished", function()
+test("ListKeysAsync sem argumentos lista TODAS as chaves do store, paginando até IsFinished -- cada item é uma DataStoreKey real", function()
 	local store = getDataStore(dataStoreService, "Spec27-ListKeys", nil, nil)
 	local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
 	local listKeysAsync = store.ListKeysAsync :: (self: Dynamic, prefix: string?, pageSize: number?, cursor: string?, excludeDeleted: boolean?) -> Dynamic
@@ -277,7 +277,7 @@ test("ListKeysAsync sem argumentos lista TODAS as chaves do store, paginando at�
 	end)
 	assert(pages.ClassName == "DataStoreKeyPages", `ListKeysAsync deveria devolver uma DataStoreKeyPages, devolveu {tostring(pages.ClassName)}`)
 
-	local getCurrentPage = pages.GetCurrentPage :: (self: Dynamic) -> { unknown }
+	local getCurrentPage = pages.GetCurrentPage :: (self: Dynamic) -> { Dynamic }
 	local advance = pages.AdvanceToNextPageAsync :: (self: Dynamic) -> ()
 
 	local collectedKeys: { string } = {}
@@ -285,7 +285,11 @@ test("ListKeysAsync sem argumentos lista TODAS as chaves do store, paginando at�
 	while true do
 		local page = getCurrentPage(pages)
 		for _, item in page do
-			table.insert(collectedKeys, item :: string)
+			-- task-services-019-fix: item é uma instância `DataStoreKey` real, não uma string crua
+			-- (achado MÉDIO da revisão de task-services-019, ver
+			-- .claude/agents-memory/revisor-services-task-services-019-2026-09-05.md).
+			assert(item.ClassName == "DataStoreKey", `item de ListKeysAsync deveria ser DataStoreKey, foi {tostring(item.ClassName)}`)
+			table.insert(collectedKeys, item.KeyName :: string)
 		end
 		pageCount += 1
 		if pages.IsFinished == true then
@@ -316,13 +320,13 @@ test("ListKeysAsync com prefix filtra corretamente", function()
 	runAsync(function()
 		pages = listKeysAsync(store, "player_", nil, nil, nil)
 	end)
-	local getCurrentPage = pages.GetCurrentPage :: (self: Dynamic) -> { unknown }
+	local getCurrentPage = pages.GetCurrentPage :: (self: Dynamic) -> { Dynamic }
 	local items = getCurrentPage(pages)
 
 	assert(#items == 2, `prefix 'player_' deveria filtrar só as 2 chaves que começam assim, achou {#items}`)
 	local sorted: { string } = {}
 	for _, item in items do
-		table.insert(sorted, item :: string)
+		table.insert(sorted, item.KeyName :: string)
 	end
 	table.sort(sorted)
 	assert(sorted[1] == "player_1" and sorted[2] == "player_2", "as chaves filtradas deveriam ser exatamente player_1/player_2")
@@ -357,10 +361,10 @@ test("ListKeysAsync com excludeDeleted == true exclui chaves cuja versão CORREN
 	runAsync(function()
 		pagesExcluding = listKeysAsync(store, nil, nil, nil, true)
 	end)
-	local getCurrentPageExcluding = pagesExcluding.GetCurrentPage :: (self: Dynamic) -> { unknown }
+	local getCurrentPageExcluding = pagesExcluding.GetCurrentPage :: (self: Dynamic) -> { Dynamic }
 	local itemsExcluding = getCurrentPageExcluding(pagesExcluding)
 	assert(#itemsExcluding == 1, `excludeDeleted == true deveria excluir a chave removida, sobrando 1, achou {#itemsExcluding}`)
-	assert(itemsExcluding[1] == "alive", "a única chave restante deveria ser 'alive'")
+	assert(itemsExcluding[1].KeyName == "alive", "a única chave restante deveria ser 'alive'")
 end)
 
 -- ================= Engenharia interna =================

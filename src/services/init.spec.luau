@@ -831,6 +831,14 @@ local CLOSED_NEVER_LEGITIMATE: { [string]: boolean } = {
 	DataStoreVersionPages = true,
 	DataStoreObjectVersionInfo = true,
 	DataStoreInfo = true,
+
+	-- task-services-019-fix: `DataStoreKey` entrou MANUALMENTE em `tools/coverage.luau` (não é
+	-- puxada pelo fecho automático -- ver o comentário lá) para que `DataStore:ListKeysAsync`
+	-- devolva instâncias reais em vez de strings cruas. `NotCreatable` no dump, nunca Service nem
+	-- filho fixo -- só nasce via `DataStore.luau`/`buildKeyItems` (`Runtime.ClassRegistry.
+	-- NewEngineInstance`), nunca declarada estaticamente numa árvore Rojo. Mesma categoria de
+	-- `DataStoreKeyInfo`/`DataStoreObjectVersionInfo`, acima.
+	DataStoreKey = true,
 }
 
 test(

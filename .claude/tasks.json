@@ -2318,7 +2318,7 @@
       "id": "task-services-019-fix",
       "title": "Emitir classe DataStoreKey (item de ListKeysAsync) no gerador",
       "description": "Achado MEDIO de task-services-019 (revisor-services): a classe DataStoreKey existe no Full-API-Dump.json pinado (Superclass=Instance, NotCreatable, membro unico KeyName) mas nunca foi emitida por tools/generate-services.luau, porque ListKeysAsync/Pages:GetCurrentPage() retornam {Category:\"Group\", Name:\"Array\"} sem parametrizacao de item no dump, e o fecho do gerador so caminha por coverage.luau + Superclass, nunca por ValueType de retorno de metodo. Consequencia atual (nao um bug funcional, mas fidelidade incompleta): behavior/DataStore.luau (task-services-019) devolve strings cruas em ListKeysAsync em vez de instancias DataStoreKey reais. TERRITORIO: tools/generate-services.luau (ensinar o gerador a descobrir DataStoreKey via alguma heuristica -- ex: adicionar manualmente a tools/coverage.luau mesmo sem ser alcancada pelo fecho transitivo automatico) + generated/ (regenerar) + behavior/DataStore.luau (trocar string crua por DataStoreKey real via a mesma fabrica de Instance ja usada por DataStoreKeyInfo). Ver .claude/agents-memory/revisor-services-task-services-019-2026-09-05.md.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 46,
@@ -2331,7 +2331,8 @@
       "acceptance": "DataStoreKey aparece em generated/classes/ (via coverage.luau, mesmo sem fecho transitivo automatico -- registrar manualmente e documentar por que). ListKeysAsync em behavior/DataStore.luau passa a devolver instancias DataStoreKey reais (com .KeyName) em vez de strings cruas. Specs atualizados. Regressao total do territorio intacta. --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "APROVADO, zero achados. Revisor confirmou 13/13 DataStore.spec, 20/20 generate-services.spec, 30/30 init.spec, 462/462 na suite completa. HttpService.spec confirmado falha ambiental via git stash (ja existia antes). Script proprio (nao reusa spec do coder) confirmou ListKeysAsync devolve DataStoreKey REAIS (ClassName correto, IsA verdadeiro, instancias distintas, KeyName correto, mutacao externa erra -- ReadOnly respeitado). Segundo script confirmou via publica rejeita (NotCreatable), so via do motor cria. Dump bruto lido diretamente (Python): DataStoreKey confirmado Superclass=Instance, unico membro KeyName ReadOnly, NotCreatable -- bate exato com o gerado. Fabrica reusada confirmada identica a DataStoreKeyInfo.luau lado a lado. CLOSED_NEVER_LEGITIMATE corretamente atualizada. --strict, zero any real. Territorio limpo. Gerador (algoritmo) nao tocado -- correcao via seed manual em coverage.luau, como alegado. Relatorio: .claude/agents-memory/revisor-services-task-services-019-fix-2026-09-06.md"
     },
     {
       "id": "task-runtime-036",
@@ -2667,7 +2668,7 @@
       "id": "task-runtime-038",
       "title": "DataModel.RunBindToCloseCallbacks ganha filtro proprio de erro (onCallbackError), corrigindo contagem dupla",
       "description": "Fix real do achado de task-cli-033 (investigacao ja fechou o desenho, nao precisa de arquiteto). Causa raiz: RunCommand.luau conecta um listener PEGA-TUDO em scheduler.ThreadError durante a janela de RunBindToCloseCallbacks, mas essa funcao chama scheduler:Run de novo -- um laco GENERICO que drena TODAS as threads vivas do Scheduler (nao so as de BindToClose), entao uma thread do script principal retomada durante essa janela dispara o MESMO erro nos dois listeners (o de Sandbox.Run, nunca desconectado, e o novo de RunCommand). FIX: DataModel.RunBindToCloseCallbacks ganha um parametro novo opcional, algo como onCallbackError: ((thread, string) -> ())?, e passa a filtrar erros pela sua PROPRIA lista de thread handles que ela mesma cria pros callbacks de BindToClose (mesmo padrao ownThreads que Sandbox.Run ja usa) -- conecta/desconecta esse listener filtrado INTERNAMENTE, repassando so os erros que sao dela via o callback novo. Como os conjuntos de threads (script principal vs callbacks de BindToClose) sao disjuntos por construcao, cada erro passa a cair em exatamente um listener. TERRITORIO: so src/runtime/DataModel.luau + spec.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 51,

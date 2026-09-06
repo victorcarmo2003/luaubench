@@ -249,7 +249,7 @@ local Manifest: Manifest = {
 		["DataStoreGetOptions"] = { Superclass = "Instance", IsService = false, IsAbstract = false, Covered = true },
 		["DataStoreIncrementOptions"] = { Superclass = "Instance", IsService = false, IsAbstract = false, Covered = true },
 		["DataStoreInfo"] = { Superclass = "Instance", IsService = false, IsAbstract = true, Covered = true },
-		["DataStoreKey"] = { Superclass = "Instance", IsService = false, IsAbstract = true, Covered = false },
+		["DataStoreKey"] = { Superclass = "Instance", IsService = false, IsAbstract = true, Covered = true },
 		["DataStoreKeyInfo"] = { Superclass = "Instance", IsService = false, IsAbstract = true, Covered = true },
 		["DataStoreKeyPages"] = { Superclass = "Pages", IsService = false, IsAbstract = true, Covered = true },
 		["DataStoreListingPages"] = { Superclass = "Pages", IsService = false, IsAbstract = true, Covered = true },

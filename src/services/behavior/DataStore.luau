@@ -43,20 +43,25 @@
 	  `EnumItem` de `valuetypes.Enum` sem uma ponte que não existe para este parâmetro, então
 	  "aceitar só quando bate com Ascending" exigiria essa mesma ponte para inspecionar o valor).
 
-	DIVERGÊNCIA DECLARADA (regra 00) -- itens de `ListKeysAsync`/`DataStoreKeyPages`: no Roblox
-	real, cada item de `DataStoreKeyPages:GetCurrentPage()` é um objeto `DataStoreKey`
-	(`.KeyName: string`), NÃO uma string crua. `DataStoreKey` EXISTE no `Full-API-Dump.json`
-	fixado (confirmado por leitura direta do dump: `Superclass = "Instance"`, tag `NotCreatable`,
-	único membro `KeyName` com `Capabilities.Read = ["DataStore"]`) mas NUNCA foi emitido em
-	`generated/classes/` -- o retorno de `Pages:GetCurrentPage()`/`DataStore:ListKeysAsync` no
-	dump é `{ Category = "Group", Name = "Array" }` genérico, sem parametrização de item, então o
-	fecho transitivo do gerador (Decisão 1 do desenho) nunca o descobre como dependência (isso não
-	é bug do gerador -- é uma limitação estrutural do próprio formato do dump, que não parametriza
-	tipo de item de Array). Registrar essa classe exige tocar `tools/`/`generated/` -- FORA do
-	território desta tarefa (`src/services/behavior/**` apenas). **Reportado para o chat principal
-	rotear uma tarefa de `coder-services` que toque esses dois territórios** (ou ensinar o gerador
-	a reconhecer esse padrão de "Array que devolve uma Class relacionada"). Até lá, os itens de
-	`ListKeysAsync` aqui são STRINGS (o `KeyName`), não `DataStoreKey`.
+	RESOLVIDO em task-services-019-fix (achado MÉDIO da revisão de task-services-019, ver
+	.claude/agents-memory/revisor-services-task-services-019-2026-09-05.md): itens de
+	`ListKeysAsync`/`DataStoreKeyPages` agora são instâncias `DataStoreKey` REAIS (`.KeyName:
+	unknown` -- tipo gerado como `unknown`, não `string`, porque o `Default` de `KeyName` no dump é
+	o sentinela `"__api_dump_class_not_creatable__"`, não representável -- mesma disciplina que já
+	vale para `DataStoreKeyInfo.CreatedTime`/`.Version`), construídas via
+	`Runtime.ClassRegistry.NewEngineInstance("DataStoreKey")` + `Runtime.Instance.SetPropertyRaw`
+	(ver `buildKeyItems`, abaixo) -- MESMA fábrica que `./DataStoreKeyInfo.luau` já usa para
+	`DataStoreObjectVersionInfo`/`DataStoreKeyInfo`, nenhum segundo mecanismo de criar Instance.
+	`DataStoreKey` EXISTE no `Full-API-Dump.json` fixado (`Superclass = "Instance"`, tag
+	`NotCreatable`, único membro `KeyName` com `Capabilities.Read = ["DataStore"]`) mas nunca era
+	emitido em `generated/classes/`, porque o retorno de `Pages:GetCurrentPage()`/
+	`DataStore:ListKeysAsync` no dump é `{ Category = "Group", Name = "Array" }` genérico, sem
+	parametrização de item -- o fecho transitivo do gerador (Decisão 1 do desenho) nunca o
+	descobria como dependência (não é bug do gerador -- é uma limitação estrutural do próprio
+	formato do dump, que não parametriza tipo de item de Array). `DataStoreKey` foi acrescentado À
+	MÃO a `tools/coverage.luau` (comentário lá explica por que essa entrada é diferente das demais)
+	e o gerador foi rodado de novo (`lune run tools/generate-services`) -- ver
+	`generated/classes/DataStoreKey.luau`.
 
 	Depende de: `../../runtime`, `../AsyncCall` (L2.0.1), `../datastore/Value` (L2.1.3, limites de
 	nome), `../datastore/Store` (só o TIPO `Store.VersionInfo` -- a INSTÂNCIA de verdade vem de
@@ -130,11 +135,12 @@ local function buildVersionItems(storeId: string, key: string, minDate: number, 
 	return items
 end
 
--- `DataStore:ListKeysAsync` -- devolve os NOMES de chave (strings -- ver cabeçalho, DIVERGÊNCIA
--- DECLARADA) que casam com `prefix` (prefixo LITERAL via `string.sub` -- nunca padrão Lua; o
--- Roblox real não documenta suporte a wildcard aqui), opcionalmente excluindo chaves cuja versão
--- CORRENTE é um tombstone (`RemoveAsync` -- `excludeDeleted == true`). Ordem: a mesma (alfabética)
--- que `store:ListKeys` já devolve (`datastore/Store.luau`).
+-- `DataStore:ListKeysAsync` -- devolve instâncias `DataStoreKey` (ver cabeçalho, "RESOLVIDO em
+-- task-services-019-fix") para os NOMES de chave que casam com `prefix` (prefixo LITERAL via
+-- `string.sub` -- nunca padrão Lua; o Roblox real não documenta suporte a wildcard aqui),
+-- opcionalmente excluindo chaves cuja versão CORRENTE é um tombstone (`RemoveAsync` --
+-- `excludeDeleted == true`). Ordem: a mesma (alfabética) que `store:ListKeys` já devolve
+-- (`datastore/Store.luau`).
 local function buildKeyItems(storeId: string, prefix: string, excludeDeleted: boolean): { unknown }
 	local allKeys = store:ListKeys(storeId)
 
@@ -143,7 +149,9 @@ local function buildKeyItems(storeId: string, prefix: string, excludeDeleted: bo
 		local matchesPrefix = prefix == "" or string.sub(entry.Key, 1, string.len(prefix)) == prefix
 		local excluded = excludeDeleted and entry.Current.Tombstone
 		if matchesPrefix and not excluded then
-			table.insert(items, entry.Key)
+			local dataStoreKey = Runtime.ClassRegistry.NewEngineInstance("DataStoreKey")
+			Runtime.Instance.SetPropertyRaw(dataStoreKey, "KeyName", entry.Key)
+			table.insert(items, dataStoreKey)
 		end
 	end
 	return items
@@ -196,10 +204,10 @@ local Methods: { [string]: unknown } = {
 
 	--[[
 		Doc oficial: `DataStore:ListKeysAsync(prefix?, pageSize?, cursor?, excludeDeleted?):
-		DataStoreKeyPages` -- Yields. Ver `buildKeyItems`, acima, para a divergência declarada dos
-		itens (string em vez de `DataStoreKey`). `cursor` (STRING opaca devolvida pela `Cursor` de
-		uma página anterior DESTA MESMA classe -- ver `./Pages.luau`, "Cursor") resolve o índice de
-		onde retomar; vazio/ausente/inválido começa do zero (`Pages.luau`, `decodeStartIndex`).
+		DataStoreKeyPages` -- Yields. Ver `buildKeyItems`, acima -- cada item é uma instância
+		`DataStoreKey` real (`.KeyName`). `cursor` (STRING opaca devolvida pela `Cursor` de uma
+		página anterior DESTA MESMA classe -- ver `./Pages.luau`, "Cursor") resolve o índice de onde
+		retomar; vazio/ausente/inválido começa do zero (`Pages.luau`, `decodeStartIndex`).
 	]]
 	ListKeysAsync = function(self: Runtime.Instance, prefix: string?, pageSize: number?, cursor: string?, excludeDeleted: boolean?): Runtime.Instance
 		AsyncCall.Yield("DataStore:ListKeysAsync")

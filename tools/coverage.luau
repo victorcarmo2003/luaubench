@@ -53,6 +53,25 @@
 	original de L2.5.3, que previa NENHUM `Behavior` para esta classe). DISCREPÂNCIA dump x doc
 	registrada aqui e no relatório do gerador: `RespectFilteringEnabled` tem `Default` `"false"` no
 	dump e `true` na doc oficial -- o dump vence (regra 03, fonte única), nunca "corrigido" à mão.
+
+	task-services-019-fix (LER .claude/agents-memory/revisor-services-task-services-019-2026-09-05.md,
+	achado MÉDIO, ANTES de mexer aqui) acrescenta `DataStoreKey` -- ENTRADA MANUAL, DIFERENTE de
+	todas as outras acima: `DataStoreKey` tem `Superclass: "Instance"` no dump (confirmado por
+	leitura direta de `.cache/api-dump/28360dea....json`), então sozinha ela NÃO puxaria nenhuma
+	classe nova pelo fecho de superclasses -- mas o fecho AUTOMÁTICO (Decisão 1: anda só por
+	`Superclass` a partir das sementes desta lista) nunca a DESCOBRE sozinho, porque nada no
+	restante do fecho a REFERENCIA como `Superclass`/dependência: `Pages:GetCurrentPage()` e
+	`DataStore:ListKeysAsync()` devolvem, no dump, `ReturnType = { Category: "Group", Name: "Array"
+	}` -- um Array SEM parametrização de item (o dump não tem como dizer "Array de DataStoreKey"),
+	logo o gerador (que só caminha por `Superclass`, nunca por `ValueType`/`ReturnType` de membro)
+	não tem como inferir essa dependência sozinho. Isso NÃO é um bug do gerador -- é uma limitação
+	estrutural do formato do dump (Array sem tipo de item), documentada em
+	pesquisa-datastore-2026-09-05.md e no achado MÉDIO da revisão de task-services-019. Por isso
+	`DataStoreKey` entra aqui à MÃO, como semente adicional (mesmo mecanismo de toda entrada acima
+	-- só a JUSTIFICATIVA muda: não é "puxada pelo fecho automático de uma nova leva", é "puxada por
+	USO PRÁTICO que o dump não consegue expressar via Superclass/tipo de retorno"). Consumidor:
+	`src/services/behavior/DataStore.luau` (`ListKeysAsync`/`buildKeyItems`), que passa a devolver
+	instâncias `DataStoreKey` reais (`.KeyName`) em vez de strings cruas.
 ]]
 
 local Coverage: { string } = {
@@ -115,6 +134,10 @@ local Coverage: { string } = {
 
 	-- SoundService (task-services-025, L2.5.3) -- Superclass "Instance" direto, não puxa nada novo.
 	"SoundService",
+
+	-- DataStoreKey (task-services-019-fix) -- ENTRADA MANUAL, ver comentário acima ("task-services-
+	-- 019-fix") para o porquê de não ter sido puxada pelo fecho transitivo automático.
+	"DataStoreKey",
 }
 
 return Coverage

@@ -16,6 +16,7 @@ local Index: { [string]: Types.GeneratedClass } = {
 	["DataStoreGetOptions"] = require("./classes/DataStoreGetOptions") :: Types.GeneratedClass,
 	["DataStoreIncrementOptions"] = require("./classes/DataStoreIncrementOptions") :: Types.GeneratedClass,
 	["DataStoreInfo"] = require("./classes/DataStoreInfo") :: Types.GeneratedClass,
+	["DataStoreKey"] = require("./classes/DataStoreKey") :: Types.GeneratedClass,
 	["DataStoreKeyInfo"] = require("./classes/DataStoreKeyInfo") :: Types.GeneratedClass,
 	["DataStoreKeyPages"] = require("./classes/DataStoreKeyPages") :: Types.GeneratedClass,
 	["DataStoreListingPages"] = require("./classes/DataStoreListingPages") :: Types.GeneratedClass,
