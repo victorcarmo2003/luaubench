@@ -111,14 +111,47 @@ test("SetMinutesAfterMidnight faz WRAP para valores > 24h (confirmado pela doc o
 	assert(getMinutes(dynamic) == 60, `GetMinutesAfterMidnight() deveria refletir o wrap (60), recebeu {tostring(getMinutes(dynamic))}`)
 end)
 
-test("escrever ClockTime fora de [0,24) também dá WRAP (aproximação de boa-fé, ver cabeçalho de Lighting.luau)", function()
+test("escrever ClockTime >= 24 faz RESET A 0 (revisado em task-services-024-fix, ver cabeçalho de Lighting.luau)", function()
 	local lighting = makeLighting()
 	local dynamic = (lighting :: unknown) :: Dynamic
 
 	dynamic.ClockTime = 25
 
-	assert(dynamic.ClockTime == 1, `ClockTime deveria ter dado wrap para 1, recebeu {tostring(dynamic.ClockTime)}`)
-	assert(dynamic.TimeOfDay == "01:00:00", `TimeOfDay deveria ter dado wrap para "01:00:00", recebeu {tostring(dynamic.TimeOfDay)}`)
+	assert(dynamic.ClockTime == 0, `ClockTime deveria ter dado RESET para 0 (não wrap para 1), recebeu {tostring(dynamic.ClockTime)}`)
+	assert(dynamic.TimeOfDay == "00:00:00", `TimeOfDay deveria ter dado RESET para "00:00:00", recebeu {tostring(dynamic.TimeOfDay)}`)
+end)
+
+test("escrever ClockTime negativo faz RESET A 0 (revisado em task-services-024-fix, ver cabeçalho de Lighting.luau)", function()
+	local lighting = makeLighting()
+	local dynamic = (lighting :: unknown) :: Dynamic
+
+	dynamic.ClockTime = -5
+
+	assert(dynamic.ClockTime == 0, `ClockTime deveria ter dado RESET para 0 (não wrap para 19), recebeu {tostring(dynamic.ClockTime)}`)
+	assert(dynamic.TimeOfDay == "00:00:00", `TimeOfDay deveria ter dado RESET para "00:00:00", recebeu {tostring(dynamic.TimeOfDay)}`)
+end)
+
+test("escrever TimeOfDay com componente de hora >= 24 faz RESET A 0 (mesma revisão, mesmo estado único)", function()
+	local lighting = makeLighting()
+	local dynamic = (lighting :: unknown) :: Dynamic
+
+	dynamic.TimeOfDay = "25:70:99"
+
+	assert(dynamic.TimeOfDay == "00:00:00", `TimeOfDay deveria ter dado RESET para "00:00:00", recebeu {tostring(dynamic.TimeOfDay)}`)
+	assert(dynamic.ClockTime == 0, `ClockTime deveria ter dado RESET para 0, recebeu {tostring(dynamic.ClockTime)}`)
+end)
+
+test("SetMinutesAfterMidnight continua fazendo WRAP mesmo depois da revisão (via oficialmente confirmada, sem mudança)", function()
+	local lighting = makeLighting()
+	local dynamic = (lighting :: unknown) :: Dynamic
+
+	local setMinutes = dynamic.SetMinutesAfterMidnight :: (self: Dynamic, minutes: number) -> ()
+	-- 25h = 1500 min -> continua indo para 1h (wrap), NÃO para 0 -- `SetMinutesAfterMidnight` não
+	-- foi afetado pela revisão de task-services-024-fix (só ClockTime/TimeOfDay diretos mudaram).
+	setMinutes(dynamic, 1500)
+
+	assert(dynamic.ClockTime == 1, `ClockTime deveria continuar com WRAP para 1 (25h -> 1h), recebeu {tostring(dynamic.ClockTime)}`)
+	assert(dynamic.TimeOfDay == "01:00:00", `TimeOfDay deveria continuar com WRAP para "01:00:00", recebeu {tostring(dynamic.TimeOfDay)}`)
 end)
 
 test("LightingChanged dispara para Ambient e Brightness", function()

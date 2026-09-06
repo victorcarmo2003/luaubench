@@ -1836,7 +1836,7 @@
       "id": "task-cli-025",
       "title": "Ponte cli: $properties decodificado, globals de valor no sandbox, UnsimulatedGlobals derivado do Catalog",
       "description": "Desenho completo em .claude/agents-memory/arquiteto-valuetypes-2026-09-05.md, secao 3.4 (subsecao cli) e Decisao 5 (secao 7). TERRITORIO: so src/cli/. NAO tocar src/valuetypes/, src/runtime/ nem src/services/. (a) SEQUENCIAMENTO, a parte que decide o desenho: TreePlanner roda ANTES de qualquer Instance existir, logo nao ha schema e nao ha ValueType disponivel ali. Quem tem o schema e TreeMaterializer. Entao o valor bruto ATRAVESSA o plano intacto (PlanPropertyValue passa a aceitar a forma bruta do JSON) e TreePlanner PARA de emitir plan/non-primitive-property -- deixa de ser decisao do planejador. (b) TreeMaterializer.applyProperties: por propriedade, le o MemberDescriptor do schema e chama ValueTypes.Decode.FromRojoJson(descriptor.ValueType, descriptor.ValueCategory, raw); em Ok escreve; em falha emite materialize/undecodable-property citando no + propriedade + tipo alvo + motivo. Propriedade cujo ValueType aponta para tipo AINDA NAO SIMULADO (leva 2) emite materialize/property-type-not-simulated COM prefixo [LuauBench] -- sem contraparte real (no Roblox isso funcionaria), entao a regra de idioma dos erros exige o prefixo, exatamente como Messages.UnsimulatedGlobal ja faz. (c) ScriptEnvironment.Build: sobrepoe ValueTypes.BuildGlobals() por cima de UnsimulatedGlobals.Build(), antes de game/workspace/script. Uma linha. (d) UnsimulatedGlobals: lista DERIVADA de Catalog.UnsimulatedGlobalNames() em vez das 22 strings a mao -- assim, quando a leva 2 marcar Simulated=true em Font, a sentinela some sozinha, sem ninguem lembrar de editar dois territorios. (e) RunCommand: Runtime.TypeNameResolver.Set(ValueTypes.TypeNameOf) uma vez, ao lado do Services.Bootstrap que ja existe -- cli e o composition root e e o UNICO lugar do projeto que ata runtime<-valuetypes.",
-      "column": "todo",
+      "column": "in-progress",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 42,
@@ -2190,7 +2190,11 @@
       "acceptance": "luaubench run --allow-http e --allow-http-local sao reconhecidas e chegam a Services.Bootstrap; sem elas o default e false; --verbose imprime metodo+host por requisicao e nunca corpo; --help lista as duas; nenhuma flag desconhecida regrediu; specs de Args cobrindo cada caso; --!strict sem any.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": null,
+      "depends": [
+        "task-cli-025"
+      ],
+      "coordinationNote": "NOTA DO ORQUESTRADOR (2026-09-05): depends em task-cli-025 e mutex de arquivo (RunCommand.luau e Messages.luau, ambas tarefas editam os dois), nao dependencia logica -- 026 tambem depende conceitualmente de task-services-026 pra saber o nome exato do campo em BootstrapOptions, mas essa ainda nem foi dispatchada (fim de uma cadeia longa). Nao dispatchar 026 antes de 025 terminar E antes do campo de BootstrapOptions estar definido."
     },
     {
       "id": "task-services-027",
@@ -2289,7 +2293,7 @@
       "id": "task-services-024-fix",
       "title": "Revisitar Lighting.ClockTime fora de [0,24): wrap (atual) vs reset a 0 (evidencia nova)",
       "description": "task-services-028 (pesquisa da leva 2) achou evidencia de comunidade (duas threads, anos diferentes, nao doc oficial) apontando que o Roblox real faz RESET A 0 quando ClockTime/TimeOfDay/SetMinutesAfterMidnight recebem valor fora de [0,24), nao WRAP como foi implementado em task-services-024 (ja commitado, aprovado com ressalvas por outro motivo). Evidencia NAO e forte o suficiente pra ser tratada como confirmada (duas threads de forum, nao doc oficial) -- nao e um bug, e uma decisao de fidelidade a revisitar. Se o pesquisador ou uma leitura direta do motor confirmar reset, trocar behavior/Lighting.luau (wrap -> reset a 0) e atualizar os specs que hoje testam wrap explicitamente. Se ficar como esta (wrap), documentar no cabecalho que a pesquisa encontrou evidencia fraca em contrario e a decisao de manter wrap foi deliberada. Ver .claude/agents-memory/pesquisa-services-leva2-pendencias-2026-09-05.md item 4.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 46,
@@ -2302,7 +2306,8 @@
       "acceptance": "Ou (a) behavior/Lighting.luau muda de wrap para reset a 0 fora de [0,24), specs atualizados, cabecalho documenta a evidencia que motivou a mudanca; ou (b) wrap mantido com nota explicita no cabecalho reconhecendo a evidencia fraca em contrario e por que foi mantido mesmo assim.",
       "depends": [],
       "createdAt": "2026-09-05",
-      "updatedAt": "2026-09-05"
+      "updatedAt": "2026-09-05",
+      "reviewResult": "APROVADO. Revisor confirmou 19/19, citacoes verbatim da pesquisa conferidas palavra por palavra contra o documento (batem exatamente), decisao de trocar wrap por reset em ClockTime/TimeOfDay julgada correta e nao um overclaim de evidencia fraca. Testado pelo revisor: ClockTime=25/24(fronteira)/-5 resetam pra 0, TimeOfDay fora de faixa reseta, SetMinutesAfterMidnight continua fazendo WRAP real (25*60->1h, -60->23h, nao foi acidentalmente uniformizado), caminho feliz das 3 vistas intacto. Cabecalho documenta a assimetria citando as fontes exatas, sempre como aproximacao revisada nunca fato confirmado. --strict, zero any, territorio limpo (so os 2 arquivos). 1 achado BAIXO nao bloqueante: extensao do reset de ClockTime tambem pra TimeOfDay e inferencia do coder (pesquisa so cobre ClockTime direto), mas ja declarada explicitamente no cabecalho, nao e omissao. Relatorio embutido na resposta do revisor (sem arquivo de memoria separado desta vez, revisao curta)."
     }
   ]
 }

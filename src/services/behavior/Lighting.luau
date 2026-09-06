@@ -37,15 +37,40 @@
 	APROXIMAÇÃO DE BOA-FÉ, DECLARADA (regra 00) -- confirmada só PARCIALMENTE pela pesquisa (B1):
 	- CONFIRMADO: `TimeOfDay` aceita escrita curta sem segundos (`"11:00"`, `"21:30"`).
 	- CONFIRMADO: `SetMinutesAfterMidnight` faz WRAP para valores > 24h ("also allows values
-	  greater than 24 hours that correspond to times in the next day").
+	  greater than 24 hours that correspond to times in the next day") -- isto NUNCA mudou, é doc
+	  oficial (`Lighting.yaml`) e nenhuma pesquisa posterior contradisse.
 	- NÃO CONFIRMADO: zero-padding na LEITURA de volta de uma hora de um dígito escrita por
-	  extenso, e wrap/clamp/erro na escrita DIRETA de `ClockTime`/`TimeOfDay` fora de [0, 24h) (só
-	  confirmado para `SetMinutesAfterMidnight`). Decisão do arquiteto (L2.5.2): adotar a MESMA
-	  regra para as três vistas -- forma canônica `HH:MM:SS` com zero-padding na leitura, e WRAP
-	  (nunca erro/clamp) para qualquer valor fora de alcance, em QUALQUER uma das três portas de
-	  entrada. Também NÃO CONFIRMADO: sinal do wrap para minutos NEGATIVOS -- a decisão estende o
-	  mesmo wrap por analogia (módulo com divisor positivo nunca devolve negativo em Luau/Lua,
-	  então "meia-noite menos 10 minutos" vira "23:50:00" em vez de erro).
+	  extenso -- decisão do arquiteto (L2.5.2) mantida: forma canônica `HH:MM:SS` com zero-padding.
+
+	REVISADO em task-services-024-fix (2026-09-05) -- escrita DIRETA de `ClockTime`/`TimeOfDay` fora
+	de [0, 24h) NÃO faz mais WRAP, faz RESET A 0. `task-services-028` (pesquisa da leva 2) achou
+	duas fontes de comunidade INDEPENDENTES, anos diferentes, cada uma com citação verbatim de
+	alguém relatando o comportamento observado ao vivo no motor real (não é doc oficial -- a doc de
+	`ClockTime` só descreve o que a propriedade É, nunca o que acontece fora de alcance):
+	  - "ClockTime above 24 should apply a modulo of 24" (2018,
+	    https://devforum.roblox.com/t/clocktime-above-24-should-apply-a-modulo-of-24/179818):
+	    *"When you set ClockTime to 24 or above, the property will automatically reset back to
+	    0."* -- o próprio TÍTULO do pedido ("deveria aplicar módulo") já prova que o comportamento
+	    da época NÃO era módulo/wrap; senão o pedido não faria sentido.
+	  - "How to tween Lighting.ClockTime that is a negative number" (mais recente, anos depois,
+	    https://devforum.roblox.com/t/how-to-tween-lightingclocktime-that-is-a-negative-number/845960):
+	    *"I've tried it, no you cannot set it to negative even with a loop. It will just bring it
+	    back to 0."*
+	  As duas concordam no MESMO comportamento (reset a 0, não wrap/clamp/erro) tanto para `>= 24`
+	  quanto para `< 0`, com anos de distância entre si -- evidência mais forte do que a
+	  "aproximação de boa-fé" original de `task-services-024` (zero evidência própria, só analogia
+	  com o wrap CONFIRMADO de `SetMinutesAfterMidnight`). Por isso a correção: `ClockTime`
+	  numérico e `TimeOfDay` string, escritos DIRETAMENTE, agora fazem RESET A 0 fora de [0, 24h)
+	  (`resetToMidnightIfOutOfRange`, abaixo) -- `SetMinutesAfterMidnight` continua WRAP, sem
+	  mudança, porque essa via TEM confirmação oficial e nenhuma fonte contradisse.
+	  O resultado é uma ASSIMETRIA REAL entre as três vistas do mesmo estado único: escrever
+	  `ClockTime`/`TimeOfDay` fora de alcance reseta a meia-noite, enquanto `SetMinutesAfterMidnight`
+	  avança pro dia seguinte -- estranho, mas é o que as duas fontes dizem; o MECANISMO de estado
+	  único (ver acima) não muda, só a fórmula do que fazer com um valor fora de alcance em CADA
+	  porta de entrada, agora tratada por porta em vez de uniformemente.
+	  Continua sendo evidência de COMUNIDADE, não doc oficial -- registrado como aproximação de
+	  boa-fé revisada, nunca como fato confirmado (regra 00). Se uma pesquisa futura achar doc
+	  oficial ou teste ao vivo contradizendo isto, esta decisão volta a ser revisitável.
 ]]
 
 local Runtime = require("../../runtime")
@@ -88,32 +113,48 @@ local function roundToInteger(value: number): number
 	return math.floor(value + 0.5)
 end
 
--- WRAP (nunca erro/clamp) para a faixa [0, 86400) -- decisão do arquiteto (L2.5.2), estendendo por
--- analogia o wrap CONFIRMADO de `SetMinutesAfterMidnight` (pesquisa B1) às outras duas portas de
--- entrada. `%` em Luau/Lua com divisor POSITIVO sempre devolve um resultado não-negativo em
--- [0, divisor) mesmo para `totalSeconds` negativo (semântica de módulo por divisão inteira para
--- baixo, não a de `fmod` de C) -- por isso um único `%` já cobre "meia-noite menos 10 minutos" sem
--- precisar de um `+ SECONDS_PER_DAY` extra antes.
+-- WRAP (nunca erro/clamp) para a faixa [0, 86400) -- USADO APENAS por `secondsFromMinutes`
+-- (`Get`/`SetMinutesAfterMidnight`, CONFIRMADO oficialmente, ver cabeçalho) e, defensivamente, por
+-- `formatTimeOfDay` (normaliza um valor que `applyCanonical` já garante estar em alcance -- vira
+-- identidade nesse caso, nunca reintroduz wrap na escrita direta). `%` em Luau/Lua com divisor
+-- POSITIVO sempre devolve um resultado não-negativo em [0, divisor) mesmo para `totalSeconds`
+-- negativo (semântica de módulo por divisão inteira para baixo, não a de `fmod` de C) -- por isso
+-- um único `%` já cobre minutos negativos sem precisar de um `+ SECONDS_PER_DAY` extra antes.
 local function wrapSeconds(totalSeconds: number): number
 	return totalSeconds % SECONDS_PER_DAY
 end
 
--- `ClockTime` (horas fracionárias) -> segundos desde meia-noite, já com wrap.
-local function secondsFromClockTime(hoursValue: number): number
-	return wrapSeconds(roundToInteger(hoursValue * SECONDS_PER_HOUR))
+-- RESET A 0 (não wrap, não clamp) fora de [0, 86400) -- decisão REVISADA em task-services-024-fix
+-- (ver cabeçalho, evidência de comunidade) para as DUAS portas de escrita DIRETA que compartilham o
+-- mesmo estado único: `ClockTime` numérico (`secondsFromClockTime`, abaixo) e `TimeOfDay` string
+-- (usado direto no `Changed:Connect` de `Initialize`). NUNCA usada por `secondsFromMinutes` --
+-- `SetMinutesAfterMidnight` continua com `wrapSeconds` acima, sem mudança.
+local function resetToMidnightIfOutOfRange(totalSeconds: number): number
+	if totalSeconds < 0 or totalSeconds >= SECONDS_PER_DAY then
+		return 0
+	end
+	return totalSeconds
 end
 
--- Minutos (usado por `Get`/`SetMinutesAfterMidnight`) -> segundos desde meia-noite, já com wrap.
+-- `ClockTime` (horas fracionárias) -> segundos desde meia-noite, com RESET A 0 fora de [0, 24h)
+-- (revisado em task-services-024-fix -- era wrap, ver cabeçalho).
+local function secondsFromClockTime(hoursValue: number): number
+	return resetToMidnightIfOutOfRange(roundToInteger(hoursValue * SECONDS_PER_HOUR))
+end
+
+-- Minutos (usado só por `Get`/`SetMinutesAfterMidnight`) -> segundos desde meia-noite, com WRAP --
+-- CONFIRMADO pela doc oficial, NUNCA mudou (ver cabeçalho, "REVISADO em task-services-024-fix").
 local function secondsFromMinutes(minutesValue: number): number
 	return wrapSeconds(roundToInteger(minutesValue * SECONDS_PER_MINUTE))
 end
 
 -- Interpreta `TimeOfDay` em `"H:MM"`/`"HH:MM"`/`"HH:MM:SS"` (a escrita curta sem segundos É
--- confirmada pela pesquisa B1) e devolve o total de segundos desde meia-noite -- SEM wrap ainda
--- (o chamador decide quando aplicar `wrapSeconds`, mesmo padrão de `secondsFromClockTime`/
--- `secondsFromMinutes` acima). Componente fora de alcance (`"25:70:99"`) é aceito aqui -- vira um
--- total de segundos grande, que o `wrapSeconds` do chamador resolve (decisão do arquiteto,
--- L2.5.2: wrap, nunca erro, para valor numericamente fora de alcance).
+-- confirmada pela pesquisa B1) e devolve o total de segundos desde meia-noite -- SEM normalizar
+-- ainda (o chamador decide: hoje é sempre `resetToMidnightIfOutOfRange`, ver `Changed:Connect` em
+-- `Initialize` abaixo -- revisado em task-services-024-fix, era `wrapSeconds`). Componente fora de
+-- alcance (`"25:70:99"`) é aceito aqui -- vira um total de segundos grande, que o chamador resolve
+-- (nunca erro para valor numericamente fora de alcance, só para string que não bate com nenhum dos
+-- três formatos, ver abaixo).
 --
 -- Erro `[LuauBench]` (nunca a família Roblox sem prefixo) para uma string que não bate com nenhum
 -- dos três formatos: a pesquisa (B1) achou um relato de comunidade de 2017 de um erro real
@@ -215,10 +256,11 @@ local LightingBehavior: Types.Behavior = {
 		-- dentro do próprio handler de `Changed`).
 		local syncing = false
 
-		-- Reescreve `ClockTime`/`TimeOfDay` a partir de `secondsSinceMidnight` (JÁ com wrap
-		-- aplicado pelo chamador) -- só grava (via `SetPropertyRaw`, que sempre dispara `Changed`)
-		-- a vista que realmente mudou, para não gerar um `Changed`/`LightingChanged` supérfluo na
-		-- vista que já estava canônica.
+		-- Reescreve `ClockTime`/`TimeOfDay` a partir de `secondsSinceMidnight` (JÁ normalizado pelo
+		-- chamador -- `wrapSeconds` para a via de `SetMinutesAfterMidnight`, `resetToMidnightIfOutOfRange`
+		-- para escrita direta de `ClockTime`/`TimeOfDay`, ver cabeçalho) -- só grava (via
+		-- `SetPropertyRaw`, que sempre dispara `Changed`) a vista que realmente mudou, para não
+		-- gerar um `Changed`/`LightingChanged` supérfluo na vista que já estava canônica.
 		local function applyCanonical(secondsSinceMidnight: number): ()
 			local canonicalClockTime = secondsSinceMidnight / SECONDS_PER_HOUR
 			local canonicalTimeOfDay = formatTimeOfDay(secondsSinceMidnight)
@@ -243,7 +285,9 @@ local LightingBehavior: Types.Behavior = {
 					applyCanonical(secondsFromClockTime(clockTimeValue))
 				elseif propertyName == "TimeOfDay" then
 					local timeOfDayValue = Runtime.Instance.GetPropertyRaw(instance, "TimeOfDay") :: string
-					applyCanonical(wrapSeconds(parseTimeOfDay(timeOfDayValue)))
+					-- RESET A 0 fora de [0, 24h) -- revisado em task-services-024-fix (era wrap via
+					-- `wrapSeconds`), ver cabeçalho do arquivo para a evidência que motivou a troca.
+					applyCanonical(resetToMidnightIfOutOfRange(parseTimeOfDay(timeOfDayValue)))
 				end
 			end
 
