@@ -124,13 +124,20 @@ test("Execute: fixture 'bindtoclose' termina com ExitCode 0 sem propagar exceç�
 	assert(result.ErrorCount == 0, `esperava ErrorCount 0, recebeu {result.ErrorCount}`)
 end)
 
-test("Execute: fixture 'bindtoclose-error' não propaga o erro de um callback de BindToClose para fora de Execute (task-cli-031)", function()
+test("Execute: fixture 'bindtoclose-error' não propaga o erro de um callback de BindToClose para fora de Execute, mas CONTA no ErrorCount e reflete no ExitCode (task-cli-031 + fix task-cli-032)", function()
 	-- Se `RunBindToCloseCallbacks` propagasse o erro do primeiro callback, esta chamada (sem
 	-- `pcall` nenhum -- `test()` não protege `run`) derrubaria o arquivo de spec inteiro. Chegar
 	-- até a asserção abaixo já prova que a semântica de `DataModel` (ThreadError, nunca propaga)
 	-- se mantém de ponta a ponta através de `RunCommand`.
+	--
+	-- task-cli-032 (BUG achado em task-cli-031, corrigido aqui): antes desta correção, o erro do
+	-- callback saía por `scheduler.ThreadError` sem nenhum listener conectado -- `ExitCode` saía
+	-- 0 e `ErrorCount` saía 0, mesmo com um erro real acontecendo (exit code 0 falso). O fixture
+	-- registra DOIS callbacks: o primeiro erra, o segundo só imprime -- exatamente o cenário
+	-- "múltiplos callbacks, um erra, outro continua rodando" do acceptance desta tarefa.
 	local result = RunCommand.Execute(baseOptions(fixturePath("run-e2e/bindtoclose-error")))
-	assert(result.ExitCode == 0, `esperava ExitCode 0 (erro de BindToClose não é contado como erro de script), recebeu {result.ExitCode}`)
+	assert(result.ExitCode == 1, `esperava ExitCode 1 (erro de BindToClose agora conta como erro de script), recebeu {result.ExitCode}`)
+	assert(result.ErrorCount == 1, `esperava ErrorCount 1 (só o PRIMEIRO callback erra, o segundo não), recebeu {result.ErrorCount}`)
 end)
 
 test("Diagnostics.Bag: um projeto com apenas warnings (sem erros) ainda produz ExitCode 0", function()
@@ -292,19 +299,51 @@ test("Processo real: fixture 'bindtoclose' -- BindToClose dispara e ESPERA os ca
 		yieldingCallbackEnd ~= nil and summaryStart ~= nil and yieldingCallbackEnd < summaryStart,
 		"callback que cede de BindToClose deveria aparecer ANTES do sumário final, mesmo tendo que esperar o task.wait"
 	)
+
+	-- task-cli-032 (regressão explícita do acceptance "callback que não erra continua
+	-- silencioso"): o listener novo de `ThreadError` conectado ao redor de
+	-- `RunBindToCloseCallbacks` NUNCA deveria produzir uma linha extra para um callback que só
+	-- termina normalmente -- nenhum "error " no stderr, e o sumário final continua "0 error(s)",
+	-- idêntico ao que já era antes desta tarefa (task-cli-031).
+	assert(string.find(result.stderr, "error ", 1, true) == nil, `nenhum callback errou -- stderr não deveria conter linha de erro nenhuma: {result.stderr}`)
+	assert(
+		string.find(result.stdout, "0 error(s)", 1, true) ~= nil,
+		`sumário deveria continuar contando 0 erros (nenhum callback deste fixture erra): {result.stdout}`
+	)
 end)
 
-test("Processo real: fixture 'bindtoclose-error' -- erro num callback de BindToClose não derruba o processo nem impede o segundo callback de rodar (task-cli-031)", function()
+test("Processo real: fixture 'bindtoclose-error' -- erro num callback de BindToClose não derruba o processo, não impede o segundo callback de rodar, mas agora APARECE formatado no stderr, CONTA no sumário e muda o exit code (task-cli-031 + fix task-cli-032)", function()
 	local result = runRealProcess({ "run", "src/cli/main.luau", "run", fixturePath("run-e2e/bindtoclose-error"), "--no-color" })
 
+	-- BUG task-cli-032 (corrigido aqui): antes, esta chamada devolvia exit code 0 e "0 error(s)"
+	-- mesmo com o erro real do callback tendo acontecido -- exatamente o "sucesso aparente" que o
+	-- board descreve. Agora o erro conta como qualquer outro erro de script.
 	assert(
-		result.code == 0,
-		`esperava exit code 0 -- erro de BindToClose não deveria mudar o exit code do processo, recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`
+		result.code == 1,
+		`esperava exit code 1 (erro de BindToClose agora reflete no exit code do processo), recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`
 	)
 	assert(string.find(result.stdout, "main script ran", 1, true) ~= nil, `stdout deveria conter o print do script principal: {result.stdout}`)
 	assert(
 		string.find(result.stdout, "bindtoclose: second callback still ran despite the first one erroring", 1, true) ~= nil,
 		`o SEGUNDO callback de BindToClose deveria ter rodado mesmo com o PRIMEIRO tendo errado: {result.stdout}`
+	)
+
+	-- Formatado no MESMO padrão de um erro de Script principal (Messages.OutputErrorLine,
+	-- "error <scriptName>:<line>: <mensagem>") -- nunca o marcador cru `[string "..."]` do motor,
+	-- e nunca a stack traceback multi-linha vazando (mesma disciplina de qualquer outro erro de
+	-- script já coberta pelo teste de 'module-error', acima).
+	assert(
+		string.find(result.stderr, "ServerScriptService.Main:6: bindtoclose boom (proposital, teste task-cli-031)", 1, true) ~= nil,
+		`stderr deveria conter o erro do callback formatado como um erro de script normal: {result.stderr}`
+	)
+	assert(string.find(result.stderr, '[string "', 1, true) == nil, `marcador cru do motor vazou para a saída: {result.stderr}`)
+	assert(string.find(result.stderr, "stack traceback", 1, true) == nil, `stack traceback crua vazou para a saída: {result.stderr}`)
+
+	-- Conta no sumário final (`Messages.DiagnosticCountLine`) -- só UMA vez (o segundo callback
+	-- não erra), nunca "0 error(s)" com um erro real tendo acontecido.
+	assert(
+		string.find(result.stdout, "1 error(s), 0 warning(s).", 1, true) ~= nil,
+		`stdout deveria conter o sumário contando exatamente 1 erro: {result.stdout}`
 	)
 end)
 

@@ -134,6 +134,42 @@ local function printDiagnostics(bag: Diagnostics.Bag, useColor: boolean, verbose
 	end
 end
 
+-- task-cli-032 (BUG achado independentemente por coder/revisor de task-cli-031, já commitada):
+-- um `error()` dentro de um callback de `game:BindToClose(fn)` saía por `scheduler.ThreadError`
+-- (mesmo canal de qualquer outra thread gerida, ver Scheduler.luau/`resumeThread`) mas NENHUM
+-- listener estava conectado para essas threads especificamente -- `Sandbox.Run` só se inscreve
+-- para as threads que ELE MESMO cria (`ownThreads`, ver cabeçalho de `Sandbox.luau`), e as
+-- threads de `RunBindToCloseCallbacks` nascem direto ali dentro via `scheduler:Spawn`, fora de
+-- qualquer `Sandbox.Run`. Resultado: erro real (ex.: falha ao salvar a sessão final de um
+-- ProfileStore dentro de `BindToClose`) virava sucesso aparente (exit 0, "0 error(s)").
+--
+-- Esta função extrai `(scriptName, line, message)` da mensagem CRUA de um `ThreadError` dessas
+-- threads -- mesma convenção documentada em `Sandbox.splitErrorMessage` (corta na primeira
+-- quebra de linha, procura o marcador `[string "..."]:<n>: ` do VM do Luau) e em
+-- `OutputFormatter.tryReattributeModuleError` (busca NÃO ANCORADA a um nome esperado, porque um
+-- callback de `BindToClose` pode ter sido registrado por QUALQUER Script do projeto -- este
+-- módulo só descobre qual lendo a própria mensagem). Reescrita AQUI, e não reexportada de
+-- nenhum dos dois módulos citados, porque nenhum dos dois expõe essa lógica publicamente e o
+-- território desta tarefa (task-cli-032) é só este arquivo/spec -- ver "API faltante" no
+-- relatório da tarefa: o ideal de longo prazo é uma única função exportada compartilhada pelos
+-- três lugares, para as três cópias nunca divergirem em silêncio (regra 01).
+local function parseBindToCloseThreadError(raw: string): (string?, number?, string)
+	local firstLine = raw
+	local newlineIndex = string.find(raw, "\n")
+	if newlineIndex ~= nil then
+		firstLine = string.sub(raw, 1, newlineIndex - 1)
+	end
+
+	local scriptName, lineText, message = string.match(firstLine, '%[string "(.-)"%]:(%d+): (.*)$')
+	if scriptName == nil or lineText == nil or message == nil then
+		-- Marcador não encontrado (formato de erro que não reconhecemos) -- degrada para a
+		-- primeira linha crua, sem nome/linha, nunca falha (mesmo protocolo de
+		-- `Sandbox.splitErrorMessage`).
+		return nil, nil, firstLine
+	end
+	return scriptName, tonumber(lineText), message
+end
+
 -- `shouldContinue` de `--timeout` (ver cabeçalho, "Riscos e decisões"). `nil` (sem `--timeout`)
 -- devolve `nil` -- `Scheduler:Run(nil)` roda até `IsAlive()` virar `false` por conta própria,
 -- comportamento de sempre.
@@ -304,7 +340,46 @@ function RunCommand.Execute(options: RunOptions): Result
 	-- próprio `scheduler` (mesma proteção de `resumeThread`/`fireProtected` que qualquer outra
 	-- thread gerida) -- nunca propaga para cá, nunca derruba o processo, nunca impede os demais
 	-- callbacks de rodar (ver DataModel.luau, task-runtime-033).
+	--
+	-- task-cli-032: conecta ao MESMO `scheduler.ThreadError` que `Sandbox.Run` já escuta pras
+	-- threads do script principal, e traduz para o MESMO `formatter` (contagem de erro +
+	-- formatação, `Messages.OutputErrorLine`, idêntico a um erro de Script de topo) -- reusa o
+	-- mecanismo existente em vez de abrir um segundo caminho de erro paralelo (ver
+	-- `parseBindToCloseThreadError`, acima, para o porquê de precisar de um parser próprio aqui).
+	-- Conectado só durante esta janela (Connect antes da chamada, Disconnect logo depois): o
+	-- listener não precisa sobreviver além dela -- `Execute` já está a três linhas do fim.
+	--
+	-- LIMITAÇÃO CONHECIDA, documentada (regra 00): diferente de `Sandbox.Run` (que filtra por
+	-- `ownThreads`, populado no momento de cada `Spawn`), este listener NÃO filtra por
+	-- identidade de thread -- `DataModel.RunBindToCloseCallbacks` devolve `()`, sem expor os
+	-- `thread` handles que cria por dentro (API pública de `runtime`, task-runtime-033), então
+	-- não há como este módulo saber, de antemão, quais threads são "de BindToClose". Na prática
+	-- isto só importa se `--timeout` (passo 11) expirou com uma thread do SCRIPT PRINCIPAL ainda
+	-- suspensa (ex.: um `task.wait()` no meio de um script que nunca terminou): o
+	-- `scheduler:Run(anyStillAlive)` interno de `RunBindToCloseCallbacks` drena TODAS as threads
+	-- vivas do Scheduler (não só as de BindToClose, comportamento já existente desde
+	-- task-cli-031) -- se essa thread antiga for retomada e errar NESTA janela específica, o
+	-- erro sairia contado duas vezes (uma pelo `Sandbox.Run` original daquele Script, que nunca
+	-- desconecta, e uma por este listener). Cenário estreito (timeout + thread ainda suspensa +
+	-- erro exatamente nesta janela) fora do escopo desta tarefa para corrigir -- exigiria
+	-- `RunBindToCloseCallbacks` devolver os handles que cria, mudança em `runtime`. Reportado
+	-- como pendência, não escondido; nenhum dos cenários do acceptance desta tarefa (callback
+	-- SEM erro / callback COM erro / múltiplos callbacks) o alcança.
+	local bindToCloseErrorConnection: Runtime.Connection = scheduler.ThreadError:Connect(function(_erroredThread: thread, message: string)
+		local scriptName, line, cleanMessage = parseBindToCloseThreadError(message)
+		local record: Runtime.OutputRecord = {
+			level = "error",
+			message = cleanMessage,
+			scriptName = scriptName,
+			line = line,
+			timestamp = os.time(),
+		}
+		formatter:Emit(record)
+	end)
+
 	Runtime.DataModel.RunBindToCloseCallbacks(game, scheduler)
+
+	bindToCloseErrorConnection:Disconnect()
 
 	printDiagnostics(bag, options.UseColor, options.Verbose)
 	print(Messages.SummaryLine(summary.Executed, summary.SkippedLocalScripts, summary.SkippedByContainer, summary.SkippedDisabled))
