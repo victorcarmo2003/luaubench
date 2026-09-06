@@ -91,9 +91,25 @@
 	  buffer completo de itens em páginas) -- via o achatamento de classe do `runtime`, os mesmos
 	  dois métodos ficam disponíveis em `DataStoreVersionPages`/`DataStoreKeyPages`/
 	  `DataStoreListingPages`/`DataStorePages` sem entrada própria para cada uma.
-	`OrderedDataStore` continua SEM entrada própria (`GetSortedAsync` fica com o stub
-	`[LuauBench]`, fora do território de task-services-019) -- a herança de `GlobalDataStore`
-	continua funcionando para ela mesmo assim.
+	`OrderedDataStore` continuou SEM entrada própria em task-services-019 (`GetSortedAsync` ficou com
+	o stub `[LuauBench]`, fora daquele território) -- a herança de `GlobalDataStore` continuou
+	funcionando para ela mesmo assim.
+
+	task-services-020 (`OrderedDataStore`/`GetSortedAsync` -- LER
+	.claude/agents-memory/arquiteto-services-2026-09-05.md, "L2.1.3", antes de mexer aqui) adiciona a
+	entrada que faltava:
+	- `OrderedDataStore` (ver `./OrderedDataStore.luau`): `Methods` cobre só `GetSortedAsync` (o
+	  ÚNICO membro que `generated/classes/OrderedDataStore.luau` declara -- `SetAsync`/
+	  `UpdateAsync`/`IncrementAsync`/`RemoveAsync`/`GetAsync` continuam herdados de
+	  `GlobalDataStore` via achatamento de classe, sem entrada própria aqui). A validação "valor
+	  precisa ser INTEIRO" que essa herança precisa ganhar para `OrderedDataStore` foi acrescentada
+	  DENTRO de `./GlobalDataStore.luau` (gated por `self.ClassName`) -- `ClassBuilder.Build` não
+	  permite registrar, no `behavior.Methods` de `OrderedDataStore`, uma chave que não está no
+	  `MethodNames` DELA MESMA (só `GetSortedAsync`) -- ver o cabeçalho de `./GlobalDataStore.luau`,
+	  seção "task-services-020", para o raciocínio completo. `RemoveAsync` também não muda (continua
+	  herdado, tombstone por baixo) -- a "remoção permanente" exigida pelo despacho da tarefa é
+	  observacionalmente garantida porque `OrderedDataStore` nunca ganha `GetVersionAsync`/
+	  `ListVersionsAsync` (membros de "DataStore", fora da sua cadeia de superclasses).
 
 	Todas as outras classes desta e das levas anteriores continuam registradas por
 	`Services.Register()` (ver ../init.luau) SEM Behavior — contêiner puro, nenhuma precisa de
@@ -115,6 +131,7 @@ local BehaviorIndex: { [string]: Types.Behavior } = {
 	DataStoreIncrementOptions = require("./DataStoreIncrementOptions") :: Types.Behavior,
 	DataStore = require("./DataStore") :: Types.Behavior,
 	Pages = require("./Pages") :: Types.Behavior,
+	OrderedDataStore = require("./OrderedDataStore") :: Types.Behavior,
 }
 
 return BehaviorIndex

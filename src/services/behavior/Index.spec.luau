@@ -2,24 +2,24 @@
 
 --[[
 	Teste de task-services-003 para `src/services/behavior/Index.luau`, ATUALIZADO por
-	task-services-004, task-services-024, task-services-018 e task-services-019. O mapa deixou de
-	estar vazio na retomada de task-services-003 (ver o cabeçalho de `Index.luau`, seção
-	"HISTÓRICO", para o porquê) com UMA entrada (`StarterPlayer`), ganhou mais DUAS em
+	task-services-004, task-services-024, task-services-018, task-services-019 e task-services-020.
+	O mapa deixou de estar vazio na retomada de task-services-003 (ver o cabeçalho de `Index.luau`,
+	seção "HISTÓRICO", para o porquê) com UMA entrada (`StarterPlayer`), ganhou mais DUAS em
 	task-services-004 (`RunService`/`Players`), mais UMA em task-services-024 (`Lighting`), mais
 	SEIS em task-services-018 (`DataStoreService`/`GlobalDataStore`/`DataStoreKeyInfo`/
-	`DataStoreOptions`/`DataStoreSetOptions`/`DataStoreIncrementOptions`) e mais DUAS em
-	task-services-019 (`DataStore`/`Pages`) -- 12 entradas ao todo. `Initialize`/`Methods` de cada
-	uma (cobertura de comportamento própria) é testado em `./StarterPlayer.spec.luau`/
-	`./RunService.spec.luau`/`./Players.spec.luau`/`./Lighting.spec.luau`/
-	`./DataStoreService.spec.luau`/`./GlobalDataStore.spec.luau`/`./DataStoreKeyInfo.spec.luau`/
-	`./DataStoreOptions.spec.luau`/`./DataStoreSetOptions.spec.luau`/
-	`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/`./Pages.spec.luau`. Este
-	arquivo cobre só a FORMA do mapa (tipado corretamente, requerível, exatamente as entradas
-	esperadas -- nem mais nem menos) e que `Services.Register()` (src/services/init.luau) consegue
-	iterar `generated/Index.luau` cruzando com este mapa sem erro -- essa segunda parte já está
-	coberta em `../Integration.spec.luau` (24 classes registradas com sucesso, `StarterPlayer`
-	nascendo com os dois filhos fixos, e `RunService`/`Players` alcançáveis por `GetService`) e em
-	`../init.spec.luau`, não duplicada aqui.
+	`DataStoreOptions`/`DataStoreSetOptions`/`DataStoreIncrementOptions`), mais DUAS em
+	task-services-019 (`DataStore`/`Pages`) e mais UMA em task-services-020 (`OrderedDataStore`) --
+	13 entradas ao todo. `Initialize`/`Methods` de cada uma (cobertura de comportamento própria) é
+	testado em `./StarterPlayer.spec.luau`/`./RunService.spec.luau`/`./Players.spec.luau`/
+	`./Lighting.spec.luau`/`./DataStoreService.spec.luau`/`./GlobalDataStore.spec.luau`/
+	`./DataStoreKeyInfo.spec.luau`/`./DataStoreOptions.spec.luau`/`./DataStoreSetOptions.spec.luau`/
+	`./DataStoreIncrementOptions.spec.luau`/`./DataStore.spec.luau`/`./Pages.spec.luau`/
+	`./OrderedDataStore.spec.luau`. Este arquivo cobre só a FORMA do mapa (tipado corretamente,
+	requerível, exatamente as entradas esperadas -- nem mais nem menos) e que `Services.Register()`
+	(src/services/init.luau) consegue iterar `generated/Index.luau` cruzando com este mapa sem erro
+	-- essa segunda parte já está coberta em `../Integration.spec.luau` (24 classes registradas com
+	sucesso, `StarterPlayer` nascendo com os dois filhos fixos, e `RunService`/`Players` alcançáveis
+	por `GetService`) e em `../init.spec.luau`, não duplicada aqui.
 
 	Roda com `lune run src/services/behavior/Index.spec.luau`.
 ]]
@@ -37,12 +37,12 @@ local function test(name: string, run: () -> ())
 	print(`[PASS] {name}`)
 end
 
-test("behavior/Index.luau tem EXATAMENTE 12 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages", function()
+test("behavior/Index.luau tem EXATAMENTE 13 entradas até esta leva: StarterPlayer, RunService, Players, Lighting, DataStoreService, GlobalDataStore, DataStoreKeyInfo, DataStoreOptions, DataStoreSetOptions, DataStoreIncrementOptions, DataStore, Pages, OrderedDataStore", function()
 	local count = 0
 	for _ in BehaviorIndex do
 		count += 1
 	end
-	assert(count == 12, `esperava 12 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
+	assert(count == 13, `esperava 13 entradas até esta leva (ver cabeçalho de Index.luau), recebeu {count}`)
 end)
 
 test("behavior/Index.luau['StarterPlayer'] existe e tem Initialize; classes-contêiner puro continuam sem entrada", function()
@@ -123,8 +123,12 @@ test("behavior/Index.luau['Pages'] existe, tem Methods e NENHUM Initialize (task
 	assert(pagesBehavior.Initialize == nil, "Pages não precisa de Initialize -- toda a construção acontece na fábrica New, fora do contrato Types.Behavior")
 end)
 
-test("OrderedDataStore continua SEM entrada própria -- GetSortedAsync fica com o stub [LuauBench], fora do território de task-services-019", function()
-	assert(BehaviorIndex["OrderedDataStore"] == nil, "OrderedDataStore não deveria ter Behavior próprio ainda -- GetSortedAsync fica com o stub [LuauBench]")
+test("behavior/Index.luau['OrderedDataStore'] existe, tem Methods (só GetSortedAsync) e NENHUM Initialize (task-services-020)", function()
+	local orderedDataStoreBehavior = BehaviorIndex["OrderedDataStore"]
+	assert(orderedDataStoreBehavior ~= nil, "OrderedDataStore deveria ter Behavior a partir de task-services-020")
+	assert(orderedDataStoreBehavior.Methods ~= nil, "OrderedDataStore.Methods deveria existir -- GetSortedAsync")
+	assert((orderedDataStoreBehavior.Methods :: { [string]: unknown }).GetSortedAsync ~= nil, "OrderedDataStore.Methods.GetSortedAsync deveria existir")
+	assert(orderedDataStoreBehavior.Initialize == nil, "OrderedDataStore não precisa de Initialize -- storeId é setado por DataStoreService.luau, via SetPropertyRaw, não em Initialize")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)
