@@ -154,4 +154,27 @@ function Context.NotifyMessagePublished(topic: string, byteSize: number): ()
 	end
 end
 
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10): canal ÚNICO de leitura
+-- de `BootstrapOptions.CloudPersistence` -- nenhum `behavior/*.luau` lê `BootstrapOptions` direto,
+-- mesma disciplina de `IsHttpAllowed`/`NotifyHttpRequest` acima. Consumido por `../init.luau`
+-- (`Services.Bootstrap`, para carregar o estado salvo antes de qualquer script rodar, e
+-- `Services.FlushCloudState`, para decidir se há uma porta pra gravar).
+--
+-- DIFERENTE de `GetScheduler`/`GetDataModel`/`IsHttpAllowed`/`NotifyHttpRequest` (que ERRAM se
+-- `Bootstrap` ainda não rodou neste processo -- chamar qualquer um deles antes disso é erro de
+-- ENGENHARIA de `cli`, nunca esperado): esta função NUNCA erra, nem mesmo se `current == nil`
+-- (Bootstrap nunca chamado). Decisão deliberada do arquiteto (seção 10 do desenho): a AUSÊNCIA do
+-- port (seja porque `cli` nunca passou `CloudPersistence`, seja porque `Bootstrap` ainda nem
+-- rodou) é um estado NORMAL e FREQUENTE -- `Services.FlushCloudState` é chamado por `cli` em
+-- pontos de flush (fronteira de tique do scheduler, flush final) que precisam ser seguros de
+-- chamar mesmo num cenário de erro anterior no pipeline, sem nunca derrubar a execução por causa
+-- disso (regra 01: "erro não tratado ... nunca derruba o processo" -- aqui, mais forte ainda: nem
+-- CHEGA a ser um erro).
+function Context.GetCloudPersistence(): Types.CloudPersistence?
+	if current == nil then
+		return nil
+	end
+	return current.CloudPersistence
+end
+
 return Context

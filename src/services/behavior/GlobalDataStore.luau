@@ -70,6 +70,23 @@
 	(pesquisa-datastore-2026-09-05.md) só confirmam "inteiro" -- nenhuma fonte primária confirma
 	"só positivo". `checkIntegerForOrderedDataStore` aceita qualquer inteiro finito (positivo,
 	negativo, zero); nunca inventa uma restrição de sinal sem confirmação (regra 00).
+
+	task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 5, "marca-suja"): item (c)
+	da tarefa pede que "toda mutação bem-sucedida marca o Store como sujo, cobrindo SetAsync/
+	UpdateAsync/RemoveAsync/IncrementAsync e o caminho de OrderedDataStore". ESTE ARQUIVO NÃO
+	PRECISOU MUDAR NENHUMA LINHA DE COMPORTAMENTO para isso -- verificado lendo `../datastore/
+	Store.luau` (task-services-030, já aprovado): a marca-suja já é síncrona e automática DENTRO de
+	`writeVersion` (o ponto ÚNICO de criação de versão, chamado por `Store.Set`/`Store.Update`/
+	`Store.Remove` -- ver o cabeçalho daquele arquivo, "EXPORT/IMPORT/MARCA-SUJA"). Como `SetAsync`/
+	`UpdateAsync`/`RemoveAsync`/`IncrementAsync` (Methods, abaixo) só chegam a uma versão nova
+	SEMPRE através de `store:Set`/`store:Update`/`store:Remove`, e nunca escrevem em `data` por
+	fora deles, a marca-suja já cobre os quatro métodos -- e o caminho de `OrderedDataStore`
+	"de graça", pelo MESMO achatamento de classe já documentado no cabeçalho deste arquivo (`STORE
+	ÚNICO, MÓDULO-LOCAL`): uma escrita ABORTADA (transform de `UpdateAsync` devolve `nil`,
+	`IncrementAsync` sobre valor não-numérico ou resultado não-inteiro em `OrderedDataStore`,
+	`RemoveAsync` sobre chave já ausente/tombstoned) nunca chama `writeVersion`, então nunca marca
+	suja -- exatamente "mutação BEM-SUCEDIDA", não qualquer tentativa. Testes de confirmação (não
+	de implementação nova) em `GlobalDataStore.spec.luau`, seção "task-services-031".
 ]]
 
 local Runtime = require("../../runtime")

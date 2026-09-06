@@ -2520,7 +2520,7 @@
       "id": "task-services-031",
       "title": "Fiacao da persistencia em services: CloudPersistence, Context, marca-suja, load no Bootstrap",
       "description": "Amarra o que task-services-029 e task-services-030 construiram. (a) src/services/Types.luau: export type CloudPersistence = {Load: (document: string) -> string?, Save: (document: string, contents: string) -> ()} e o campo BootstrapOptions.CloudPersistence: CloudPersistence? (nil == sem persistencia nenhuma, que e o comportamento de hoje e o que --no-persist produz). (b) src/services/Context.luau: Context.GetCloudPersistence(): CloudPersistence? -- canal unico, nenhum behavior/*.luau le BootstrapOptions direto (mesma disciplina de IsHttpAllowed/NotifyHttpRequest). Diferente de GetScheduler/GetDataModel, a AUSENCIA do port e estado normal e frequente, nao erro de engenharia -- devolve nil, nunca erra (mesma logica de NotifyHttpRequest). (c) src/services/behavior/GlobalDataStore.luau: toda mutacao bem-sucedida marca o store como sujo (O(1), sincrono, nenhum I/O) -- cobre SetAsync/UpdateAsync/RemoveAsync/IncrementAsync e o caminho de OrderedDataStore, ja que os metodos sao achatados pela cadeia de classes. (d) src/services/init.luau: Services.Bootstrap, se CloudPersistence ~= nil, chama Load('datastore'), decodifica via Snapshot e faz store:Import -- ANTES de qualquer script rodar; falha de decode PROPAGA (cli transforma em erro de projeto exit 2), nunca 'recomeca do zero em silencio'. (e) src/services/init.luau: Services.FlushCloudState(): (boolean, string?) -- grava se houver algo sujo, no-op silencioso se nao houver ou se nenhum port foi injetado, e NUNCA propaga erro de I/O (erro vira false + mensagem, para cli decidir o que imprimir; perder persistencia nao deve derrubar a execucao do script). Services.HasPendingCloudState(): boolean para o sumario. services continua SEM @lune/fs -- so @lune/serde, que ja usa. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secao 10.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 52,
@@ -2536,7 +2536,8 @@
         "task-services-030"
       ],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO COM RESSALVAS, depois fix aplicado e reverificado. Revisor rodou 30/30 specs de services (nao 29 como o coder alegou -- correcao de contagem). Script proprio confirmou os 5 cenarios nao cobertos pelos specs do coder: Save que erra vira (false,mensagem) sem propagar, Load que erra propaga, Load com JSON invalido propaga, GetCloudPersistence nunca erra mesmo antes de Bootstrap. git diff confirmou GlobalDataStore.luau so ganhou comentarios (17 insercoes, 0 remocoes). Marca-suja confirmada cobrindo OrderedDataStore de graca e nao marcando em escrita abortada. Unico hit de @lune/fs e o meta-teste ja existente (le proprio codigo-fonte, nao I/O de producao). --strict, zero any real, territorio limpo. Decisao de Bootstrap sem guarda de carregar uma vez so avaliada aceitavel (cli chama Bootstrap uma unica vez, watch mode nao existe ainda). 1 achado MEDIO: 2 cenarios do proprio acceptance (Save/Load com erro) sem teste automatizado, embora comportamento ja correto -- corrigido com 3 testes novos em init.spec.luau, reverificado por mim (29/29 init, 4/4 Context). Relatorio: .claude/agents-memory/revisor-services-task-services-031-2026-09-06.md"
     },
     {
       "id": "task-cli-030",
@@ -2584,7 +2585,7 @@
       "id": "task-cli-032",
       "title": "BUG: erro dentro de callback de BindToClose e engolido silenciosamente do output",
       "description": "Achado real confirmado (task-cli-031, coder + revisor independentemente). ScriptRunner/Sandbox.Run so escuta ThreadError das threads que ele mesmo cria (ownThreads) -- as threads de BindToClose nascem direto em DataModel.RunBindToCloseCallbacks via scheduler:Spawn, sem nenhum listener conectado em RunCommand.luau. Resultado real reproduzido: um error() dentro de game:BindToClose(fn) produz exit code 0, stdout/stderr vazios, sumario dizendo literalmente 0 error(s) apesar do erro real -- bug real de persistencia do usuario (ex: falha ao salvar sessao final do ProfileStore) vira sucesso aparente. Colide com regra 01 (erro nunca engolido sem logar) e regra 04 (erro formatado como Output do Studio). TERRITORIO: so src/cli/RunCommand.luau + spec (conectar o ThreadError das threads de BindToClose ao mesmo OutputFormatter/contagem de erro que ScriptRunner ja usa pras threads do script principal -- confira como esse listener ja funciona antes de duplicar logica).",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 51,
@@ -2595,6 +2596,27 @@
       ],
       "priority": "high",
       "acceptance": "Um error() dentro de game:BindToClose(fn) aparece no output formatado (mesmo padrao de erro de script principal), conta no sumario de erros, e o exit code reflete a falha (nao mais 0 error(s) falso). Callback que nao erra continua silencioso (sem linha extra). Erro em um callback continua nao impedindo os demais (regressao da semantica ja aprovada). Specs cobrindo. --strict sem any. Suite de cli sem regressao.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO COM RESSALVAS. Revisor confirmou 18/18 RunCommand.spec, 239/239 arquivos de cli. Erro em BindToClose confirmado aparecendo formatado, contando no sumario, exit code correto -- testado por processo real. Callback sem erro continua silencioso. Multiplos callbacks: um erra, outro continua, exit code reflete o primeiro. 2 achados nao bloqueantes: (1) MEDIO/ALTO -- a limitacao de contagem dupla documentada pelo coder foi CONFIRMADA REPRODUZIVEL na pratica pelo revisor (nao so teorica): script suspenso alem do --timeout, retomado durante a janela de RunBindToCloseCallbacks, tem o erro contado 2x (causa raiz: Sandbox.Run nunca desconecta seu proprio listener de ThreadError). Registrado como task-cli-033 pra investigar fix. (2) BAIXO/MEDIO -- parseBindToCloseThreadError e a 3a copia do mesmo regex de parsing de erro no projeto (Sandbox.splitErrorMessage, OutputFormatter.tryReattributeModuleError), aceitavel como debito tecnico dado o escopo da task, registrado tambem. Relatorio: .claude/agents-memory/revisor-cli-task-cli-032-2026-09-06.md"
+    },
+    {
+      "id": "task-cli-033",
+      "title": "BUG (edge case real, confirmado): erro pode ser contado 2x se timeout expira durante BindToClose",
+      "description": "Achado real confirmado por reproducao (revisor de task-cli-032): Sandbox.Run nunca desconecta seu proprio listener de scheduler.ThreadError apos scheduler:Run retornar. Se uma thread do script principal ficar suspensa alem do --timeout e for retomada (erra) DENTRO da janela de RunBindToCloseCallbacks (que agora tambem escuta o mesmo ThreadError, task-cli-032), o MESMO erro e capturado por AMBOS os listeners -- contado 2x no sumario/ErrorCount. Reproduzido com fixture externa (timeout curto + script principal em loop de task.wait + BindToClose que tambem cede). Cenario estreito (exige timeout+suspensao+erro coincidindo na mesma janela), mas real, nao hipotetico. TERRITORIO: provavelmente cruza runtime (Sandbox.Run desconectar seu listener ao sair, ou DataModel.RunBindToCloseCallbacks expor os thread handles que cria pra cli filtrar por identidade) + cli (RunCommand.luau consumir isso). Considerar arquiteto se a fronteira nao for obvia. Ver relatorio: .claude/agents-memory/revisor-cli-task-cli-032-2026-09-06.md.",
+      "column": "todo",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 51,
+      "tags": [
+        "runtime",
+        "cli",
+        "bug",
+        "correcao-de-revisao"
+      ],
+      "priority": "medium",
+      "acceptance": "Erro que ocorre uma unica vez e contado uma unica vez no sumario/ErrorCount, mesmo quando timeout expira e BindToClose roda na sequencia. Cenarios existentes (erro normal de script, erro em BindToClose isolado) continuam corretos -- regressao de task-cli-031/032. Specs cobrindo o cenario de sobreposicao. --strict sem any.",
       "depends": [],
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06"

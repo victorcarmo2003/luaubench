@@ -864,5 +864,342 @@ test(
 	end
 )
 
+--------------------------------------------------------------------------------------------------
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10): fiação de
+-- Types.CloudPersistence / Context.GetCloudPersistence / Services.Bootstrap (carga) /
+-- Services.FlushCloudState / Services.HasPendingCloudState. Port FAKE em memória, requerido
+-- diretamente (não "estilo diretório", é um arquivo comum) -- ZERO `@lune/fs` neste arquivo,
+-- confirmando que `services` continua sem essa dependência (`src/cli/CloudStore.luau`, território
+-- de outro agente, é quem de fato usa `@lune/fs`).
+--------------------------------------------------------------------------------------------------
+
+local GlobalDataStoreBehavior = require("./behavior/GlobalDataStore")
+
+-- Port FAKE que implementa `Types.CloudPersistence` em memória, com CONTADORES de chamada --
+-- necessário para o acceptance "FlushCloudState não serializa nada quando nada está sujo",
+-- confirmado contando chamadas a `Save`, sem precisar inspecionar `@lune/fs` real.
+local function newFakeCloudPersistence(): (
+	Types.CloudPersistence,
+	{ GetSaveCount: () -> number, GetLoadCount: () -> number }
+)
+	local documents: { [string]: string } = {}
+	local saveCount = 0
+	local loadCount = 0
+
+	local port: Types.CloudPersistence = {
+		Load = function(document: string): string?
+			loadCount += 1
+			return documents[document]
+		end,
+		Save = function(document: string, contents: string): ()
+			saveCount += 1
+			documents[document] = contents
+		end,
+	}
+
+	return port,
+		{
+			GetSaveCount = function(): number
+				return saveCount
+			end,
+			GetLoadCount = function(): number
+				return loadCount
+			end,
+		}
+end
+
+test("sem CloudPersistence (nil -- comportamento de '--no-persist'): FlushCloudState é no-op (false, sem mensagem), HasPendingCloudState não erra", function()
+	local scheduler = Runtime.Scheduler.new()
+	local game = Runtime.DataModel.new()
+	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+	local ok, saved, message = pcall(function()
+		return Services.FlushCloudState()
+	end)
+	assert(ok, `FlushCloudState não deveria erro sem CloudPersistence injetado, recebeu: {tostring(saved)}`)
+	assert(saved == false, "FlushCloudState sem port deveria devolver false")
+	assert(message == nil, "FlushCloudState sem port deveria devolver mensagem nil -- não é uma condição de erro")
+
+	local okPending, pending = pcall(function()
+		return Services.HasPendingCloudState()
+	end)
+	assert(okPending, `HasPendingCloudState não deveria erro, recebeu: {tostring(pending)}`)
+	assert(type(pending) == "boolean", "HasPendingCloudState deveria devolver um boolean")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- Achado MÉDIO de revisão (revisor-services-task-services-030-2026-09-06.md): dois cenários do
+-- próprio acceptance de task-services-031 sem teste automatizado, embora o comportamento já
+-- estivesse correto (confirmado pelo revisor com scripts próprios) -- (1) FlushCloudState com um
+-- Save que lança erro devolve (false, mensagem) SEM propagar a exceção; (2) Bootstrap com um Load
+-- que lança erro PROPAGA (nunca engole). Acrescenta também, como extra sugerido pelo achado, o caso
+-- irmão de Load devolver JSON inválido (erro vindo de Snapshot.DecodeDocument, não do próprio port)
+-- -- mesma disciplina de propagação, caminho de erro diferente dentro de loadCloudStateIfPresent.
+--------------------------------------------------------------------------------------------------
+
+test(
+	"Services.FlushCloudState() com port FAKE cujo Save lança erro: devolve (false, mensagem) SEM propagar exceção, e deixa a marca-suja INTACTA",
+	function()
+		local errorSavePort: Types.CloudPersistence = {
+			Load = function(_document: string): string?
+				return nil
+			end,
+			Save = function(_document: string, _contents: string): ()
+				error("simulated disk failure on save")
+			end,
+		}
+
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = scheduler, dataModel = game, CloudPersistence = errorSavePort })
+
+		-- Suja o Store de verdade via SetAsync, pela API pública de DataStoreService (mesmo padrão
+		-- do round trip abaixo) -- FlushCloudState só chama Save quando há mutação pendente.
+		local dataStoreService = (game:GetService("DataStoreService") :: unknown) :: Dynamic
+		local getDataStore = dataStoreService.GetDataStore :: (self: Dynamic, name: string, scope: string?, options: unknown?) -> Dynamic
+		local store = getDataStore(dataStoreService, "FlushSaveErrorTest", nil, nil)
+		local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+
+		scheduler:Spawn(function()
+			setAsync(store, "K", { v = 1 }, nil, nil)
+		end)
+		scheduler:StepOnce(0)
+
+		assert(GlobalDataStoreBehavior.Store:IsDirty(), "o Store deveria estar sujo depois de um SetAsync bem-sucedido -- pré-condição deste teste")
+
+		local ok, saved, message = pcall(function()
+			return Services.FlushCloudState()
+		end)
+		assert(
+			ok,
+			`FlushCloudState NÃO deveria propagar a exceção de Save -- deveria capturá-la sob pcall e devolver (false, mensagem); a chamada propagou: {tostring(saved)}`
+		)
+		assert(saved == false, "FlushCloudState com Save que lança erro deveria devolver false")
+		assert(message ~= nil, `FlushCloudState com Save que lança erro deveria devolver uma mensagem não-nil, recebeu: {tostring(message)}`)
+		assert(
+			string.find(tostring(message), "simulated disk failure on save", 1, true) ~= nil,
+			`mensagem deveria conter o texto do erro lançado por Save, recebeu: {tostring(message)}`
+		)
+
+		assert(
+			GlobalDataStoreBehavior.Store:IsDirty(),
+			"uma gravação que falhou deveria deixar a marca-suja INTACTA -- o próximo flush precisa tentar de novo com o mesmo dado pendente, nunca perder a mutação silenciosamente"
+		)
+	end
+)
+
+test(
+	"Services.Bootstrap com port FAKE cujo Load lança erro: PROPAGA a exceção (nunca engole -- perder estado do usuário em silêncio é proibido pela regra 00)",
+	function()
+		local errorLoadPort: Types.CloudPersistence = {
+			Load = function(_document: string): string?
+				error("simulated disk read failure on load")
+			end,
+			Save = function(_document: string, _contents: string): () end,
+		}
+
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+
+		local ok, err = pcall(function()
+			Services.Bootstrap({ scheduler = scheduler, dataModel = game, CloudPersistence = errorLoadPort })
+		end)
+		assert(not ok, "Services.Bootstrap deveria propagar o erro lançado por Load, nunca engolir sob um pcall silencioso")
+		assert(
+			string.find(tostring(err), "simulated disk read failure on load", 1, true) ~= nil,
+			`a exceção propagada deveria conter a mensagem original de Load, recebeu: {tostring(err)}`
+		)
+	end
+)
+
+test(
+	"Services.Bootstrap com port FAKE cujo Load devolve JSON inválido: PROPAGA o erro de Snapshot.DecodeDocument (mesma disciplina do caso acima, caminho de erro diferente)",
+	function()
+		local invalidJsonPort: Types.CloudPersistence = {
+			Load = function(_document: string): string?
+				return "isto nao e JSON valido {{{"
+			end,
+			Save = function(_document: string, _contents: string): () end,
+		}
+
+		local scheduler = Runtime.Scheduler.new()
+		local game = Runtime.DataModel.new()
+
+		local ok, err = pcall(function()
+			Services.Bootstrap({ scheduler = scheduler, dataModel = game, CloudPersistence = invalidJsonPort })
+		end)
+		assert(not ok, "Services.Bootstrap deveria propagar o erro de JSON malformado devolvido por Load, nunca recomeçar do zero em silêncio")
+		assert(
+			string.find(tostring(err), "Snapshot.DecodeDocument", 1, true) ~= nil,
+			`a exceção propagada deveria vir de Snapshot.DecodeDocument, recebeu: {tostring(err)}`
+		)
+	end
+)
+
+--[[
+	Round trip completo (acceptance explícito da task): SetAsync numa "sessão 1", FlushCloudState,
+	depois um "processo novo" (a MESMA técnica de `Services.Bootstrap` chamado de novo com o MESMO
+	port, sobre um Scheduler/DataModel FRESCOS) reidrata Version/CreatedTime/UpdatedTime/UserIds/
+	Metadata/Tombstone via GetAsync, e o histórico completo, na ordem certa, via ListVersionsAsync.
+
+	POR QUE "Store:Import({})" NO MEIO: o `Store` de `GlobalDataStore.luau` é MÓDULO-LOCAL, singleton
+	do PROCESSO (ver o cabeçalho daquele arquivo, "STORE ÚNICO, MÓDULO-LOCAL") -- não existe como
+	criar um `Services`/`Store` genuinamente novo dentro do MESMO processo Lune (não há
+	"reiniciar o processo" dentro de um `lune run` só). Sem limpar o `Store` em memória entre as duas
+	"sessões", a leitura da "sessão 2" enxergaria o dado que NUNCA saiu da memória (o mesmo `Store`
+	singleton, só um DataModel/DataStoreService novo por cima) -- e o teste provaria menos do que
+	promete (não provaria que o valor veio de fato de `fakePort`/Snapshot). `Store:Import({})` é
+	chamado DIRETAMENTE (não através de `Services.Bootstrap`) só para simular "a memória do processo
+	morreu" -- o código sob teste de verdade (a carga em si) é o SEGUNDO `Services.Bootstrap`, logo
+	abaixo, chamado com o MESMO `fakePort`.
+]]
+test(
+	"round trip completo: SetAsync/RemoveAsync -> FlushCloudState -> um 'processo novo' (Bootstrap de novo com o MESMO port fake, sobre Scheduler/DataModel frescos) restaura tudo via GetAsync/ListVersionsAsync",
+	function()
+		local fakePort, counters = newFakeCloudPersistence()
+
+		-- Sessão 1 -------------------------------------------------------------------------------
+		local schedulerA = Runtime.Scheduler.new()
+		local gameA = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = schedulerA, dataModel = gameA, CloudPersistence = fakePort })
+
+		local dataStoreServiceA = (gameA:GetService("DataStoreService") :: unknown) :: Dynamic
+		local getDataStoreA = dataStoreServiceA.GetDataStore :: (self: Dynamic, name: string, scope: string?, options: unknown?) -> Dynamic
+		local storeA = getDataStoreA(dataStoreServiceA, "CloudRoundTrip", nil, nil)
+		local setAsyncA = storeA.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+		local removeAsyncA = storeA.RemoveAsync :: (self: Dynamic, key: string) -> ...unknown
+
+		local function runAsyncA(body: () -> ()): ()
+			schedulerA:Spawn(body)
+			schedulerA:StepOnce(0)
+		end
+
+		local setOptions = (Services.new("DataStoreSetOptions", nil) :: unknown) :: Dynamic
+		local setMetadata = setOptions.SetMetadata :: (self: Dynamic, metadata: unknown) -> ()
+		setMetadata(setOptions, { origin = "task-services-031" })
+
+		-- "Player_1": duas escritas -- fica com um HISTÓRICO real (2 versões), nunca removido.
+		runAsyncA(function()
+			setAsyncA(storeA, "Player_1", { coins = 10 }, { 1 }, nil)
+		end)
+		runAsyncA(function()
+			setAsyncA(storeA, "Player_1", { coins = 25 }, { 1 }, setOptions)
+		end)
+
+		-- "Player_2": uma escrita, depois removido -- confirma que o TOMBSTONE sobrevive ao reload
+		-- (GetAsync continua nil, e o histórico registra a versão removida com IsDeleted == true).
+		runAsyncA(function()
+			setAsyncA(storeA, "Player_2", { coins = 5 }, nil, nil)
+		end)
+		runAsyncA(function()
+			removeAsyncA(storeA, "Player_2")
+		end)
+
+		assert(GlobalDataStoreBehavior.Store:IsDirty(), "o Store deveria estar sujo depois de escritas bem-sucedidas")
+		assert(counters.GetSaveCount() == 0, "nenhuma gravação deveria ter acontecido ainda -- só FlushCloudState grava")
+
+		local flushedOk, flushedError = Services.FlushCloudState()
+		assert(flushedOk == true, `FlushCloudState deveria devolver true (havia mutação pendente), recebeu erro: {tostring(flushedError)}`)
+		assert(counters.GetSaveCount() == 1, "FlushCloudState deveria ter chamado Save exatamente uma vez")
+		assert(not GlobalDataStoreBehavior.Store:IsDirty(), "depois de um flush bem-sucedido o Store não deveria mais estar sujo")
+
+		local secondFlushedOk = Services.FlushCloudState()
+		assert(secondFlushedOk == false, "FlushCloudState sem NADA sujo deveria ser no-op (false)")
+		assert(counters.GetSaveCount() == 1, "FlushCloudState no-op NÃO deveria ter chamado Save de novo -- 'não serializa nada quando nada está sujo'")
+
+		-- Simula o FIM do processo (ver o comentário acima do teste) -- limpa TODO o Store em
+		-- memória, forçando a 'sessão 2' a provar que os valores abaixo vêm de fato de
+		-- `fakePort`/Snapshot, nunca de memória sobrevivente.
+		GlobalDataStoreBehavior.Store:Import({})
+		assert(not GlobalDataStoreBehavior.Store:IsDirty(), "Import deveria zerar a marca-suja")
+
+		-- Sessão 2 ("processo novo") ---------------------------------------------------------------
+		local schedulerB = Runtime.Scheduler.new()
+		local gameB = Runtime.DataModel.new()
+		Services.Bootstrap({ scheduler = schedulerB, dataModel = gameB, CloudPersistence = fakePort })
+		assert(counters.GetLoadCount() >= 1, "Services.Bootstrap com CloudPersistence deveria ter chamado Load('datastore')")
+
+		local dataStoreServiceB = (gameB:GetService("DataStoreService") :: unknown) :: Dynamic
+		local getDataStoreB = dataStoreServiceB.GetDataStore :: (self: Dynamic, name: string, scope: string?, options: unknown?) -> Dynamic
+		local storeB = getDataStoreB(dataStoreServiceB, "CloudRoundTrip", nil, nil)
+		local getAsyncB = storeB.GetAsync :: (self: Dynamic, key: string, options: unknown?) -> ...unknown
+		local listVersionsB = storeB.ListVersionsAsync :: (self: Dynamic, key: string) -> Dynamic
+
+		local function runAsyncB(body: () -> ()): ()
+			schedulerB:Spawn(body)
+			schedulerB:StepOnce(0)
+		end
+
+		-- "Player_1": Version/CreatedTime/UpdatedTime/UserIds/Metadata intactos, na versão CORRENTE.
+		local restoredValue: unknown, restoredKeyInfo: unknown
+		runAsyncB(function()
+			restoredValue, restoredKeyInfo = getAsyncB(storeB, "Player_1", nil)
+		end)
+
+		local restoredValueTable = restoredValue :: { [string]: unknown }
+		assert(
+			restoredValueTable ~= nil and restoredValueTable.coins == 25,
+			`GetAsync depois do reload deveria devolver o valor da última escrita da sessão 1 (coins=25), recebeu: {tostring(restoredValue)}`
+		)
+
+		local restoredKeyInfoDynamic = restoredKeyInfo :: Dynamic
+		assert(restoredKeyInfoDynamic ~= nil, "keyInfo restaurado (Player_1) não deveria ser nil -- a chave não foi removida")
+
+		local createdTime = restoredKeyInfoDynamic.CreatedTime :: number
+		local updatedTime = restoredKeyInfoDynamic.UpdatedTime :: number
+		local version = restoredKeyInfoDynamic.Version :: string
+		assert(type(createdTime) == "number" and createdTime > 0, `CreatedTime restaurado deveria ser um número > 0, recebeu: {tostring(createdTime)}`)
+		assert(type(updatedTime) == "number" and updatedTime > 0, `UpdatedTime restaurado deveria ser um número > 0, recebeu: {tostring(updatedTime)}`)
+		assert(type(version) == "string" and #version > 0, `Version restaurada deveria ser uma string não-vazia, recebeu: {tostring(version)}`)
+
+		local getUserIds = restoredKeyInfoDynamic.GetUserIds :: (self: Dynamic) -> { number }
+		local userIds = getUserIds(restoredKeyInfoDynamic)
+		assert(#userIds == 1 and userIds[1] == 1, `UserIds deveria ter sido restaurado (esperava um array com 1), recebeu {#userIds} elemento(s)`)
+
+		local getMetadata = restoredKeyInfoDynamic.GetMetadata :: (self: Dynamic) -> { [string]: unknown }
+		local metadata = getMetadata(restoredKeyInfoDynamic)
+		assert(metadata.origin == "task-services-031", `Metadata deveria ter sido restaurada, recebeu: {tostring(metadata.origin)}`)
+
+		-- Histórico completo de "Player_1" -- as DUAS versões da sessão 1, ordem cronológica
+		-- crescente (mais antiga primeiro), nenhuma tombstoned.
+		local player1Pages: unknown
+		runAsyncB(function()
+			player1Pages = listVersionsB(storeB, "Player_1")
+		end)
+		local player1PagesDynamic = player1Pages :: Dynamic
+		local getCurrentPage1 = player1PagesDynamic.GetCurrentPage :: (self: Dynamic) -> { Dynamic }
+		local player1Versions = getCurrentPage1(player1PagesDynamic)
+
+		assert(#player1Versions == 2, `ListVersionsAsync('Player_1') deveria devolver as 2 versões da sessão 1, recebeu {#player1Versions}`)
+		assert(
+			(player1Versions[1].Version :: string) < (player1Versions[2].Version :: string),
+			"ListVersionsAsync deveria devolver o histórico em ordem cronológica crescente (mais antiga primeiro)"
+		)
+		assert(player1Versions[2].Version == version, "a última entrada do histórico deveria ser a MESMA versão corrente devolvida por GetAsync")
+		assert(player1Versions[1].IsDeleted == false and player1Versions[2].IsDeleted == false, "nenhuma versão de Player_1 deveria estar marcada como removida (IsDeleted)")
+
+		-- "Player_2": TOMBSTONE intacto -- GetAsync continua nil depois do reload (a remoção não foi
+		-- "resuscitada"), e o histórico mostra a versão removida com IsDeleted == true.
+		local afterReloadValue: unknown, afterReloadKeyInfo: unknown
+		runAsyncB(function()
+			afterReloadValue, afterReloadKeyInfo = getAsyncB(storeB, "Player_2", nil)
+		end)
+		assert(afterReloadValue == nil, "GetAsync('Player_2') depois do reload deveria continuar nil -- o Tombstone da sessão 1 precisa sobreviver ao reload")
+		assert(afterReloadKeyInfo == nil, "GetAsync('Player_2') depois do reload deveria continuar devolvendo keyInfo nil")
+
+		local player2Pages: unknown
+		runAsyncB(function()
+			player2Pages = listVersionsB(storeB, "Player_2")
+		end)
+		local player2PagesDynamic = player2Pages :: Dynamic
+		local getCurrentPage2 = player2PagesDynamic.GetCurrentPage :: (self: Dynamic) -> { Dynamic }
+		local player2Versions = getCurrentPage2(player2PagesDynamic)
+
+		assert(#player2Versions == 2, `ListVersionsAsync('Player_2') deveria devolver as 2 versões (escrita + remoção) da sessão 1, recebeu {#player2Versions}`)
+		assert(player2Versions[1].IsDeleted == false, "a 1a versão de Player_2 (a escrita original) não deveria estar marcada como removida")
+		assert(player2Versions[2].IsDeleted == true, "a 2a versão de Player_2 (o Tombstone de RemoveAsync) deveria estar marcada como removida (IsDeleted) -- prova que o Tombstone sobreviveu ao reload")
+	end
+)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

@@ -112,6 +112,36 @@ export type BootstrapOptions = {
 	-- os dois ÚNICOS parâmetros de propósito: a auditoria NUNCA recebe o corpo da mensagem (regra
 	-- 00/07, mesma disciplina de `OnHttpRequest` nunca logar corpo/headers).
 	OnMessagePublished: ((topic: string, byteSize: number) -> ())?,
+
+	-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10, "services expõe"):
+	-- porta de persistência do estado "cloud" simulado (hoje: `DataStoreService`). Implementada por
+	-- `cli` (`src/cli/CloudStore.luau`) -- `services` NUNCA chama `@lune/fs` (o caminho do arquivo
+	-- em disco é relativo ao `.project.json` resolvido, informação que só `cli` tem; ver a seção 2
+	-- do desenho para o raciocínio completo de por que `fs` mora em `cli`, não aqui).
+	-- `nil`/omitido == SEM persistência nenhuma -- comportamento de hoje, e o que `--no-persist`
+	-- produz. Lido só via `Context.GetCloudPersistence` (`./Context.luau`) -- nenhum
+	-- `behavior/*.luau` lê `BootstrapOptions` direto, mesma disciplina de `AllowHttp`/
+	-- `OnHttpRequest` acima.
+	CloudPersistence: CloudPersistence?,
+}
+
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10): contrato de injeção
+-- entre `cli` (implementa, via `src/cli/CloudStore.luau`) e `services` (consome, via
+-- `Context.GetCloudPersistence` e `src/services/init.luau`, `Services.Bootstrap`/
+-- `Services.FlushCloudState`). `document` é sempre um NOME LÓGICO opaco ("datastore" hoje,
+-- "memorystore" numa leva futura -- ver a seção 8 do desenho), NUNCA um caminho de arquivo --
+-- só `cli` (`CloudStore.luau`) decide como um nome vira caminho em disco.
+export type CloudPersistence = {
+	-- Devolve o documento serializado (string -- o formato exato é responsabilidade de
+	-- `src/services/datastore/Snapshot.luau`, nunca deste tipo), ou `nil` se o documento nunca
+	-- existiu. ERRA (nunca devolve `nil` silenciosamente) se o documento existe mas está ilegível
+	-- -- perder o estado do usuário em silêncio é proibido (regra 00, invariante 2).
+	Load: (document: string) -> string?,
+
+	-- Grava atomicamente. Pode errar (disco cheio, permissão negada, etc.) -- quem chama trata: em
+	-- `Services.FlushCloudState` (`./init.luau`), um erro aqui vira `(false, mensagem)`, nunca uma
+	-- exceção propagada (perder persistência não deve derrubar a execução do script do usuário).
+	Save: (document: string, contents: string) -> (),
 }
 
 -- Módulo folha: nada para exportar em valor, só os tipos acima. Todo ModuleScript do Lune

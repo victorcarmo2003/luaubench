@@ -22,6 +22,7 @@
 local process = require("@lune/process")
 local Runtime = require("../../runtime")
 local Services = require("../")
+local GlobalDataStoreBehavior = require("./GlobalDataStore")
 
 type Dynamic = { [string]: unknown }
 
@@ -464,6 +465,130 @@ test("engenharia interna: um GlobalDataStore construído FORA de DataStoreServic
 	assert(
 		string.find(tostring(err), "_LuauBenchStoreId", 1, true) ~= nil,
 		`mensagem de engenharia interna deveria citar a chave ausente, recebeu: {err}`
+	)
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 5, "marca-suja"): testes de
+-- CONFIRMAÇÃO (não de implementação nova, ver o cabeçalho deste arquivo, "task-services-031") de
+-- que toda mutação BEM-SUCEDIDA de SetAsync/UpdateAsync/RemoveAsync/IncrementAsync -- incluindo o
+-- caminho de OrderedDataStore, achatado pela mesma cadeia de classes -- marca `store:IsDirty()`, e
+-- que uma tentativa que NÃO cria versão nova (transform que aborta, RemoveAsync no-op) não marca.
+--
+-- `store:ClearDirty()` explícito no INÍCIO de cada teste abaixo (não no fim): `IsDirty` é uma
+-- marca ÚNICA para o `Store` inteiro (não por chave/DataStore, ver `../datastore/Store.luau`) --
+-- compartilhada com TODOS os testes acima deste ponto no arquivo, que já a deixaram `true`. Limpar
+-- no início, e não confiar no estado deixado por um teste anterior, isola cada teste sem depender
+-- da ordem em que os testes deste arquivo rodam.
+--------------------------------------------------------------------------------------------------
+
+test("SetAsync bem-sucedido marca o Store como sujo (IsDirty)", function()
+	local store = getDataStore(dataStoreService, "SpecDirty1", nil, nil)
+	local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "guarda: o Store deveria começar limpo logo depois de ClearDirty()")
+
+	runAsync(function()
+		setAsync(store, "K1", 1, nil, nil)
+	end)
+
+	assert(GlobalDataStoreBehavior.Store:IsDirty(), "SetAsync bem-sucedido deveria marcar o Store como sujo")
+end)
+
+test("UpdateAsync bem-sucedido marca sujo; UpdateAsync ABORTADO (transform devolve nil) NÃO marca", function()
+	local store = getDataStore(dataStoreService, "SpecDirty2", nil, nil)
+	local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+	local updateAsync = store.UpdateAsync :: (self: Dynamic, key: string, transform: (unknown, unknown) -> ...unknown) -> ...unknown
+
+	runAsync(function()
+		setAsync(store, "K1", { count = 1 }, nil, nil)
+	end)
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "guarda: o Store deveria começar limpo logo depois de ClearDirty()")
+
+	runAsync(function()
+		updateAsync(store, "K1", function(_oldValue: unknown, _oldKeyInfo: unknown)
+			return nil -- aborta -- NÃO deveria marcar sujo
+		end)
+	end)
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "UpdateAsync ABORTADO (transform devolveu nil) NÃO deveria marcar o Store como sujo")
+
+	runAsync(function()
+		updateAsync(store, "K1", function(oldValue: unknown, _oldKeyInfo: unknown): { [string]: unknown }
+			local old = oldValue :: { [string]: unknown }
+			return { count = (old.count :: number) + 1 }
+		end)
+	end)
+	assert(GlobalDataStoreBehavior.Store:IsDirty(), "UpdateAsync bem-sucedido (transform devolveu um valor novo) deveria marcar o Store como sujo")
+end)
+
+test("RemoveAsync de uma chave existente marca sujo; RemoveAsync sobre chave já ausente (no-op) NÃO marca", function()
+	local store = getDataStore(dataStoreService, "SpecDirty3", nil, nil)
+	local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+	local removeAsync = store.RemoveAsync :: (self: Dynamic, key: string) -> ...unknown
+
+	runAsync(function()
+		setAsync(store, "K1", { count = 1 }, nil, nil)
+	end)
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "guarda: o Store deveria começar limpo logo depois de ClearDirty()")
+
+	runAsync(function()
+		removeAsync(store, "K1")
+	end)
+	assert(GlobalDataStoreBehavior.Store:IsDirty(), "RemoveAsync de uma chave existente (cria tombstone) deveria marcar o Store como sujo")
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	runAsync(function()
+		removeAsync(store, "K1") -- já tombstoned -- no-op idempotente
+	end)
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "RemoveAsync sobre chave já removida (no-op idempotente) NÃO deveria marcar o Store como sujo")
+end)
+
+test("IncrementAsync bem-sucedido marca sujo; IncrementAsync que ERRA (valor corrente não é número) NÃO marca", function()
+	local store = getDataStore(dataStoreService, "SpecDirty4", nil, nil)
+	local setAsync = store.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+	local incrementAsync = store.IncrementAsync :: (self: Dynamic, key: string, delta: number?, userIds: unknown?, options: unknown?) -> ...unknown
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "guarda: o Store deveria começar limpo logo depois de ClearDirty()")
+
+	runAsync(function()
+		incrementAsync(store, "Counter", 5, nil, nil)
+	end)
+	assert(GlobalDataStoreBehavior.Store:IsDirty(), "IncrementAsync bem-sucedido deveria marcar o Store como sujo")
+
+	runAsync(function()
+		setAsync(store, "NotANumber", "hello", nil, nil)
+	end)
+	GlobalDataStoreBehavior.Store:ClearDirty()
+
+	runAsync(function()
+		pcall(function()
+			return incrementAsync(store, "NotANumber", 1, nil, nil)
+		end)
+	end)
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "IncrementAsync que ERRA (valor corrente não é número, escrita abortada) NÃO deveria marcar o Store como sujo")
+end)
+
+test("SetAsync sobre um OrderedDataStore (herda Methods de GlobalDataStore via achatamento de classe) TAMBÉM marca o Store como sujo", function()
+	local getOrderedDataStore = dataStoreService.GetOrderedDataStore :: (self: Dynamic, name: string, scope: string?) -> Dynamic
+	local orderedStore = getOrderedDataStore(dataStoreService, "SpecDirty5", nil)
+	local setAsync = orderedStore.SetAsync :: (self: Dynamic, key: string, value: unknown, userIds: unknown?, options: unknown?) -> string
+
+	GlobalDataStoreBehavior.Store:ClearDirty()
+	assert(not GlobalDataStoreBehavior.Store:IsDirty(), "guarda: o Store deveria começar limpo logo depois de ClearDirty()")
+
+	runAsync(function()
+		setAsync(orderedStore, "K1", 42, nil, nil) -- inteiro -- válido para OrderedDataStore
+	end)
+
+	assert(
+		GlobalDataStoreBehavior.Store:IsDirty(),
+		"SetAsync bem-sucedido sobre um OrderedDataStore deveria marcar o MESMO Store singleton como sujo -- confirma que a marca-suja de Store.luau cobre o caminho de OrderedDataStore sem precisar de código próprio aqui"
 	)
 end)
 

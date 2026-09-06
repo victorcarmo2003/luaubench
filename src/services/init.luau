@@ -161,7 +161,9 @@
 	`IsServiceClass`/`GetSimulatedServiceClasses` -- task-services-009, leitura pura do manifesto,
 	seguras de chamar ANTES de `Bootstrap`; `IsEngineFixedChild` -- task-services-010, mesma
 	garantia, leitura pura de `EngineFixedChildren.luau`; `IsEngineOnlyClass` -- task-services-014,
-	mesma garantia, leitura pura do manifesto + `RUNTIME_OWNED_CLASSES` -- ver comentário de cada uma
+	mesma garantia, leitura pura do manifesto + `RUNTIME_OWNED_CLASSES`; `FlushCloudState`/
+	`HasPendingCloudState` -- task-services-031, persistência local do estado "cloud" (só fazem
+	sentido DEPOIS de `Bootstrap`, ver comentário de cada uma abaixo) -- ver comentário de cada uma
 	abaixo).
 	`EngineFixedChildren.Of` fica INTERNO: não é reexportado por este arquivo -- `cli` não tem uso
 	legítimo para a lista completa de filhos fixos, só para o predicado. Nenhuma função NOVA
@@ -178,6 +180,23 @@ local BehaviorIndex = require("./services/behavior/Index")
 local Manifest = require("./services/generated/Manifest")
 local EngineFixedChildren = require("./services/EngineFixedChildren")
 local Runtime = require("./runtime")
+
+-- task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10): fiação da persistência
+-- local do estado "cloud" (hoje: DataStoreService). `Snapshot` é o formato de documento em disco
+-- (`./services/datastore/Snapshot.luau`, já aprovado -- task-services-029); `GlobalDataStoreBehavior`
+-- dá acesso ao `Store` MÓDULO-LOCAL singleton onde `SetAsync`/etc de fato guardam dado (mesmo
+-- `require` direto, sem passar por `behavior/Index.luau`, que `./services/behavior/DataStore.luau`
+-- já usa para o mesmo fim -- ver o comentário de lá). `DateTime` é módulo padrão do Lune (nenhuma
+-- dependência nova, regra 00) -- `./services/datastore/Store.luau` já o usa pelo mesmo motivo.
+local Snapshot = require("./services/datastore/Snapshot")
+local Store = require("./services/datastore/Store")
+local GlobalDataStoreBehavior = require("./services/behavior/GlobalDataStore")
+local DateTime = require("@lune/datetime")
+
+-- Nome lógico do documento de DataStoreService -- ver `Types.CloudPersistence`, "document é sempre
+-- um NOME LÓGICO opaco". Só este arquivo conhece esse literal (não é um caminho -- só `cli`, via
+-- `CloudStore.luau`, decide como um nome vira caminho em disco).
+local DATASTORE_DOCUMENT_NAME = "datastore"
 
 export type BootstrapOptions = Types.BootstrapOptions
 
@@ -279,12 +298,121 @@ function Services.Register(): ()
 	end
 end
 
--- `Register()` + `Context.Set()`. É a única coisa que `cli` precisa chamar antes de qualquer
--- `GetService` (arquiteto-services-2026-09-05.md, "Contrato entre territórios" ->
--- "Quem chama primeiro").
+--[[
+	task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10, "Quem chama primeiro"):
+	SE `Context.GetCloudPersistence()` devolve um port (não-nil), carrega o documento "datastore" e
+	restaura o `Store` MÓDULO-LOCAL de `GlobalDataStore.luau` ANTES de qualquer script do usuário
+	rodar -- chamado de dentro de `Services.Bootstrap`, logo depois de `Context.Set` (que é quem
+	torna o port alcançável por `Context.GetCloudPersistence`).
+
+	SEM guarda de "só uma vez por processo" (diferente de `Services.Register`, que TEM essa guarda):
+	toda chamada a `Services.Bootstrap` com um port presente executa este passo de novo. Em uso real
+	(`cli` chama `Bootstrap` uma única vez por processo, ver `Context.luau`, cabeçalho) isso não
+	muda nada na prática -- e é o que permite um teste simular "processo novo, mesmo projeto" dentro
+	do MESMO processo Lune (o `Store` é module-local, singleton do PROCESSO -- não há como criar um
+	`Services`/`Store` genuinamente novo sem reiniciar o Lune; chamar `Bootstrap` de novo com o
+	MESMO port, depois de limpar o `Store` em memória, é a forma honesta de exercitar este código de
+	carga sem inventar um mecanismo de reset só para teste -- ver `init.spec.luau`, "task-services-031").
+
+	`raw == nil` (documento nunca existiu -- primeira execução deste projeto): NENHUMA ação, o
+	`Store` continua como já estava (vazio, se for de fato a primeira chamada de `Bootstrap` deste
+	processo). Falha de `Load` (arquivo existe mas está ilegível) OU de `Snapshot.DecodeDocument`
+	(JSON malformado, `SchemaVersion` desconhecido) PROPAGA sem `pcall` -- acceptance explícito da
+	tarefa: "Load que erra no Bootstrap PROPAGA" (`cli` transforma isso num erro de projeto, exit 2
+	-- nunca "recomeça do zero em silêncio", que apagaria estado real do usuário).
+]]
+local function loadCloudStateIfPresent(): ()
+	local cloudPersistence = Context.GetCloudPersistence()
+	if cloudPersistence == nil then
+		return
+	end
+
+	local raw = cloudPersistence.Load(DATASTORE_DOCUMENT_NAME)
+	if raw == nil then
+		return
+	end
+
+	local document = Snapshot.DecodeDocument(raw)
+	-- CAST DE FRONTEIRA -- `Document.Stores` é opaco para `Snapshot.luau` (`{ [string]: unknown }`,
+	-- ver o cabeçalho daquele módulo); `Store.Import` VALIDA a forma de verdade em runtime antes de
+	-- aplicar qualquer mudança (tudo-ou-nada, erro claro se malformado) -- mesma disciplina de
+	-- outros casts de fronteira do território (ex.: `Snapshot.DecodeFromJson`).
+	GlobalDataStoreBehavior.Store:Import(document.Stores :: Store.Snapshot)
+end
+
+-- `Register()` + `Context.Set()` + carga do estado "cloud" (se um port foi injetado). É a única
+-- coisa que `cli` precisa chamar antes de qualquer `GetService` (arquiteto-services-2026-09-05.md,
+-- "Contrato entre territórios" -> "Quem chama primeiro"; task-services-031 acrescenta o passo de
+-- carga, ver `loadCloudStateIfPresent` acima).
 function Services.Bootstrap(options: BootstrapOptions): ()
 	Services.Register()
 	Context.Set(options)
+	loadCloudStateIfPresent()
+end
+
+-- Corta a stack trace multi-linha que um erro nativo do Lune produz (mesma disciplina já usada em
+-- `./services/datastore/Snapshot.luau`/`../cli/CloudStore.luau` para o mesmo tipo de erro) --
+-- usado só por `Services.FlushCloudState`, abaixo, para nunca deixar um erro de I/O do port vazar
+-- um `stack traceback:` cru de várias linhas na mensagem que devolve para `cli`.
+local function firstLineOf(err: unknown): string
+	local text = tostring(err)
+	return string.match(text, "^[^\n]*") or text
+end
+
+--[[
+	task-services-031 (arquiteto-persistencia-cloud-2026-09-06.md, seção 10, "services expõe"):
+	grava o estado "cloud" (hoje: só DataStoreService) se houver mutação pendente. `cli` chama isto
+	na fronteira de tique do scheduler e nos flushes forçados (fim de `scheduler:Run`, flush final).
+
+	NO-OP SILENCIOSO, devolvendo `(false, nil)`, em DOIS casos -- nenhum dos dois é uma condição de
+	erro: (1) nenhum port foi injetado (`Context.GetCloudPersistence() == nil` -- `--no-persist`, ou
+	`Bootstrap` nunca chamado); (2) há um port, mas nada mudou desde o último flush
+	(`Store.IsDirty() == false`) -- neste caso NADA é serializado (nem `Store.Export`, nem
+	`Snapshot.EncodeDocument` rodam) -- acceptance explícito: "FlushCloudState não serializa nada
+	quando nada está sujo".
+
+	Devolve `(true, nil)` se gravou com sucesso -- e só ENTÃO chama `Store.ClearDirty()` (uma
+	gravação que falhou deixa a marca-suja INTACTA, para que o próximo flush tente de novo com o
+	mesmo dado pendente, em vez de perder a mutação silenciosamente).
+
+	NUNCA propaga uma exceção de I/O do port: `cloudPersistence.Save` sob `pcall`, erro vira
+	`(false, mensagem)` -- acceptance explícito: "Save que erra vira (false, mensagem), nunca
+	exceção propagada" (perder persistência não deve derrubar a execução do script do usuário --
+	regra 01, "erro ... nunca derruba o processo").
+]]
+function Services.FlushCloudState(): (boolean, string?)
+	local cloudPersistence = Context.GetCloudPersistence()
+	if cloudPersistence == nil then
+		return false, nil
+	end
+
+	local store = GlobalDataStoreBehavior.Store
+	if not store:IsDirty() then
+		return false, nil
+	end
+
+	local snapshot = store:Export()
+	local document = Snapshot.EncodeDocument(snapshot, DateTime.now().unixTimestampMillis)
+
+	local ok, err = pcall(function()
+		cloudPersistence.Save(DATASTORE_DOCUMENT_NAME, document)
+	end)
+	if not ok then
+		return false, firstLineOf(err)
+	end
+
+	store:ClearDirty()
+	return true, nil
+end
+
+-- task-services-031: "estado corrente (para o sumário final: 'cloud state saved to
+-- .luaubench/cloud')" -- literal do contrato do arquiteto (seção 10). Reflete `Store.IsDirty()`
+-- diretamente, SEM considerar se um `CloudPersistence` foi injetado: esta função só responde "há
+-- mutação NÃO PERSISTIDA NESTE `Store`", nunca "vale a pena chamar `FlushCloudState`" (que já é o
+-- trabalho do PRÓPRIO `FlushCloudState`, incluindo a checagem de porta ausente) -- é `cli`, que
+-- sabe se passou um port a `Bootstrap`, quem decide o que essa informação significa no sumário.
+function Services.HasPendingCloudState(): boolean
+	return GlobalDataStoreBehavior.Store:IsDirty()
 end
 
 -- "Está no dump?" -- as 916 classes de `generated/Manifest.luau` (task-services-005), não só o
