@@ -75,7 +75,14 @@ local Messages = require("./Messages")
 local ProjectFile = require("./ProjectFile")
 local SyncRules = require("./SyncRules")
 
-export type PlanPropertyValue = boolean | number | string
+-- task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7): deixa de
+-- ser só primitivo -- agora aceita a FORMA BRUTA do `$properties` do Rojo (o mesmo universo de
+-- `JsonValue.JsonValue`). `TreePlanner` roda ANTES de qualquer Instance existir -- não há schema
+-- nem `ValueType` conhecível aqui (só `TreeMaterializer` tem, depois que a Instance real existe,
+-- ver o cabeçalho deste arquivo, "SEQUENCIAMENTO") -- então decidir COMO decodificar um
+-- array/objeto deixou de ser responsabilidade deste módulo. `TreePlanner` só copia o valor bruto
+-- pro plano; `TreeMaterializer.applyProperties` é quem decide (`ValueTypes.Decode.FromRojoJson`).
+export type PlanPropertyValue = JsonValue.JsonValue
 
 export type PlanNode = {
 	Name: string,
@@ -372,23 +379,6 @@ local function firstLineOf(value: unknown): string
 	return string.sub(text, 1, newlineIndex - 1)
 end
 
--- Duplicata minúscula do `describeKind` privado de `JsonValue.luau` -- só pra rotular um
--- `$properties`/meta-`properties` não-primitivo na mensagem de warning ("array"/"object" em vez
--- de só "table"). `value` aqui NUNCA é `nil` (chamador só invoca depois de já ter descartado
--- boolean/number/string -- e uma entrada de mapa JSON com valor `null` não aparece como chave,
--- ver `JsonValue.luau`, "Ambiguidade de JSON->Lua HONESTAMENTE DECLARADA").
-local function describeNonPrimitiveKind(value: JsonValue.JsonValue): string
-	if typeof(value) == "table" then
-		local asGeneric = (value :: unknown) :: { [unknown]: unknown }
-		local firstKey = next(asGeneric)
-		if firstKey ~= nil and typeof(firstKey) == "number" then
-			return "array"
-		end
-		return "object"
-	end
-	return typeof(value)
-end
-
 --------------------------------------------------------------------------------------------------
 -- Classificação de UM caminho absoluto (arquivo ou pasta) já confirmado existente
 --------------------------------------------------------------------------------------------------
@@ -585,32 +575,18 @@ local function readMetaFile(absoluteMetaPath: string, nodePath: string, bag: Dia
 end
 
 --------------------------------------------------------------------------------------------------
--- $properties / $attributes (Decisão 7): primitivo entra no plano; não-primitivo é warning e
--- pula (nunca grava a tabela crua -- mentiria, o LuauBench não tem tipos de valor ainda);
--- $attributes NUNCA é aplicado, sempre warning listando o que ficou de fora.
+-- $properties / $attributes (Decisão 7, revisada por task-cli-025 -- Decisão 5/seção 7 do desenho
+-- de valuetypes): TODO valor de `$properties` -- primitivo OU array/objeto -- entra no plano
+-- intacto agora. Decidir se um array/objeto é decodificável (e em qual value type) deixou de ser
+-- responsabilidade deste módulo: só `TreeMaterializer.applyProperties` conhece o `MemberDescriptor`
+-- da classe REAL (ver cabeçalho do arquivo, "SEQUENCIAMENTO") -- `plan/non-primitive-property` foi
+-- REMOVIDO, nunca mais emitido por `TreePlanner`. `$attributes` continua NUNCA aplicado, sempre
+-- warning listando o que ficou de fora -- `Instance:SetAttribute` segue fora do escopo.
 --------------------------------------------------------------------------------------------------
 
-local function applyProperties(
-	destination: { [string]: PlanPropertyValue },
-	merged: { [string]: JsonValue.JsonValue },
-	nodePath: string,
-	filePath: string,
-	bag: Diagnostics.Bag
-): ()
+local function applyProperties(destination: { [string]: PlanPropertyValue }, merged: { [string]: JsonValue.JsonValue }): ()
 	for key, value in merged do
-		local kind = typeof(value)
-		if kind == "boolean" or kind == "number" or kind == "string" then
-			destination[key] = value :: PlanPropertyValue
-		else
-			bag:Add({
-				Severity = "warning",
-				Code = "plan/non-primitive-property",
-				Message = Messages.PlanNonPrimitiveProperty(nodePath, key, describeNonPrimitiveKind(value)),
-				NodePath = nodePath,
-				Field = key,
-				FilePath = filePath,
-			})
-		end
+		destination[key] = value
 	end
 end
 
@@ -1022,7 +998,7 @@ resolveCore = function(
 		-- um default que o próprio pacote declarou na raiz.
 		local nestedProperties: { [string]: PlanPropertyValue } = copyPlanProperties(nestedRoot.Properties)
 		if jsonNode ~= nil then
-			applyProperties(nestedProperties, jsonNode.Properties, nodePath, currentProjectFilePath, bag)
+			applyProperties(nestedProperties, jsonNode.Properties)
 			warnAttributesIfAny(jsonNode.Attributes, nodePath, currentProjectFilePath, bag)
 		end
 
@@ -1191,7 +1167,7 @@ resolveCore = function(
 	end
 
 	local properties: { [string]: PlanPropertyValue } = {}
-	applyProperties(properties, mergedProperties, nodePath, currentProjectFilePath, bag)
+	applyProperties(properties, mergedProperties)
 
 	local mergedAttributes: { [string]: JsonValue.JsonValue } = {}
 	for key, value in metaAttributes do

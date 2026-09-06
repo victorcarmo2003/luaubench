@@ -315,10 +315,12 @@ test("Plan: Service sob a raiz com Name != ClassName produz erro dedicado", func
 end)
 
 --------------------------------------------------------------------------------------------------
--- $properties primitivo entra no plano; não-primitivo vira warning; $attributes sempre warning
+-- $properties primitivo E não-primitivo entram no plano intactos (task-cli-025 -- decodificar um
+-- array/objeto deixou de ser decisão de TreePlanner, ver TreePlanner.PlanPropertyValue);
+-- $attributes sempre warning
 --------------------------------------------------------------------------------------------------
 
-test("Plan: $properties primitivo entra no plano, não-primitivo vira warning, $attributes sempre warning", function()
+test("Plan: $properties primitivo e não-primitivo entram no plano intactos (task-cli-025); $attributes sempre warning", function()
 	local plan, bag = planFixture("properties-and-attributes")
 	assert(plan ~= nil, "warnings não deveriam impedir Plan de devolver um InstancePlan válido")
 	if plan == nil then
@@ -332,14 +334,19 @@ test("Plan: $properties primitivo entra no plano, não-primitivo vira warning, $
 	end
 
 	assert(replicatedStorage.Properties["Foo"] == true, "$properties.Foo (boolean) deveria entrar no plano")
-	assert(replicatedStorage.Properties["Position"] == nil, "$properties.Position (array -- Vector3 ambíguo) NUNCA deveria entrar no plano")
+
+	-- task-cli-025: o array bruto do JSON ATRAVESSA o plano intacto agora -- só TreeMaterializer
+	-- (que conhece o MemberDescriptor da classe REAL) decide se "Position" é um Vector3/Color3/
+	-- outra coisa, ou se não é decodificável. TreePlanner nunca mais filtra isto.
+	local positionRaw = replicatedStorage.Properties["Position"]
+	assert(typeof(positionRaw) == "table", "$properties.Position (array) deveria atravessar o plano como tabela bruta, nunca mais ser filtrado")
+	if typeof(positionRaw) == "table" then
+		local asArray = (positionRaw :: unknown) :: { unknown }
+		assert(asArray[1] == 1 and asArray[2] == 2 and asArray[3] == 3, "o array bruto deveria manter os valores originais do JSON, sem reinterpretação")
+	end
 
 	local nonPrimitiveDiagnostic = findByCode(bag, "plan/non-primitive-property")
-	assert(nonPrimitiveDiagnostic ~= nil, "deveria haver um Diagnostic 'plan/non-primitive-property'")
-	if nonPrimitiveDiagnostic ~= nil then
-		assert(nonPrimitiveDiagnostic.Severity == "warning", "propriedade não-primitiva deveria ser Severity 'warning', nunca erro")
-		assert(nonPrimitiveDiagnostic.Field == "Position", "Diagnostic deveria nomear a propriedade 'Position'")
-	end
+	assert(nonPrimitiveDiagnostic == nil, "TreePlanner NUNCA MAIS deveria emitir 'plan/non-primitive-property' -- a decisão migrou para TreeMaterializer (task-cli-025)")
 
 	local attributesDiagnostic = findByCode(bag, "plan/attributes-unsupported")
 	assert(attributesDiagnostic ~= nil, "deveria haver um Diagnostic 'plan/attributes-unsupported'")

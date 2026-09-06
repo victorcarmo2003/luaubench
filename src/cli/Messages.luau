@@ -267,10 +267,6 @@ function Messages.PlanServiceNameMismatch(nodePath: string, name: string, classN
 	return `"{nodePath}" resolves to the service class "{className}", but is named "{name}" -- LuauBench requires a service directly under the DataModel to be named exactly like its class (DataModel:GetService owns the singleton's name).`
 end
 
-function Messages.PlanNonPrimitiveProperty(nodePath: string, propertyName: string, foundKind: string): string
-	return `"$properties.{propertyName}" at "{nodePath}" is a {foundKind}, not a boolean/number/string -- LuauBench does not have value types yet (planned: value-types wave), so it was skipped.`
-end
-
 function Messages.PlanAttributesUnsupported(nodePath: string, attributeNames: { string }): string
 	return `"$attributes" at "{nodePath}" is not applied yet (Instance:SetAttribute is not simulated) -- ignored: {table.concat(attributeNames, ", ")}.`
 end
@@ -420,6 +416,46 @@ end
 -- esse prefixo cru -- regra 04, "nunca stack trace/detalhe de implementação vazando pro usuário".
 function Messages.MaterializePropertyAssignmentFailed(nodePath: string, propertyName: string, engineError: string): string
 	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {engineError}`
+end
+
+--------------------------------------------------------------------------------------------------
+-- Ponte com Value Types simulados (Vector3/CFrame/Color3/Enum/...) -- task-cli-025,
+-- arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7 ("$properties do Rojo:
+-- onde o ValueType entra"). Três diagnósticos novos para `TreeMaterializer.applyProperties`, que
+-- agora intercepta TODO `$properties` não-primitivo (array/objeto) ANTES de escrever -- nunca grava
+-- a tabela crua numa Instance real (ver o cabeçalho de `TreeMaterializer.luau`, "applyProperties").
+--------------------------------------------------------------------------------------------------
+
+-- `ValueTypes.Decode.FromRojoJson` devolveu `Ok = false` para um `ValueType` que ESTE LuauBench já
+-- simula -- a forma bruta do JSON não bate com o que o construtor real espera (tamanho de array
+-- errado, elemento não-numérico, nome de item de Enum inexistente, ...). `reason` é a frase pronta
+-- que `Decode.luau` já produz (nunca reformulada aqui -- Messages.luau não decide CONTEÚDO, só
+-- formata, ver cabeçalho do arquivo).
+function Messages.MaterializeUndecodableProperty(nodePath: string, propertyName: string, valueTypeName: string, reason: string): string
+	return `Could not decode "$properties.{propertyName}" at "{nodePath}" as "{valueTypeName}": {reason}`
+end
+
+-- O `MemberDescriptor` da propriedade aponta para um `ValueType`/`ValueCategory` que EXISTE no
+-- Roblox real mas que este LuauBench ainda não simula (leva 2 de valuetypes, ex.: NumberRange/
+-- TweenInfo/Rect) -- prefixo `[LuauBench]` OBRIGATÓRIO (regra 00/03): sem contraparte real (no
+-- Roblox isso funcionaria normalmente), é o LuauBench que está incompleto, nunca o Roblox. Mesma
+-- família de `Messages.UnsimulatedGlobal`/`MaterializeServiceNotSimulated`. A propriedade é
+-- PULADA (mantém o valor default do schema), nunca escrita crua -- ver cabeçalho de
+-- `TreeMaterializer.applyProperties`.
+function Messages.MaterializePropertyTypeNotSimulated(nodePath: string, propertyName: string, valueTypeName: string): string
+	return `[LuauBench] "$properties.{propertyName}" at "{nodePath}" resolves to the value type "{valueTypeName}", which is not simulated by LuauBench yet -- it was skipped.`
+end
+
+-- `$properties` não-primitivo (array/objeto) numa propriedade cujo `ValueType`/`ValueCategory` o
+-- LuauBench não conseguiu determinar -- OU a Instance não tem nenhum `ClassSchema` conhecido para
+-- esta chave (modo leniente, ex.: a raiz `game`/DataModel), OU (LIMITAÇÃO DECLARADA, ver relatório
+-- da tarefa/API faltante) a propriedade é herdada de uma superclasse e `Runtime.ClassRegistry.Get`
+-- só expõe publicamente o schema PRÓPRIO de uma classe, nunca o achatado (própria + herdado).
+-- Prefixo `[LuauBench]` OBRIGATÓRIO pela mesma razão de `MaterializePropertyTypeNotSimulated`
+-- acima: é uma lacuna do LuauBench, nunca do projeto do usuário. NUNCA escreve o array/objeto cru
+-- -- faria exatamente a corrupção silenciosa que a invariante 2 do projeto proíbe.
+function Messages.MaterializePropertyShapeUnknown(nodePath: string, propertyName: string): string
+	return `[LuauBench] "$properties.{propertyName}" at "{nodePath}" is an array or object, but LuauBench could not determine which value type to decode it into (no known Property schema entry with a value type was found for this class) -- it was skipped.`
 end
 
 --------------------------------------------------------------------------------------------------

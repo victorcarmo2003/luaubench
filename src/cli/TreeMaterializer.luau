@@ -69,6 +69,18 @@
 	mensagem do motor (via `pcall`), NUNCA derruba `Materialize` -- o resto da árvore continua
 	sendo materializado.
 
+	task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7):
+	`TreePlanner` deixou de filtrar `$properties` não-primitivo (array/objeto do JSON) -- o valor
+	bruto atravessa o plano intacto (`TreePlanner.PlanPropertyValue`), porque só AQUI, depois que a
+	Instance real existe, o `MemberDescriptor` (`ValueType`/`ValueCategory`) de uma classe REAL é
+	conhecível. `applyProperties`/`resolvePropertyValue` (abaixo) interceptam TODO valor
+	não-primitivo ANTES da escrita e chamam `ValueTypes.Decode.FromRojoJson` -- nunca gravam um
+	array/objeto cru via `writable[key] = value` (o `__newindex` real, em modo estrito, escreveria
+	qualquer valor num Property gravável sem checar o tipo, o que corromperia silenciosamente um
+	`Vector3`/`Color3` real com uma tabela crua -- exatamente o que a invariante 2 do projeto
+	proíbe). Requer `../valuetypes` (o agregador público daquele território, nunca um módulo
+	interno) -- primeira vez que `cli` toca aquele território.
+
 	DEFESA EM PROFUNDIDADE (não pedida por `TreePlanner`, mas barata e consistente com a regra 00
 	"nunca stack trace cru"/"nunca crash por entrada não confiável"): `Services.new` pode falhar
 	de verdade para um `"$className"` explícito que `TreePlanner` nunca valida contra
@@ -129,6 +141,7 @@
 
 local Runtime = require("../runtime")
 local Services = require("../services")
+local ValueTypes = require("../valuetypes")
 local Diagnostics = require("./Diagnostics")
 local Messages = require("./Messages")
 local TreePlanner = require("./TreePlanner")
@@ -153,6 +166,21 @@ local SCRIPT_CLASS_NAMES: { [string]: boolean } = {
 	LocalScript = true,
 	ModuleScript = true,
 }
+
+-- task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli", item (b)): índice O(1)
+-- DERIVADO de `ValueTypes.Catalog.SimulatedNames()` -- nunca uma lista mantida à mão aqui (mesma
+-- disciplina de `src/cli/UnsimulatedGlobals.luau`, que também deriva do mesmo `Catalog`). Usado por
+-- `resolvePropertyValue` para decidir se um `ValueType` de categoria `"DataType"` já tem módulo em
+-- `src/valuetypes/types/` (leva 1: Vector3/Vector2/Color3/CFrame/UDim/UDim2) ou ainda não (leva 2:
+-- Rect/NumberRange/TweenInfo/...) -- ANTES de chamar `ValueTypes.Decode.FromRojoJson`, nunca depois
+-- (a distinção entre "tipo não simulado" e "forma indecodificável" fica mais limpa consultando o
+-- Catalog primeiro do que tentando inferir a partir da frase de erro do `Decode`). Construído uma
+-- vez no load do módulo -- `Catalog` é dado ESTÁTICO por processo (mesma razão de
+-- `UnsimulatedGlobals.luau` construir os `SENTINELS` uma única vez).
+local SIMULATED_VALUE_TYPE_NAMES: { [string]: boolean } = {}
+for _, name in ValueTypes.Catalog.SimulatedNames() do
+	SIMULATED_VALUE_TYPE_NAMES[name] = true
+end
 
 -- task-cli-010 (correção de revisão, achado MÉDIO de revisor-cli-runcommand-2026-09-05.md): o
 -- `__newindex` real de `runtime` levanta o erro de `$properties` inválido com `error(msg, 2)`
@@ -205,19 +233,142 @@ local function stripEngineErrorLocation(rawError: string): string
 	return rest
 end
 
--- Aplica `$properties` (já filtrado para boolean/number/string por `TreePlanner`, Decisão 7) pela
--- via PÚBLICA de escrita -- deixa o `__newindex` real do runtime validar contra o `ClassSchema` e
--- devolver a mensagem certa (nome inválido, propriedade somente-leitura, evento/método
--- protegido). Ordem alfabética das chaves: `PlanNode.Properties` é um mapa Lua sem ordem própria,
--- e diagnósticos em ordem determinística são o que torna um teste com múltiplas propriedades
--- inválidas no mesmo nó reproduzível.
+-- task-cli-025 (item b): resolve o `MemberDescriptor` de UMA propriedade -- é o que diz, pra um
+-- array/objeto bruto do JSON, qual `ValueType`/`ValueCategory` decodificar contra (a mesma
+-- ambiguidade que motivou todo o desenho de `ValueTypes.Decode`: "Lighting.Ambient" e
+-- "Baseplate.Position" chegam aqui como o MESMO array de 3 números, e só o `MemberDescriptor` da
+-- classe/propriedade diz qual é Color3 e qual é Vector3).
 --
--- task-cli-018 (Decisão 15, Parte 2): assinatura muda de `(instance, node: PlanNode, bag)` pra
--- `(instance, properties, nodePath, bag)` -- `properties`/`nodePath` soltos, não mais lidos de
--- dentro de um `PlanNode` -- porque `InstancePlan.RootProperties` (novo) não pertence a nenhum
--- `PlanNode` (a raiz nunca vira um `PlanNode`, Decisão 3) e `Materialize` precisa reusar esta
--- MESMA função pra aplicar `$properties` da raiz de topo no `game`, com o mesmo caminho de
--- `Diagnostic` (`materialize/invalid-property`) que qualquer outro nó já usa.
+-- LIMITAÇÃO DECLARADA (API FALTANTE, ver relatório da tarefa): `Runtime.ClassRegistry.Get`
+-- devolve só o `Schema` PRÓPRIO de uma classe -- o que ELA declara, NUNCA o herdado (ver o
+-- comentário de `ClassDescriptor.Schema` em `src/runtime/ClassRegistry.luau`: "Schema de
+-- Property/Event/Callback que ESTA classe declara -- nunca os herdados"). O achatamento (própria +
+-- toda a cadeia de superclasses) é feito só INTERNAMENTE por `ClassRegistry` (função privada
+-- `resolveClassSchema`, nunca reexportada) para instalar na Instance no momento da criação --
+-- `runtime`/`services` ainda NÃO expõem publicamente esse schema já ACHATADO por
+-- (className, propertyName). Sem essa API, este módulo deliberadamente NÃO reimplementa o
+-- achatamento andando a cadeia de `SuperClassName` por conta própria -- isso duplicaria, em `cli`,
+-- o MESMO algoritmo que `ClassRegistry` já mantém internamente, e as duas cópias divergirem em
+-- silêncio é exatamente o tipo de bug que a regra 00 proíbe (contornar o território em vez de
+-- reportar a lacuna). Nenhuma classe hoje coberta por `services` (leva 1) precisa de herança para
+-- uma propriedade DataType/Enum -- todas as ocorrências atuais (Lighting.Ambient,
+-- Workspace.GlobalWind/InsertPoint, BaseScript.LinkedSource/RunContext) são declaradas na PRÓPRIA
+-- classe -- mas isto deixa de valer no dia em que uma classe tipo "Part" herdar "Position" de
+-- "BasePart": a chamada abaixo devolveria `nil` mesmo a propriedade sendo real, e
+-- `resolvePropertyValue` trataria como `materialize/property-shape-unknown` em vez de decodificar.
+local function findMemberDescriptor(className: string, propertyName: string): Runtime.MemberDescriptor?
+	local descriptor = Runtime.ClassRegistry.Get(className)
+	if descriptor == nil or descriptor.Schema == nil then
+		return nil
+	end
+	return descriptor.Schema[propertyName]
+end
+
+-- task-cli-025 (item b, Decisão 5/seção 7 do desenho de valuetypes): devolve o valor FINAL pronto
+-- pra escrever, ou `nil` se a propriedade deve ser PULADA (o `Diagnostic` correspondente já foi
+-- adicionado ao `bag` internamente). `raw` NUNCA é um `nil` de verdade aqui (chamador só itera
+-- chaves que de fato existem em `properties` -- `$properties` nunca carrega `null`, ver
+-- `JsonValue.luau`), então devolver `nil` nunca é ambíguo com "grave nil de propósito".
+--
+-- Primitivo (boolean/number/string) -- grava DIRETO, comportamento IDÊNTICO ao de antes desta
+-- tarefa (o `__newindex` real decide se o nome/tipo faz sentido). Não-primitivo (array/objeto) --
+-- NUNCA escrito cru: o `__newindex` real, em modo ESTRITO, escreve QUALQUER valor num Property
+-- gravável SEM checar o tipo (ver `Instance.luau`, ramo "Property gravável ou Callback") -- um
+-- array cru escrito direto num `Vector3`/`Color3` REAL seria a corrupção silenciosa que a
+-- invariante 2 do projeto proíbe. Por isso todo array/objeto passa OBRIGATORIAMENTE por
+-- `ValueTypes.Decode.FromRojoJson` antes de qualquer escrita.
+local function resolvePropertyValue(className: string, key: string, raw: TreePlanner.PlanPropertyValue, nodePath: string, bag: Diagnostics.Bag): unknown?
+	local rawKind = typeof(raw)
+	if rawKind == "boolean" or rawKind == "number" or rawKind == "string" then
+		return raw
+	end
+
+	local descriptor = findMemberDescriptor(className, key)
+	if descriptor == nil or descriptor.Kind ~= "Property" then
+		-- Sem MemberDescriptor de Property conhecido: LuauBench não tem como saber que tipo este
+		-- array/objeto deveria virar. Cobre o modo LENIENTE (instância sem ClassSchema instalado,
+		-- ex.: a raiz `game`/DataModel), um nome genuinamente inválido, e a limitação de herança
+		-- declarada acima em `findMemberDescriptor`.
+		bag:Add({
+			Severity = "warning",
+			Code = "materialize/property-shape-unknown",
+			Message = Messages.MaterializePropertyShapeUnknown(nodePath, key),
+			NodePath = nodePath,
+			Field = key,
+		})
+		return nil
+	end
+
+	local valueType = descriptor.ValueType
+	local valueCategory = descriptor.ValueCategory
+	if valueType == nil or valueCategory == nil then
+		-- `Kind == "Property"` deveria sempre trazer ValueType/ValueCategory não-nil (só
+		-- Event/Callback os dispensam, ver `Runtime.MemberDescriptor`) -- inconsistência interna de
+		-- `services`/`runtime`, tratada com a MESMA mensagem defensiva acima (nunca escreve cru).
+		bag:Add({
+			Severity = "warning",
+			Code = "materialize/property-shape-unknown",
+			Message = Messages.MaterializePropertyShapeUnknown(nodePath, key),
+			NodePath = nodePath,
+			Field = key,
+		})
+		return nil
+	end
+
+	-- "Enum" é um `valueCategory` (não um nome de tipo) -- o `ValueType` de uma propriedade Enum é
+	-- o nome do enum ESPECÍFICO (ex. "Material", "KeyCode"), que `Catalog` não lista um a um: o que
+	-- `Catalog` sabe é se o GLOBAL `Enum` (o namespace inteiro) está simulado -- se estiver, TODOS
+	-- os enums do dump estão disponíveis via `generated/EnumData` (ver arquiteto-valuetypes-2026-
+	-- 09-05.md, §"Enum inflar o startup"). Por isso o índice consultado muda por categoria.
+	local catalogLookupName = if valueCategory == "Enum" then "Enum" else valueType
+	if (valueCategory == "DataType" or valueCategory == "Enum") and not SIMULATED_VALUE_TYPE_NAMES[catalogLookupName] then
+		bag:Add({
+			Severity = "warning",
+			Code = "materialize/property-type-not-simulated",
+			Message = Messages.MaterializePropertyTypeNotSimulated(nodePath, key, valueType),
+			NodePath = nodePath,
+			Field = key,
+		})
+		return nil
+	end
+
+	-- Categoria "Primitive"/"Class"/"Group" com valor NÃO-primitivo (ex.: um array pra uma
+	-- propriedade `float`) também passa por aqui -- `Decode.FromRojoJson` já sabe recusar essas
+	-- categorias explicitamente ("só 'DataType'/'Enum' têm forma ambígua"), e o resultado vira
+	-- `materialize/undecodable-property` abaixo, nunca uma escrita crua.
+	local decoded = ValueTypes.Decode.FromRojoJson(valueType, valueCategory, raw)
+	if decoded.Ok then
+		return decoded.Value
+	end
+
+	bag:Add({
+		Severity = "error",
+		Code = "materialize/undecodable-property",
+		Message = Messages.MaterializeUndecodableProperty(nodePath, key, valueType, decoded.Reason),
+		NodePath = nodePath,
+		Field = key,
+	})
+	return nil
+end
+
+-- Aplica `$properties` pela via PÚBLICA de escrita -- deixa o `__newindex` real do runtime validar
+-- contra o `ClassSchema` e devolver a mensagem certa (nome inválido, propriedade somente-leitura,
+-- evento/método protegido). Ordem alfabética das chaves: `PlanNode.Properties` é um mapa Lua sem
+-- ordem própria, e diagnósticos em ordem determinística são o que torna um teste com múltiplas
+-- propriedades inválidas no mesmo nó reproduzível.
+--
+-- task-cli-018 (Decisão 15, Parte 2): assinatura `(instance, properties, nodePath, bag)` --
+-- `properties`/`nodePath` soltos, não lidos de dentro de um `PlanNode` -- porque
+-- `InstancePlan.RootProperties` não pertence a nenhum `PlanNode` (a raiz nunca vira um `PlanNode`,
+-- Decisão 3) e `Materialize` reusa esta MESMA função pra aplicar `$properties` da raiz de topo no
+-- `game`.
+--
+-- task-cli-025 (Decisão 5/seção 7 do desenho de valuetypes): `properties[key]` agora é a forma
+-- BRUTA do JSON (`TreePlanner.PlanPropertyValue`, ver aquele módulo) -- `resolvePropertyValue`,
+-- acima, decide o valor FINAL a escrever (primitivo direto, ou decodificado via `ValueTypes.Decode`
+-- pra array/objeto) e adiciona qualquer `Diagnostic` de "não decodificável"/"tipo não
+-- simulado"/"forma desconhecida" ANTES de chegar aqui -- `applyProperties` só cuida da ESCRITA em
+-- si (e do `materialize/invalid-property` que só o `__newindex` real sabe produzir).
 local function applyProperties(instance: Runtime.Instance, properties: { [string]: TreePlanner.PlanPropertyValue }, nodePath: string, bag: Diagnostics.Bag): ()
 	local propertyNames: { string } = {}
 	for key in properties do
@@ -226,7 +377,12 @@ local function applyProperties(instance: Runtime.Instance, properties: { [string
 	table.sort(propertyNames)
 
 	for _, key in propertyNames do
-		local value = properties[key]
+		local valueToWrite = resolvePropertyValue(instance.ClassName, key, properties[key], nodePath, bag)
+		if valueToWrite == nil then
+			-- `resolvePropertyValue` já adicionou o Diagnostic correspondente -- pula a escrita,
+			-- resto do nó continua.
+			continue
+		end
 
 		-- Cast de fronteira (Decisão 7): `Runtime.Instance` é um tipo de campos
 		-- NOMEADOS (o schema de cada classe concreta é uma interseção fechada, decidida por
@@ -238,7 +394,7 @@ local function applyProperties(instance: Runtime.Instance, properties: { [string
 		-- pula NENHUM enforcement, só muda o tipo que o compilador enxerga do lado esquerdo do `=`.
 		local writable = (instance :: unknown) :: { [string]: unknown }
 		local ok, err = pcall(function()
-			writable[key] = value
+			writable[key] = valueToWrite
 		end)
 
 		if not ok then

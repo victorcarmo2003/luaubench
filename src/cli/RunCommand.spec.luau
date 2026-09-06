@@ -68,6 +68,12 @@ test("Execute: fixture 'basic' termina com ExitCode 0 e sem erros (setmetatable/
 	assert(result.ErrorCount == 0, `esperava ErrorCount 0, recebeu {result.ErrorCount}`)
 end)
 
+test("Execute: fixture 'value-types' termina com ExitCode 0 -- typeof(Vector3.new(...)) == 'Vector3' de ponta a ponta (task-cli-025, TypeNameResolver)", function()
+	local result = RunCommand.Execute(baseOptions(fixturePath("run-e2e/value-types")))
+	assert(result.ExitCode == 0, `esperava ExitCode 0, recebeu {result.ExitCode}`)
+	assert(result.ErrorCount == 0, `esperava ErrorCount 0, recebeu {result.ErrorCount}`)
+end)
+
 test("Execute: fixture 'module-error' termina com ExitCode 1 (erro de script não tratado) e ErrorCount >= 1", function()
 	local result = RunCommand.Execute(baseOptions(fixturePath("run-e2e/module-error")))
 	assert(result.ExitCode == 1, `esperava ExitCode 1, recebeu {result.ExitCode}`)

@@ -1,0 +1,9 @@
+{
+  "name": "RunE2EValueTypes",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$path": "server"
+    }
+  }
+}

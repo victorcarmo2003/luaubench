@@ -50,12 +50,15 @@
 
 	Depende de: `ProjectFile.luau`, `TreePlanner.luau`, `TreeMaterializer.luau`, `ScriptRunner.luau`,
 	`OutputFormatter.luau`, `ModuleLoader.luau`, `Diagnostics.luau`, `Messages.luau`, `../runtime`,
-	`../services`. NUNCA `../services/generated/**`/`behavior/**` (regra 03) nem um módulo interno
-	de `runtime` por fora de `require("../runtime")` (regra 02).
+	`../services`, `../valuetypes` (task-cli-025, item e -- só `Runtime.TypeNameResolver.Set(
+	ValueTypes.TypeNameOf)`). NUNCA `../services/generated/**`/`behavior/**` (regra 03) nem um
+	módulo interno de `runtime`/`valuetypes` por fora dos respectivos agregadores públicos (regra
+	02/regra 06).
 ]]
 
 local Runtime = require("../runtime")
 local Services = require("../services")
+local ValueTypes = require("../valuetypes")
 local Diagnostics = require("./Diagnostics")
 local Messages = require("./Messages")
 local ModuleLoader = require("./ModuleLoader")
@@ -173,6 +176,16 @@ function RunCommand.Execute(options: RunOptions): Result
 	local scheduler = Runtime.Scheduler.new()
 	local game = Runtime.DataModel.new()
 	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+	-- task-cli-025 (item e, arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 4 do
+	-- desenho de valuetypes): `cli` é o composition root -- o ÚNICO lugar do projeto que ata
+	-- `runtime <- valuetypes`, ao lado do `Services.Bootstrap` acima que já ata `runtime <-
+	-- services`. Sem isto, `typeof(Vector3.new(1, 2, 3))` dentro do sandbox continuaria devolvendo
+	-- o `typeof` nativo do Luau ("userdata"), nunca "Vector3" -- ver `Sandbox.luau`,
+	-- `resolveTypeName`, e `TypeNameResolver.luau` (task-runtime-032). Uma vez por processo, sem
+	-- reset -- mesmo precedente de `Runtime.UnknownClassResolver.Set` (chamado dentro de
+	-- `Services.Bootstrap`).
+	Runtime.TypeNameResolver.Set(ValueTypes.TypeNameOf)
 
 	for _, className in Services.GetSimulatedServiceClasses() do
 		game:GetService(className)

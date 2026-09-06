@@ -5,7 +5,13 @@
 	`workspace`/`script`/`Instance.new`/`require`/`_G`/`shared` acessíveis de dentro de um
 	`Sandbox.Run` de verdade; `_G` escrito por um script é lido por outro do mesmo run (mesma
 	`GlobalTable`, passada por referência); `_G`/`shared` são tabelas SEPARADAS (correção
-	task-cli-007); os `UnsimulatedGlobals` continuam presentes.
+	task-cli-007); os `UnsimulatedGlobals` continuam presentes para o que ainda não é simulado.
+
+	REVISADO por task-cli-025 (item c): os globais de valor JÁ simulados (Vector3/Vector2/Color3/
+	CFrame/UDim/UDim2/Enum) agora são REAIS dentro do `env` que `Build()` monta -- não erram mais
+	como sentinela. O teste antigo que provava "Vector3 presente, mas errando ao usar" foi
+	substituído por dois: um provando que o value type FUNCIONA de ponta a ponta, outro provando
+	que um tipo AINDA não simulado (ex.: TweenInfo) continua errando como antes.
 
 	Roda com `lune run src/cli/ScriptEnvironment.spec.luau`.
 ]]
@@ -13,6 +19,7 @@
 local process = require("@lune/process")
 local Runtime = require("../runtime")
 local Services = require("../services")
+local ValueTypes = require("../valuetypes")
 local ScriptEnvironment = require("./ScriptEnvironment")
 
 local passedCount = 0
@@ -167,7 +174,7 @@ test("_G escrito por um script é lido por outro do mesmo run (mesma GlobalTable
 	assert(gB.writtenByA == "hello-from-a", "_G escrito por A deveria ser lido por B -- mesma tabela compartilhada entre os scripts do run")
 end)
 
-test("Build() ainda expõe os UnsimulatedGlobals (Vector3 presente, mas errando ao usar)", function()
+test("Build() expõe os value types JÁ simulados como globais REAIS (Vector3.new funciona de ponta a ponta) (task-cli-025, item c)", function()
 	local _scheduler, game, workspace = newGame()
 	local scriptInstance = Services.new("Script", "Main")
 
@@ -180,14 +187,60 @@ test("Build() ainda expõe os UnsimulatedGlobals (Vector3 presente, mas errando 
 	}
 	local globals = ScriptEnvironment.Build(context, scriptInstance)
 
-	assert(globals.Vector3 ~= nil, "Vector3 deveria estar presente em globals (nunca nil silencioso -- Decisão 12)")
+	assert(globals.Vector3 ~= nil, "Vector3 deveria estar presente em globals")
+	local vector3Global = (globals.Vector3 :: unknown) :: { new: (x: number?, y: number?, z: number?) -> unknown }
 
-	local vector3 = (globals.Vector3 :: unknown) :: { new: unknown }
+	local created = vector3Global.new(1, 2, 3)
+	assert(ValueTypes.TypeNameOf(created) == "Vector3", "Vector3.new via ScriptEnvironment.Build() deveria produzir um Vector3 REAL, não uma sentinela")
+	assert(tostring(created) == "1, 2, 3", `tostring(Vector3.new(1, 2, 3)) deveria ser "1, 2, 3", recebeu "{tostring(created)}"`)
+end)
+
+test("Build() ainda expõe os globais AINDA NÃO simulados como sentinela (ex.: TweenInfo continua errando) (task-cli-025, item c)", function()
+	local _scheduler, game, workspace = newGame()
+	local scriptInstance = Services.new("Script", "Main")
+
+	local context: ScriptEnvironment.EnvironmentContext = {
+		Game = game,
+		Workspace = workspace,
+		GlobalTable = {},
+		SharedTable = {},
+		Require = noopRequire,
+	}
+	local globals = ScriptEnvironment.Build(context, scriptInstance)
+
+	assert(globals.TweenInfo ~= nil, "TweenInfo deveria estar presente em globals (nunca nil silencioso -- Decisão 12)")
+
+	local tweenInfo = (globals.TweenInfo :: unknown) :: { new: unknown }
 	local ok, err = pcall(function()
-		return vector3.new
+		return tweenInfo.new
 	end)
-	assert(not ok, "acessar Vector3.new deveria continuar errando")
+	assert(not ok, "acessar TweenInfo.new deveria continuar errando -- ainda não simulado nesta leva")
 	assert(string.find(tostring(err), "[LuauBench]", 1, true) ~= nil, "mensagem deveria ter o prefixo [LuauBench]")
+end)
+
+test("Build() sobrepõe TODO nome Simulated=true do Catalog -- nenhum resíduo de sentinela de UnsimulatedGlobals por baixo", function()
+	local _scheduler, game, workspace = newGame()
+	local scriptInstance = Services.new("Script", "Main")
+
+	local context: ScriptEnvironment.EnvironmentContext = {
+		Game = game,
+		Workspace = workspace,
+		GlobalTable = {},
+		SharedTable = {},
+		Require = noopRequire,
+	}
+	local globals = ScriptEnvironment.Build(context, scriptInstance)
+
+	-- Identidade com o que `ValueTypes.BuildGlobals()` produziria sozinho -- prova que
+	-- `ScriptEnvironment.Build` não filtra/reembrulha nada, só sobrepõe (ver item (c)). "Enum" fica
+	-- de fora do teste de "não errar ao usar" (é um namespace navegável, sem `.new` -- indexar uma
+	-- chave desconhecida nele ERRA de propósito, "X is not a valid member of Enum", diferente dos
+	-- outros seis, que são construtores) -- mas a identidade de referência abaixo já cobre Enum
+	-- igual aos demais.
+	local valueTypeGlobals = ValueTypes.BuildGlobals()
+	for name, constructor in valueTypeGlobals do
+		assert(globals[name] == constructor, `globals.{name} deveria ser EXATAMENTE o valor que ValueTypes.BuildGlobals() produz, sem reembrulho`)
+	end
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

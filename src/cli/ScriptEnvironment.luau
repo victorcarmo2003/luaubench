@@ -23,6 +23,12 @@
 	contrato do lado de `services`. Requer `../services` diretamente (o agregador público, nunca
 	`generated/`/`behavior/` -- regra 03) só para isto.
 
+	task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli", item (c)): `Build()` passou a
+	sobrepor `ValueTypes.BuildGlobals()` (Vector3/Vector2/Color3/CFrame/UDim/UDim2/Enum -- leva 1 de
+	`src/valuetypes/`) por cima dos sentinelas de `UnsimulatedGlobals`, ANTES de `game`/`workspace`/
+	`script` -- requer `../valuetypes` (o agregador público daquele território) só para isto, mesmo
+	padrão de `../services` acima.
+
 	API FALTANTE (a reportar, não contornada): o desenho referencia `Runtime.SandboxGlobals` como
 	tipo de retorno de `ScriptEnvironment.Build`, mas `src/runtime/init.luau` (task-runtime-007/025)
 	NÃO reexporta esse tipo (só `SandboxOptions`/`SandboxResult`/`SandboxChunkOptions`/
@@ -36,6 +42,7 @@
 
 local Runtime = require("../runtime")
 local Services = require("../services")
+local ValueTypes = require("../valuetypes")
 local UnsimulatedGlobals = require("./UnsimulatedGlobals")
 
 export type EnvironmentContext = {
@@ -59,11 +66,23 @@ local ScriptEnvironment = {}
 -- daquela Instance especifica (um `Script`/`LocalScript`/`ModuleScript` real do `MaterializedTree`,
 -- task-cli-004, ou um `ModuleScript` sendo carregado por `ModuleLoader.Require`).
 function ScriptEnvironment.Build(context: EnvironmentContext, scriptInstance: Runtime.Instance): { [string]: unknown }
-	-- Base: os globais de VALOR não simulados (Vector3/CFrame/Color3/Enum/...), cada um errando
-	-- nomeando a lacuna (Decisão 12) -- `UnsimulatedGlobals.Build()` já devolve uma tabela NOVA a
-	-- cada chamada (ver cabeçalho daquele módulo), então sobrepor as chaves abaixo nunca muta
-	-- estado compartilhado entre scripts.
+	-- Base: os globais de VALOR ainda não simulados (Rect/NumberRange/TweenInfo/...), cada um
+	-- errando nomeando a lacuna (Decisão 12) -- `UnsimulatedGlobals.Build()` já devolve uma tabela
+	-- NOVA a cada chamada (ver cabeçalho daquele módulo), então sobrepor as chaves abaixo nunca
+	-- muta estado compartilhado entre scripts.
 	local globals: { [string]: unknown } = UnsimulatedGlobals.Build()
+
+	-- task-cli-025 (item c): sobrepõe os globais de valor JÁ simulados (Vector3/Vector2/Color3/
+	-- CFrame/UDim/UDim2/Enum, leva 1 de `valuetypes`) por cima dos sentinelas acima --
+	-- `ValueTypes.BuildGlobals()` só devolve nomes com `Catalog.Simulated == true`, e
+	-- `UnsimulatedGlobals` deriva `UnsimulatedGlobalNames()` do MESMO `Catalog` (task-cli-025, item
+	-- d) -- um nome nunca deveria aparecer nos dois ao mesmo tempo. A ORDEM (`ValueTypes` por cima)
+	-- é a rede de segurança: se essa disjunção algum dia quebrar por bug de sincronização entre os
+	-- dois territórios, o valor REAL sempre vence sobre a sentinela de erro, nunca o contrário.
+	local valueTypeGlobals = ValueTypes.BuildGlobals()
+	for name, constructor in valueTypeGlobals do
+		globals[name] = constructor
+	end
 
 	globals.game = context.Game
 	globals.workspace = context.Workspace

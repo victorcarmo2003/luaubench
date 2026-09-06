@@ -30,6 +30,7 @@ local Diagnostics = require("./Diagnostics")
 local ProjectFile = require("./ProjectFile")
 local Runtime = require("../runtime")
 local Services = require("../services")
+local ValueTypes = require("../valuetypes")
 local TreeMaterializer = require("./TreeMaterializer")
 local TreePlanner = require("./TreePlanner")
 
@@ -106,6 +107,53 @@ end
 local function findChild(instance: Runtime.Instance, name: string): Runtime.Instance?
 	return instance:FindFirstChild(name)
 end
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-025: classe FICTÍCIA de teste, registrada DIRETO em Runtime.ClassRegistry (nunca via
+-- Services.Register -- "Part"/"BasePart" ainda não existem em services, leva 2 de services). Mesmo
+-- padrão já usado por `services/init.spec.luau` ("classe FICTÍCIA de teste de ponta a ponta") e
+-- `runtime/ClassRegistry.spec.luau` -- `Services.new` consulta `Runtime.ClassRegistry.Get` ANTES
+-- de consultar o manifesto de `services` (ver `src/services/init.luau`, `Services.new`), então uma
+-- classe registrada assim é instanciável pelo caminho de PRODUÇÃO normal
+-- (`TreeMaterializer.createInstance`, ramo 3), sem nenhum atalho de teste.
+--
+-- Prova a ambiguidade real que motivou todo o desenho de `ValueTypes.Decode`: o MESMO array
+-- `[0, -10, 0]` em "TreeMaterializerSpecPart.Position" precisa virar `Vector3`, exatamente como
+-- `[0.5, 0.5, 0.5]` em "Lighting.Ambient" (classe REAL, já coberta por `services`) precisa virar
+-- `Color3` -- só o `MemberDescriptor` de cada propriedade diz qual é qual. "Region" (`ValueType =
+-- "Rect"`) exercita `materialize/property-type-not-simulated`: nenhuma classe REAL hoje coberta
+-- por `services` tem uma propriedade não-simulada com forma de array (ver relatório da tarefa).
+--------------------------------------------------------------------------------------------------
+local FIXTURE_PART_CLASS_NAME = "TreeMaterializerSpecPart"
+
+local fixturePartSchema: Runtime.ClassSchema = {
+	Position = {
+		Kind = "Property" :: Runtime.MemberKind,
+		Default = nil,
+		ReadOnly = false,
+		ValueType = "Vector3",
+		ValueCategory = "DataType" :: Runtime.MemberValueCategory,
+	},
+	-- "Rect" continua Simulated=false em `ValueTypes.Catalog.luau` nesta leva (leva 2).
+	Region = {
+		Kind = "Property" :: Runtime.MemberKind,
+		Default = nil,
+		ReadOnly = false,
+		ValueType = "Rect",
+		ValueCategory = "DataType" :: Runtime.MemberValueCategory,
+	},
+}
+table.freeze(fixturePartSchema)
+
+Runtime.ClassRegistry.Register({
+	ClassName = FIXTURE_PART_CLASS_NAME,
+	SuperClassName = nil,
+	IsAbstract = false,
+	IsService = false,
+	Methods = nil,
+	Schema = fixturePartSchema,
+	Initialize = nil,
+})
 
 --------------------------------------------------------------------------------------------------
 -- cli NUNCA chama Runtime.ClassRegistry.NewEngineInstance (verificável por grep, critério do board)
@@ -1069,6 +1117,150 @@ test("Materialize: 'materialize/fixed-child-class-mismatch' quando a instância 
 	if diagnostic ~= nil then
 		assert(string.find(diagnostic.Message, "StarterPlayerScripts", 1, true) ~= nil, "mensagem deveria citar o ClassName esperado 'StarterPlayerScripts'")
 		assert(string.find(diagnostic.Message, "Folder", 1, true) ~= nil, "mensagem deveria citar o ClassName real achado 'Folder'")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7):
+-- $properties não-primitivo decodifica pelo MemberDescriptor da classe REAL -- mesmo array [x,y,z]
+-- vira Color3 numa propriedade e Vector3 noutra; tipo ainda não simulado vira warning [LuauBench];
+-- forma malformada vira erro citando o motivo do Decode; propriedade sem MemberDescriptor
+-- conhecido nunca escreve a tabela crua.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: [0.5,0.5,0.5] em Lighting.Ambient vira Color3 e o MESMO formato em Baseplate.Position vira Vector3 (task-cli-025)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local lighting = game:FindFirstChildOfClass("Lighting")
+	assert(lighting ~= nil, "game deveria ter um Lighting depois de Materialize")
+	if lighting == nil then
+		return
+	end
+	local lightingDot = (lighting :: unknown) :: { [string]: unknown }
+	local ambient = lightingDot["Ambient"]
+	assert(ValueTypes.TypeNameOf(ambient) == "Color3", `Lighting.Ambient deveria ter virado um Color3 real, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(ambient))}`)
+	assert(tostring(ambient) == "0.5, 0.5, 0.5", `Lighting.Ambient deveria ser Color3.new(0.5, 0.5, 0.5), tostring deu "{tostring(ambient)}"`)
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter um Workspace depois de Materialize")
+	if workspaceInstance == nil then
+		return
+	end
+	local baseplate = findChild(workspaceInstance, "Baseplate")
+	assert(baseplate ~= nil, "Workspace deveria ter um filho 'Baseplate'")
+	if baseplate == nil then
+		return
+	end
+	local baseplateDot = (baseplate :: unknown) :: { [string]: unknown }
+	local position = baseplateDot["Position"]
+	assert(ValueTypes.TypeNameOf(position) == "Vector3", `Baseplate.Position deveria ter virado um Vector3 real, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(position))}`)
+	assert(tostring(position) == "0, -10, 0", `Baseplate.Position deveria ser Vector3.new(0, -10, 0), tostring deu "{tostring(position)}"`)
+end)
+
+test("Materialize: ValueType ainda não simulado (Rect) vira warning '[LuauBench] ... not simulated' e a propriedade não é escrita (task-cli-025)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local diagnostic = findByCode(bag, "materialize/property-type-not-simulated")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/property-type-not-simulated'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "tipo não simulado deveria ser Severity 'warning', nunca erro")
+		assert(diagnostic.Field == "Region", "Diagnostic deveria citar a propriedade 'Region'")
+		assert(string.find(diagnostic.Message, "[LuauBench]", 1, true) ~= nil, `mensagem deveria ter o prefixo [LuauBench], recebeu: {diagnostic.Message}`)
+		assert(string.find(diagnostic.Message, "Rect", 1, true) ~= nil, "mensagem deveria citar o ValueType 'Rect'")
+	end
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
+	if workspaceInstance == nil then
+		return
+	end
+	local baseplate = findChild(workspaceInstance, "Baseplate")
+	assert(baseplate ~= nil, "deveria haver um 'Baseplate'")
+	if baseplate == nil then
+		return
+	end
+	local baseplateDot = (baseplate :: unknown) :: { [string]: unknown }
+	assert(baseplateDot["Region"] == nil, "Region deveria ter mantido o Default (nil) do schema -- nunca gravar o array cru")
+end)
+
+test("Materialize: forma indecodificável (array de tamanho errado) vira erro 'materialize/undecodable-property' citando o motivo (task-cli-025)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local diagnostic = findByCode(bag, "materialize/undecodable-property")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/undecodable-property'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "forma indecodificável deveria ser Severity 'error'")
+		assert(diagnostic.Field == "Position", "Diagnostic deveria citar a propriedade 'Position'")
+		assert(string.find(diagnostic.Message, "Vector3", 1, true) ~= nil, "mensagem deveria citar o ValueType alvo 'Vector3'")
+		assert(diagnostic.NodePath ~= nil and string.find(diagnostic.NodePath, "BadPosition", 1, true) ~= nil, "Diagnostic deveria citar o nó 'BadPosition'")
+	end
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
+	if workspaceInstance == nil then
+		return
+	end
+	local badPosition = findChild(workspaceInstance, "BadPosition")
+	assert(badPosition ~= nil, "deveria haver um 'BadPosition' mesmo com a propriedade malformada -- só a propriedade falha, não o nó inteiro")
+	if badPosition == nil then
+		return
+	end
+	local badPositionDot = (badPosition :: unknown) :: { [string]: unknown }
+	assert(badPositionDot["Position"] == nil, "Position deveria ter mantido o Default (nil) -- nunca gravar a forma malformada")
+end)
+
+test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vira warning 'materialize/property-shape-unknown' (task-cli-025)", function()
+	local plan, planBag = planFixture("value-types")
+	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	local diagnostic = findByCode(bag, "materialize/property-shape-unknown")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/property-shape-unknown'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "warning", "forma desconhecida deveria ser Severity 'warning', nunca erro")
+		assert(diagnostic.Field == "Mystery", "Diagnostic deveria citar a propriedade 'Mystery'")
+		assert(string.find(diagnostic.Message, "[LuauBench]", 1, true) ~= nil, `mensagem deveria ter o prefixo [LuauBench], recebeu: {diagnostic.Message}`)
+	end
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
+	if workspaceInstance == nil then
+		return
+	end
+	local unknownShape = findChild(workspaceInstance, "UnknownShape")
+	assert(unknownShape ~= nil, "deveria haver um 'UnknownShape' mesmo com a propriedade não-decodificável -- só a propriedade falha, não o nó inteiro")
+	if unknownShape ~= nil then
+		assert(unknownShape.ClassName == "Folder", "UnknownShape deveria ser um Folder")
 	end
 end)
 

@@ -1,0 +1,32 @@
+{
+  "name": "TreeMaterializerValueTypes",
+  "tree": {
+    "$className": "DataModel",
+    "Lighting": {
+      "$properties": {
+        "Ambient": [0.5, 0.5, 0.5]
+      }
+    },
+    "Workspace": {
+      "Baseplate": {
+        "$className": "TreeMaterializerSpecPart",
+        "$properties": {
+          "Position": [0, -10, 0],
+          "Region": [0, 0, 100, 100]
+        }
+      },
+      "BadPosition": {
+        "$className": "TreeMaterializerSpecPart",
+        "$properties": {
+          "Position": [0, -10]
+        }
+      },
+      "UnknownShape": {
+        "$className": "Folder",
+        "$properties": {
+          "Mystery": [1, 2, 3]
+        }
+      }
+    }
+  }
+}
