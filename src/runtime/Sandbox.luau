@@ -381,6 +381,21 @@ local function buildEnvironment(options: SandboxOptions, ownThreads: { [thread]:
 	-- `typeof` cru do Luau -- ver bloco "task-runtime-032" no cabeçalho do módulo para as 3
 	-- divergências de fidelidade que isso corrige de quebra.
 	env.typeof = resolveTypeName
+	-- task-runtime-037-fix: BUG GRAVE -- `type()` nunca esteve na whitelist. `type()` é o global
+	-- básico do Lua/Luau (distinto de `typeof()` acima, que é a extensão do Roblox para
+	-- distinguir Instance/Vector3/EnumItem/etc.). O Roblox real NÃO modifica `type()` -- ele
+	-- continua devolvendo só os 8 tipos base do Luau (`"nil"`, `"boolean"`, `"number"`,
+	-- `"string"`, `"table"`, `"function"`, `"userdata"`, `"thread"`) mesmo para uma Instance
+	-- (que hoje é `userdata`, via `newproxy(true)` em Instance.luau, task-runtime-027) ou um
+	-- Signal/Connection (que são `table`) -- é exatamente por isso que o Roblox real precisa de
+	-- `typeof()` como API separada. `type` cru do Lune (mesma função-base, capturada por
+	-- upvalue -- não uma reimplementação nossa) já dá esse resultado de graça, sem nenhum
+	-- wrapper: não abre nenhum caminho novo ao host (é uma introspecção pura sobre o valor que o
+	-- script já tem referência), e ausência dela quebrava qualquer script real que faça
+	-- `type(x) == "string"` na entrada de uma função -- incluindo a primeiríssima linha de
+	-- `ProfileStore.New` (`if type(store_name) ~= "string" then`), confirmado por reprodução
+	-- isolada (task-services-027/task-runtime-037-fix).
+	env.type = type
 	env.tostring = tostring
 	env.tonumber = tonumber
 	env.pcall = pcall

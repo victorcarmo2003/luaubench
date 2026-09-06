@@ -798,5 +798,120 @@ test("typeof: resolvedor de Value Types injetado responde para o que reconhece e
 	assert(records[3].message == "string", "idem para uma string que o resolvedor instalado não reconhece")
 end)
 
+-- task-runtime-037-fix: BUG GRAVE -- `type()` nunca esteve na whitelist de `buildEnvironment`.
+-- Reproduzido isoladamente antes deste fix (script descartável em src/runtime/, não commitado):
+-- um script no mesmo padrão da primeira linha de `ProfileStore.New`
+-- (`if type(store_name) ~= "string" then`) errava "attempt to call a nil value" -- `type` era
+-- `nil` dentro do sandbox. Este teste cobre exatamente esse padrão sintético.
+test("type(): padrão ProfileStore.New (type(x) na primeira linha) não erra mais 'attempt to call a nil value'", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	Sandbox.Run({
+		scriptName = "Workspace.TypeProfileStorePattern",
+		source = [[
+			local function New(store_name, template)
+				if type(store_name) ~= "string" then
+					error(`store_name deveria ser string, recebeu {type(store_name)}`)
+				end
+				return { ok = true }
+			end
+			local store = New("teste", {})
+			print(store.ok)
+		]],
+		scheduler = scheduler,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(#records == 1, `esperava 1 OutputRecord (print), recebeu {#records}`)
+	assert(records[1].level == "print", `esperava level="print" (sem erro), recebeu {records[1].level}: {records[1].message}`)
+	assert(records[1].message == "true", `New deveria ter completado normalmente, recebeu: {records[1].message}`)
+end)
+
+-- Cobre os 8 tipos base do Luau (regra 00: Roblox real NÃO modifica `type()` -- ele sempre
+-- devolve um destes 8, mesmo para Instance/Signal/Connection, que são `userdata`/`table` por
+-- baixo -- é por isso que o Roblox real precisa de `typeof()` como API separada).
+test("type(): cobre os 8 tipos base do Luau (nil, boolean, number, string, table, function, userdata, thread)", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	Sandbox.Run({
+		scriptName = "Workspace.TypeOitoTipos",
+		source = [[
+			print(type(nil))
+			print(type(true))
+			print(type(5))
+			print(type("s"))
+			print(type({}))
+			print(type(print))
+			print(type(newproxy(false)))
+			print(type(coroutine.running()))
+		]],
+		scheduler = scheduler,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(#records == 8, `esperava 8 linhas de print, recebeu {#records}`)
+	assert(records[1].message == "nil", `type(nil) deveria ser "nil", recebeu {records[1].message}`)
+	assert(records[2].message == "boolean", `type(true) deveria ser "boolean", recebeu {records[2].message}`)
+	assert(records[3].message == "number", `type(5) deveria ser "number", recebeu {records[3].message}`)
+	assert(records[4].message == "string", `type("s") deveria ser "string", recebeu {records[4].message}`)
+	assert(records[5].message == "table", `type(\{\}) deveria ser "table", recebeu {records[5].message}`)
+	assert(records[6].message == "function", `type(print) deveria ser "function", recebeu {records[6].message}`)
+	assert(records[7].message == "userdata", `type(newproxy(false)) deveria ser "userdata", recebeu {records[7].message}`)
+	assert(records[8].message == "thread", `type(coroutine.running()) deveria ser "thread", recebeu {records[8].message}`)
+end)
+
+-- Confirma que `type()` e `typeof()` continuam DISTINTOS depois do fix: `type()` nunca deveria
+-- "aprender" a devolver os nomes fiéis ao Roblox (isso seria typeof reimplementando por cima de
+-- type, uma segunda whitelist implícita divergente) -- Instance é `userdata` para `type()` mas
+-- `"Instance"` para `typeof()`; Signal/Connection são `table` para `type()` mas
+-- `"RBXScriptSignal"`/`"RBXScriptConnection"` para `typeof()`.
+test("type() permanece distinto de typeof(): Instance/Signal/Connection têm type() genérico e typeof() fiel ao Roblox", function()
+	local scheduler = Scheduler.new()
+	local records: { Sandbox.OutputRecord } = {}
+
+	local realInstance = InstanceModule.NewBase("Folder", "InjectedTypeVsTypeof")
+	local realSignal = SignalModule.new()
+	local realConnection = realSignal:Connect(function() end)
+
+	local extra: Sandbox.SandboxGlobals = {
+		injectedInstance = realInstance,
+		injectedSignal = realSignal,
+		injectedConnection = realConnection,
+	}
+
+	Sandbox.Run({
+		scriptName = "Workspace.TypeVsTypeof",
+		source = [[
+			print(type(injectedInstance))
+			print(typeof(injectedInstance))
+			print(type(injectedSignal))
+			print(typeof(injectedSignal))
+			print(type(injectedConnection))
+			print(typeof(injectedConnection))
+		]],
+		scheduler = scheduler,
+		extraGlobals = extra,
+		onOutput = function(record)
+			table.insert(records, record)
+		end,
+	})
+
+	assert(#records == 6, `esperava 6 linhas de print, recebeu {#records}`)
+	assert(records[1].message == "userdata", `type(Instance) deveria ser "userdata" (um dos 8 tipos base), recebeu {records[1].message}`)
+	assert(records[2].message == "Instance", `typeof(Instance) deveria continuar "Instance", recebeu {records[2].message}`)
+	assert(records[3].message == "table", `type(Signal) deveria ser "table", recebeu {records[3].message}`)
+	assert(records[4].message == "RBXScriptSignal", `typeof(Signal) deveria continuar "RBXScriptSignal", recebeu {records[4].message}`)
+	assert(records[5].message == "table", `type(Connection) deveria ser "table", recebeu {records[5].message}`)
+	assert(records[6].message == "RBXScriptConnection", `typeof(Connection) deveria continuar "RBXScriptConnection", recebeu {records[6].message}`)
+
+	realInstance:Destroy()
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

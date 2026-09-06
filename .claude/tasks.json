@@ -2397,7 +2397,7 @@
       "id": "task-runtime-037-fix",
       "title": "BUG GRAVE: global type() ausente do sandbox de execucao",
       "description": "Bug real confirmado por reproducao (task-services-027, testador). src/runtime/Sandbox.luau, funcao buildEnvironment: a whitelist de globais do sandbox nunca inclui env.type. type() e global basico do Lua/Luau (distinto de typeof(), que ja existe e e fiel ao Roblox) -- usado por praticamente qualquer script real, nao peculiaridade do ProfileStore. Confirmado por grep em todo src/ que type nao e definido em lugar nenhum. Testador confirmou com um diagnostico isolado (monkeypatch temporario, nunca commitado) que adicionar type resolve: ProfileStore.New (que usa type(store_name) na primeira linha) passa a funcionar, sessao nova/persistencia intra-processo completam de ponta a ponta. TERRITORIO: so src/runtime/Sandbox.luau + spec. FIX: adicionar env.type = type (ou o equivalente correto se o Roblox real tiver alguma diferenca de type() vs Lua puro -- confirme antes de assumir identidade total, mas type() e uma das poucas funcoes base que o Roblox NAO modifica).",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 44,
@@ -2411,7 +2411,8 @@
       "acceptance": "Um script real rodando no sandbox pode chamar type(x) e recebe o resultado correto (string/number/boolean/table/nil/function/userdata/thread) para os 8 tipos base do Luau; type() continua distinto de typeof() (que reporta nomes fieis ao Roblox tipo Instance/Vector3/EnumItem); teste confirmando que ProfileStore.New (ou um script sintetico equivalente usando type() na primeira linha) nao erra mais attempt to call a nil value; specs cobrindo; --strict sem any; suite completa de runtime sem regressao.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO, zero achados. Revisor reproduziu tudo de forma independente: 191/191 na suite completa de runtime. Reproduziu o bug do zero (copiou runtime pro scratchpad, restaurou Sandbox.luau ao estado do HEAD sem env.type, confirmou erro attempt to call a nil value) e confirmou o fix resolve. Testou os 8 tipos base do Luau via type() dentro do sandbox (incluindo newproxy/coroutine.running). Confirmou type()/typeof() continuam distintos pros mesmos valores (Instance/Signal/Connection). Codigo confirmado como referencia direta ao type nativo por upvalue, sem wrapper, zero superficie de escape nova (introspeccao pura sem estado). --strict, zero any novo, territorio limpo. Rodou o cenario real do ProfileStore (datastore-profilestore-pattern.scenario.luau) e confirmou passos 1-2 agora passam de verdade com o fix em producao -- passo 3 continua falhando por limitacao arquitetural ja documentada (JobId constante por processo), nao relacionado a este fix."
     }
   ]
 }
