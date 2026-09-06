@@ -23,7 +23,15 @@
 local Messages = require("./Messages")
 
 export type Command =
-	{ Kind: "run", ProjectPath: string?, Timeout: number?, NoColor: boolean, Verbose: boolean }
+	{
+		Kind: "run",
+		ProjectPath: string?,
+		Timeout: number?,
+		NoColor: boolean,
+		Verbose: boolean,
+		AllowHttp: boolean,
+		AllowHttpLocal: boolean,
+	}
 	| { Kind: "version" }
 	| { Kind: "help" }
 	| { Kind: "error", Message: string }
@@ -31,14 +39,16 @@ export type Command =
 local Args = {}
 
 -- Interpreta o que sobrou do argv depois de um eventual "run" explícito ter sido consumido:
--- `--timeout <segundos>`, `--no-color`, `--verbose`, `--watch` (sempre erro com o motivo real),
--- um único argumento posicional (o caminho do projeto), e qualquer outra flag "--..." como
--- desconhecida.
+-- `--timeout <segundos>`, `--no-color`, `--verbose`, `--allow-http`, `--allow-http-local`,
+-- `--watch` (sempre erro com o motivo real), um único argumento posicional (o caminho do
+-- projeto), e qualquer outra flag "--..." como desconhecida.
 local function parseRunArgs(rest: { string }): Command
 	local projectPath: string? = nil
 	local timeout: number? = nil
 	local noColor = false
 	local verbose = false
+	local allowHttp = false
+	local allowHttpLocal = false
 
 	local index = 1
 	local count = #rest
@@ -62,6 +72,20 @@ local function parseRunArgs(rest: { string }): Command
 		elseif token == "--verbose" then
 			verbose = true
 			index += 1
+		elseif token == "--allow-http" then
+			allowHttp = true
+			index += 1
+		elseif token == "--allow-http-local" then
+			-- Decisão (task-cli-026): `--allow-http-local` IMPLICA `--allow-http`, em vez de exigir
+			-- as duas -- escolhido por ergonomia sem abrir mão de segurança: liberar só destinos
+			-- locais sem liberar rede nenhuma não faria sentido nenhum (não existe um "meio termo"
+			-- onde só loopback/rede privada responde e o resto do mundo não), e a pessoa que digita
+			-- esta flag já demonstrou intenção explícita de permitir rede. `AllowHttpLocal = true`
+			-- sem `AllowHttp = true` nunca é um estado alcançável a partir daqui (services também
+			-- não precisa checar essa combinação -- ver arquiteto-services-2026-09-05.md, L2.2.4).
+			allowHttp = true
+			allowHttpLocal = true
+			index += 1
 		elseif token == "--watch" then
 			-- Decisão 9: reconhecida de propósito, nunca "flag desconhecida" -- o motivo é
 			-- técnico e real (ausência de API no Lune fixado), não falta de prioridade.
@@ -77,7 +101,15 @@ local function parseRunArgs(rest: { string }): Command
 		end
 	end
 
-	return { Kind = "run", ProjectPath = projectPath, Timeout = timeout, NoColor = noColor, Verbose = verbose }
+	return {
+		Kind = "run",
+		ProjectPath = projectPath,
+		Timeout = timeout,
+		NoColor = noColor,
+		Verbose = verbose,
+		AllowHttp = allowHttp,
+		AllowHttpLocal = allowHttpLocal,
+	}
 end
 
 function Args.Parse(argv: { string }): Command

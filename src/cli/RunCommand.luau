@@ -19,7 +19,9 @@
 	         (lê o filesystem; NENHUMA Instance criada ainda)
 	  5. bag:HasErrors()  ->  imprime TODOS os diagnósticos e sai (exit 2)
 	  6. scheduler = Runtime.Scheduler.new();  game = Runtime.DataModel.new()
-	  7. Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+	  7. Services.Bootstrap({ scheduler = scheduler, dataModel = game, AllowHttp = ...,
+	     AllowHttpLocal = ..., OnHttpRequest = ... }) -- os três últimos campos são task-cli-026,
+	     ver mais abaixo
 	  8. para cada c em Services.GetSimulatedServiceClasses(): game:GetService(c)
 	  9. TreeMaterializer.Materialize(plan, game, bag)     -> MaterializedTree
 	 10. ScriptRunner.Run(tree, ctx)                       -> um Sandbox.Run por Script elegível
@@ -54,6 +56,20 @@
 	ValueTypes.TypeNameOf)`). NUNCA `../services/generated/**`/`behavior/**` (regra 03) nem um
 	módulo interno de `runtime`/`valuetypes` por fora dos respectivos agregadores públicos (regra
 	02/regra 06).
+
+	FLAGS DE REDE (task-cli-026, par de task-services-026 -- arquiteto-services-2026-09-05.md,
+	seção "L2.2 -- HttpService", L2.2.1/L2.2.4): `RunOptions.AllowHttp`/`AllowHttpLocal` espelham
+	`Args.Command` 1:1 (default `false` -- rede desligada, igual `HttpEnabled` num lugar recém-
+	criado no Roblox real) e são repassadas cruas para `Services.BootstrapOptions` no passo 7.
+	`OnHttpRequest` é o canal NOVO desta tarefa: um callback `(method: string, host: string) -> ()`
+	que `services` (`behavior/HttpService.luau`) chama de volta UMA VEZ por requisição de saída,
+	ANTES de tocar a rede de verdade -- é o que permite este módulo (não `services`) decidir SE e
+	COMO a linha de auditoria aparece (`options.Verbose`, `Messages.HttpRequestAuditLine`), sem que
+	`services` precise conhecer `Messages.luau`/stdio (regra 03: `services` só usa a API pública de
+	`runtime`, nunca formata output do CLI). Contrato coordenado em paralelo com `coder-services` --
+	se `Services.BootstrapOptions` ainda não tiver estes três campos quando este arquivo for lido,
+	é porque as duas tarefas estavam em voo ao mesmo tempo; o nome exato dos campos foi acertado
+	entre os dois territórios ANTES de qualquer um escrever código (nunca adivinhado por um lado só).
 ]]
 
 local Runtime = require("../runtime")
@@ -75,6 +91,13 @@ export type RunOptions = {
 	Timeout: number?,
 	UseColor: boolean,
 	Verbose: boolean,
+	-- task-cli-026 (par de task-services-026, arquiteto-services-2026-09-05.md, L2.2.1/L2.2.4):
+	-- espelham `Args.Command` 1:1 ("run"), default `false` nos dois -- rede desligada por padrão,
+	-- exatamente como `HttpEnabled` num lugar recém-criado no Roblox real. `AllowHttpLocal = true`
+	-- sem `AllowHttp = true` nunca chega aqui: `Args.parseRunArgs` já garante a implicação (ver
+	-- Args.luau, "--allow-http-local").
+	AllowHttp: boolean,
+	AllowHttpLocal: boolean,
 }
 
 -- Forma ESTRUTURALMENTE idêntica a `Cli.MainResult` (`src/cli/init.luau`) -- de propósito, NÃO um
@@ -175,7 +198,31 @@ function RunCommand.Execute(options: RunOptions): Result
 
 	local scheduler = Runtime.Scheduler.new()
 	local game = Runtime.DataModel.new()
-	Services.Bootstrap({ scheduler = scheduler, dataModel = game })
+
+	-- task-cli-026 (contrato coordenado com task-services-026, arquiteto-services-2026-09-05.md,
+	-- L2.2.4, último parágrafo: "--verbose passa a imprimir uma linha por requisição de saída
+	-- (método + host, nunca corpo)"): `services` chama este callback de volta UMA VEZ por
+	-- requisição HTTP de saída, ANTES de efetivamente falar com a rede (`HttpService.behavior`,
+	-- território de `coder-services`) -- este módulo só decide SE imprime (`options.Verbose`) e
+	-- COMO formata a linha (`Messages.HttpRequestAuditLine`, que nunca recebe corpo/headers --
+	-- `method`/`host` são os dois únicos parâmetros do canal, de propósito: a auditoria não pode
+	-- vazar o que a regra 00/07 já proíbe expor). Vai para stderr (`stdio.ewrite`), mesmo canal dos
+	-- diagnósticos de projeto -- stdout continua reservado só para o que o SCRIPT do usuário
+	-- imprimiu (ver `printDiagnostics`, acima).
+	local function onHttpRequest(method: string, host: string): ()
+		if not options.Verbose then
+			return
+		end
+		stdio.ewrite(Messages.HttpRequestAuditLine(method, host) .. "\n")
+	end
+
+	Services.Bootstrap({
+		scheduler = scheduler,
+		dataModel = game,
+		AllowHttp = options.AllowHttp,
+		AllowHttpLocal = options.AllowHttpLocal,
+		OnHttpRequest = onHttpRequest,
+	})
 
 	-- task-cli-025 (item e, arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 4 do
 	-- desenho de valuetypes): `cli` é o composition root -- o ÚNICO lugar do projeto que ata

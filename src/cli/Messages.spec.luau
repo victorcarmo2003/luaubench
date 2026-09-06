@@ -37,6 +37,15 @@ test("HelpText menciona as três flags de --run e --help/--version", function()
 	assert(contains(text, "--version"), "HelpText deveria citar --version")
 end)
 
+test("HelpText documenta --allow-http/--allow-http-local -- default off e o que --allow-http-local libera", function()
+	local text = Messages.HelpText()
+	assert(contains(text, "--allow-http"), "HelpText deveria citar --allow-http")
+	assert(contains(text, "--allow-http-local"), "HelpText deveria citar --allow-http-local")
+	assert(contains(text, "Off by default"), "HelpText deveria deixar claro que a rede é desligada por padrão")
+	assert(contains(text, "local"), "HelpText deveria mencionar que a segunda flag libera destinos locais/privados")
+	assert(contains(text, "Implies --allow-http"), "HelpText deveria deixar explícita a implicação --allow-http-local -> --allow-http")
+end)
+
 test("VersionLine interpola exatamente os três parâmetros recebidos, nunca um literal fixo", function()
 	local line = Messages.VersionLine("9.9.9-teste", "0.000.0.0000000-teste", "commitDeTeste123")
 	assert(contains(line, "9.9.9-teste"), "deveria conter a versão do CLI passada")
@@ -105,6 +114,17 @@ test("LocationSegment/DiagnosticLine compõem uma linha legível com código, me
 	assert(contains(line, "project/unknown-field"), "linha deveria citar o Code")
 	assert(contains(line, "Unknown field"), "linha deveria citar a Message")
 	assert(contains(line, "tree.ReplicatedStorage"), "linha deveria citar a localização")
+end)
+
+test("HttpRequestAuditLine interpola método + host, e NUNCA menciona corpo/headers (task-cli-026)", function()
+	local line = Messages.HttpRequestAuditLine("POST", "example.com")
+	assert(contains(line, "POST"), "deveria citar o método recebido")
+	assert(contains(line, "example.com"), "deveria citar o host recebido")
+
+	-- HttpRequestAuditLine só recebe (method, host) -- não há como um corpo/header vazar por ela,
+	-- mas o teste trava a INTENÇÃO explicitamente: um payload nunca deveria aparecer numa chamada
+	-- normal com method/host limpos.
+	assert(not contains(line, "Authorization"), "linha de auditoria nunca deveria conter cabeçalho/corpo")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

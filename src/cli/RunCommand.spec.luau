@@ -14,15 +14,20 @@
 	processo real -- não há como interceptar `stdio.write`/`stdio.ewrite` de dentro do mesmo
 	processo (ver cabeçalho de `OutputFormatter.luau`).
 
-	Fixtures em `src/cli/fixtures/run-e2e/{basic,module-error,timeout}` (task-cli-006, novas):
+	Fixtures em `src/cli/fixtures/run-e2e/{basic,module-error,timeout,http-audit}` (task-cli-006,
+	novas -- `http-audit` adicionada na correção do achado MÉDIO da revisão de task-cli-026):
 	`basic` cobre setmetatable/OOP + `require` entre módulos + print/warn + LocalScript/Enabled=
 	false/Script-fora-de-container todos carregados mas nunca executados; `module-error` cobre a
-	reatribuição de linha/nome do `OutputFormatter`; `timeout` cobre `--timeout`.
+	reatribuição de linha/nome do `OutputFormatter`; `timeout` cobre `--timeout`; `http-audit`
+	cobre o contrato `OnHttpRequest`/`Messages.HttpRequestAuditLine` de ponta a ponta contra uma
+	requisição HTTP REAL (servida por um `net.serve` local que este próprio arquivo sobe -- nunca
+	uma dependência externa).
 
 	Roda com `lune run src/cli/RunCommand.spec.luau`.
 ]]
 
 local fs = require("@lune/fs")
+local net = require("@lune/net")
 local process = require("@lune/process")
 local RunCommand = require("./RunCommand")
 
@@ -55,6 +60,9 @@ local function baseOptions(projectPath: string): RunCommand.RunOptions
 		Timeout = nil,
 		UseColor = false,
 		Verbose = false,
+		-- task-cli-026: default `false` nos dois, mesma semântica de `Args.Parse` sem as flags.
+		AllowHttp = false,
+		AllowHttpLocal = false,
 	}
 end
 
@@ -196,6 +204,49 @@ test("Processo real: exit code 2 para .project.json inválido, com diagnóstico 
 	assert(string.find(result.stderr, "project/unknown-field", 1, true) ~= nil, `stderr deveria citar o Code do diagnostic: {result.stderr}`)
 	assert(string.find(result.stderr, "Traceback", 1, true) == nil, "nunca deveria vazar traceback cru do parser/engine")
 	assert(string.find(result.stderr, "stack traceback", 1, true) == nil, "nunca deveria vazar stack traceback cru")
+end)
+
+test("Processo real: fixture 'http-audit' -- OnHttpRequest/HttpRequestAuditLine fiados de ponta a ponta contra uma requisição HTTP real (achado MÉDIO, revisão task-cli-026)", function()
+	-- Porta FIXA, combinada com `src/cli/fixtures/run-e2e/http-audit/server/Main.server.lua` (o
+	-- fixture é um arquivo estático em disco -- não há como injetar a porta em tempo de execução
+	-- sem expor variável de ambiente ao sandbox do script, o que a regra 00 proíbe). Mesmo padrão
+	-- de `HttpService.spec.luau` (`TEST_PORT = 47182`) para o canário `net.serve` local -- número
+	-- diferente de propósito, para nunca colidir caso as duas suítes rodem em paralelo.
+	local TEST_PORT = 47210
+	local RESPONSE_BODY = "http-audit-ok"
+
+	-- Servidor HTTP local de verdade (nunca dependência externa) -- é contra ELE que o processo
+	-- real do `luaubench run`, abaixo, faz a requisição via `HttpService:GetAsync`.
+	local serveHandle = net.serve(TEST_PORT, function(_request: net.ServeRequest): net.ServeResponse
+		return { status = 200, body = RESPONSE_BODY }
+	end)
+
+	local result = runRealProcess({
+		"run",
+		"src/cli/main.luau",
+		"run",
+		fixturePath("run-e2e/http-audit"),
+		"--allow-http",
+		"--allow-http-local",
+		"--verbose",
+		"--no-color",
+	})
+
+	serveHandle.stop()
+
+	assert(result.code == 0, `esperava exit code 0, recebeu {result.code} (stdout: {result.stdout}, stderr: {result.stderr})`)
+	assert(
+		string.find(result.stdout, "got body: " .. RESPONSE_BODY, 1, true) ~= nil,
+		`stdout deveria conter o corpo da resposta ecoado pelo script: {result.stdout}`
+	)
+	-- Formato EXATO produzido por `Messages.HttpRequestAuditLine("GET", "127.0.0.1")` -- confirmado
+	-- contra `src/cli/Messages.luau` antes de escrever esta asserção (nunca um formato adivinhado).
+	-- `extractHost` (`services/behavior/HttpService.luau`) devolve o host SEM porta -- a linha não
+	-- carrega ":47210".
+	assert(
+		string.find(result.stderr, "[http] GET 127.0.0.1", 1, true) ~= nil,
+		`stderr deveria conter a linha de auditoria de rede (--verbose): {result.stderr}`
+	)
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

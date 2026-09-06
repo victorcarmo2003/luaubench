@@ -53,7 +53,14 @@ function Messages.HelpText(): string
 		"FLAGS:",
 		"    --timeout <seconds>   Stop the run loop after this many seconds of wall-clock time.",
 		"    --no-color            Disable ANSI colors in the output.",
-		"    --verbose             Show extra diagnostics (e.g. info-level messages).",
+		"    --verbose             Show extra diagnostics (e.g. info-level messages), and log one line per",
+		"                          outgoing HTTP request (method + host, never the body) when networking is",
+		"                          allowed.",
+		"    --allow-http          Allow HttpService:GetAsync/PostAsync/RequestAsync to make real outgoing",
+		"                          requests. Off by default, like HttpEnabled on a freshly created place.",
+		"    --allow-http-local    Also allow requests to loopback/link-local/private network destinations",
+		"                          (127.0.0.0/8, ::1, 169.254.0.0/16, 10/8, 172.16/12, 192.168/16), which are",
+		"                          otherwise refused even with --allow-http. Implies --allow-http.",
 		"    --watch               Recognized, but not supported yet -- see the error message for why.",
 		"    --help                Show this help text.",
 		"    --version             Show the LuauBench version and the Roblox API Dump version it targets.",
@@ -550,6 +557,19 @@ end
 
 function Messages.DiagnosticCountLine(errorCount: number, warningCount: number): string
 	return `{errorCount} error(s), {warningCount} warning(s).`
+end
+
+--------------------------------------------------------------------------------------------------
+-- Auditoria de rede (task-cli-026, par de task-services-026 -- arquiteto-services-2026-09-05.md,
+-- L2.2.4: "--verbose passa a imprimir uma linha por requisição de saída (método + host, nunca
+-- corpo)"). `RunCommand.luau` chama esta função de dentro do callback `OnHttpRequest` que injeta
+-- em `Services.Bootstrap` -- NUNCA formata o corpo/headers da requisição aqui (regra 00,
+-- invariante 6/7: local-first, script do usuário é código arbitrário -- a auditoria existe pra dar
+-- visibilidade ao dono da máquina sobre PARA ONDE o script falou, não sobre O QUE ele mandou).
+--------------------------------------------------------------------------------------------------
+
+function Messages.HttpRequestAuditLine(method: string, host: string): string
+	return `[http] {method} {host}`
 end
 
 return Messages

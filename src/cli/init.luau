@@ -110,6 +110,11 @@ function Cli.Main(argv: { string }): MainResult
 		Timeout = command.Timeout,
 		UseColor = resolveUseColor(command.NoColor, process.env.NO_COLOR),
 		Verbose = command.Verbose,
+		-- task-cli-026: espelha `Command.AllowHttp`/`AllowHttpLocal` 1:1 -- `Cli.Main` não decide
+		-- nada sobre a política de rede, só repassa (mesma disciplina de todos os outros campos
+		-- desta chamada).
+		AllowHttp = command.AllowHttp,
+		AllowHttpLocal = command.AllowHttpLocal,
 	})
 end
 

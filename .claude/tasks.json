@@ -2177,11 +2177,11 @@
       "id": "task-cli-026",
       "title": "Flags --allow-http e --allow-http-local + auditoria de requisicao em --verbose",
       "description": "LER a secao 'Leva 2 de services' de .claude/agents-memory/arquiteto-services-2026-09-05.md (citavel como L2) ANTES de codar. Secao L2.2.1/L2.2.4. Par de task-services-026; pode ser escrita em paralelo com ela (territorios diferentes). (1) src/cli/Args.luau: Command do tipo 'run' ganha AllowHttp: boolean e AllowHttpLocal: boolean, default false nos dois; --allow-http-local implica --allow-http (ou erra pedindo as duas -- decidir e documentar). (2) Repassar a permissao a Services.Bootstrap (BootstrapOptions ganha o campo correspondente; a definicao exata do campo e de task-services-026, coordenar). (3) Com --verbose ligado, imprimir UMA LINHA por requisicao de saida com metodo + host, NUNCA corpo nem headers -- e a versao auditavel do local-first: o usuario consegue ver o que o script dele mandou para fora. (4) Todos os textos novos em src/cli/Messages.luau, em ingles como o resto dos diagnosticos do CLI (Decisao 13 do desenho de cli). (5) --help documenta as duas flags, deixando claro que a rede e desligada por padrao e que --allow-http-local libera destinos na maquina/rede local. NAO criar luaubench.toml -- a Decisao 10 do desenho de cli continua valendo e as duas flags cabem em Args.Command.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 49,
-      "reviewResult": null,
+      "reviewResult": "APROVADO COM RESSALVAS, depois fix aplicado e reverificado. Revisor confirmou 233/233 nos 16 specs de cli. Testou ponta a ponta REAL (fixture proprio, net.serve local, process.exec real): requisicao real completa com AllowHttp+AllowHttpLocal, linha de auditoria [http] GET 127.0.0.1 aparece de verdade no stderr. Sem flags: HttpEnabled nasce false, erro capturado, luaubench run normal nao quebra. AllowHttpLocal sozinho implica AllowHttp de verdade (testado); AllowHttp sozinho sem local recusa loopback sem auditar (nada saiu de verdade). --help lista as duas flags. --strict, zero any real. Territorio limpo (8 arquivos exatos), nenhum luaubench.toml criado. Nenhuma flag existente regrediu. 1 achado MEDIO: faltava teste automatizado do contrato OnHttpRequest ponta a ponta -- corrigido com fixture run-e2e/http-audit/ + teste real em RunCommand.spec.luau (net.serve local + process.exec real + assert no stderr). Reverificado por mim: 13/13. Suite completa 234/234.",
       "tags": [
         "cli",
         "httpservice",

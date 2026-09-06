@@ -5,6 +5,9 @@
 	flags de "run" (--timeout/--no-color/--verbose), argumento faltando em --timeout, flag
 	desconhecida, e --watch com o motivo técnico real (nunca "flag desconhecida").
 
+	task-cli-026 (par de task-services-026): adiciona --allow-http/--allow-http-local -- default
+	false nos dois, e --allow-http-local IMPLICA --allow-http (decisão registrada em Args.luau).
+
 	Roda com `lune run src/cli/Args.spec.luau`.
 ]]
 
@@ -54,6 +57,8 @@ test("argv vazio vira Kind 'run' com ProjectPath nil (comando padrão, sem 'run'
 		assert(command.Timeout == nil, "sem --timeout, Timeout deveria ser nil")
 		assert(command.NoColor == false, "sem --no-color, NoColor deveria começar false")
 		assert(command.Verbose == false, "sem --verbose, Verbose deveria começar false")
+		assert(command.AllowHttp == false, "sem --allow-http, AllowHttp deveria começar false (rede desligada por padrão)")
+		assert(command.AllowHttpLocal == false, "sem --allow-http-local, AllowHttpLocal deveria começar false")
 	end
 end)
 
@@ -82,6 +87,37 @@ test("--no-color e --verbose setam as flags booleanas correspondentes", function
 	if command.Kind == "run" then
 		assert(command.NoColor == true, "--no-color deveria setar NoColor = true")
 		assert(command.Verbose == true, "--verbose deveria setar Verbose = true")
+	end
+end)
+
+--------------------------------------------------------------------------------------------------
+-- --allow-http / --allow-http-local (task-cli-026, par de task-services-026)
+--------------------------------------------------------------------------------------------------
+
+test("--allow-http sozinho seta AllowHttp = true e deixa AllowHttpLocal = false", function()
+	local command = Args.Parse({ "run", "--allow-http" })
+	assert(command.Kind == "run", "deveria continuar Kind 'run'")
+	if command.Kind == "run" then
+		assert(command.AllowHttp == true, "--allow-http deveria setar AllowHttp = true")
+		assert(command.AllowHttpLocal == false, "--allow-http sozinho não deveria mexer em AllowHttpLocal")
+	end
+end)
+
+test("--allow-http-local sozinho IMPLICA --allow-http (seta os dois, sem exigir a outra flag)", function()
+	local command = Args.Parse({ "run", "--allow-http-local" })
+	assert(command.Kind == "run", "deveria continuar Kind 'run'")
+	if command.Kind == "run" then
+		assert(command.AllowHttp == true, "--allow-http-local deveria IMPLICAR AllowHttp = true")
+		assert(command.AllowHttpLocal == true, "--allow-http-local deveria setar AllowHttpLocal = true")
+	end
+end)
+
+test("--allow-http-local junto de --allow-http explícito não erra e produz o mesmo resultado", function()
+	local command = Args.Parse({ "run", "--allow-http", "--allow-http-local" })
+	assert(command.Kind == "run", "as duas flags juntas não deveriam virar erro")
+	if command.Kind == "run" then
+		assert(command.AllowHttp == true, "AllowHttp deveria ser true")
+		assert(command.AllowHttpLocal == true, "AllowHttpLocal deveria ser true")
 	end
 end)
 
