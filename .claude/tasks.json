@@ -2231,7 +2231,7 @@
       "id": "task-services-028",
       "title": "PESQUISA: as 6 pendencias abertas da leva 2 de services",
       "description": "Fecha a lista 'Pendencias para o pesquisador' de .claude/agents-memory/arquiteto-services-2026-09-05.md, secao L2 (final). Nenhuma bloqueia o inicio das tarefas; todas precisam de resposta antes de revisor-services aprovar a leva. (1) Formula numerica do budget de DataStore por tipo de requisicao, lida LINHA A LINHA do Markdown bruto oficial (https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/cloud-services/data-stores/error-codes-and-limits.md) -- dois fetches da mesma pagina divergiram na pesquisa anterior; so importa se um dia houver modo de throttle opt-in. (2) Mensagem de erro exata para valor nao serializavel em SetAsync/UpdateAsync (NaN, inf, funcao, Instance, tabela com chave mista). (3) RegisterCollisionGroup com nome ja registrado: erra ou e idempotente? Ha restricao cliente/servidor em RegisterCollisionGroup/CollisionGroupSetCollidable? (4) Lighting.ClockTime escrito fora de [0, 24): wrap, clamp ou erro? TimeOfDay lido tem zero-padding? (5) Texto verbatim do erro de HttpService com HTTP desabilitado, e do erro de SoundService:PlayLocalSound chamado no servidor -- este ultimo decide se a regra B.5.5 se aplica a PlayLocalSound. (6) GetGlobalDataStore() devolve ClassName 'GlobalDataStore' ou 'DataStore' no motor real? (O dump diz DataStore e o desenho segue o dump; confirmar.) Marcar NAO CONFIRMADO onde nao houver evidencia -- nunca preencher por inferencia.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "pesquisador",
       "reviewer": null,
       "wave": 45,
@@ -2245,7 +2245,7 @@
       "acceptance": "Relatorio em .claude/agents-memory/pesquisa-services-leva2-pendencias-2026-09-05.md com uma secao por pergunta, fonte citada por item e NAO CONFIRMADO explicito onde faltar evidencia; resumo curto devolvido a thread principal.",
       "createdAt": "2026-09-05",
       "updatedAt": "2026-09-05",
-      "result": null
+      "result": "Pesquisa concluida e consumida. 6 pendencias fechadas: (1) formula de budget de DataStore confirmada (60+40n/5+2n/30+5n conforme tipo de requisicao); (2) NaN/inf sao ACEITOS pelo motor real via Engine API (correcao de premissa errada, repassada em tempo real ao coder de task-services-017 via SendMessage antes de fechar); (3) restricao cliente/servidor de RegisterCollisionGroup confirmada so pra Unregister/RenameCollisionGroup (usado em task-services-023); (4) Lighting.ClockTime fora de [0,24) evidencia reset a 0, nao wrap (usado em task-services-024-fix); (5) string exata de erro HttpService/PlayLocalSound -- PlayLocalSound confirmada, HttpService nao confirmada; (6) GetGlobalDataStore() confirmado devolver ClassName DataStore. Relatorio: .claude/agents-memory/pesquisa-services-leva2-pendencias-2026-09-05.md"
     },
     {
       "id": "task-valuetypes-002-fix",
@@ -2413,6 +2413,167 @@
       "createdAt": "2026-09-06",
       "updatedAt": "2026-09-06",
       "reviewResult": "APROVADO, zero achados. Revisor reproduziu tudo de forma independente: 191/191 na suite completa de runtime. Reproduziu o bug do zero (copiou runtime pro scratchpad, restaurou Sandbox.luau ao estado do HEAD sem env.type, confirmou erro attempt to call a nil value) e confirmou o fix resolve. Testou os 8 tipos base do Luau via type() dentro do sandbox (incluindo newproxy/coroutine.running). Confirmou type()/typeof() continuam distintos pros mesmos valores (Instance/Signal/Connection). Codigo confirmado como referencia direta ao type nativo por upvalue, sem wrapper, zero superficie de escape nova (introspeccao pura sem estado). --strict, zero any novo, territorio limpo. Rodou o cenario real do ProfileStore (datastore-profilestore-pattern.scenario.luau) e confirmou passos 1-2 agora passam de verdade com o fix em producao -- passo 3 continua falhando por limitacao arquitetural ja documentada (JobId constante por processo), nao relacionado a este fix."
+    },
+    {
+      "id": "task-services-029",
+      "title": "datastore/Snapshot.luau: envelope de valor + documento serializavel do cloud",
+      "description": "Modulo NOVO src/services/datastore/Snapshot.luau. Traduz o dominio de valor que Value.CheckSerializable aceita para/de JSON sem perda. NECESSARIO porque JSON cru NAO cobre o dominio -- medido empiricamente contra @lune/serde 0.10.5: NaN/inf/-inf viram null SEM ERRO; array esparso {[1]=1,[3]=3} vira [1] SEM ERRO (perde elemento); {[2]='a'}/{[-1]='a'}/{[1.5]='a'} e string com byte invalido em UTF-8 ERRAM no encode. Os dois primeiros sao corrupcao silenciosa e violam a invariante 2. Envelope 'plain quando da, tagueado quando precisa', regras completas em .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secao 4 (tabela de 8 linhas): boolean/number finito/string UTF-8 valida saem crus; nao-finito vira {\"$\":\"n\",\"v\":\"nan\"|\"inf\"|\"-inf\"}; string invalida vira {\"$\":\"s\",\"hex\":...}; tabela densa 1..n vira array; tabela so-string SEM a chave '$' vira object; QUALQUER outra tabela (numerica esparsa/negativa/fracionaria/nao iniciando em 1, ou dicionario que contenha a chave '$') vira {\"$\":\"m\",\"e\":[[k,v],...]}. Decode simetrico e SEM ambiguidade: object COM '$' e sempre tag, SEM '$' e sempre dicionario. Tambem define o documento de topo (SchemaVersion=1, Kind, SavedAt, Stores[storeId]={Name,Scope,Keys}) e recusa com erro claro SchemaVersion desconhecido -- nunca ignora nem sobrescreve. Usa @lune/serde (ja usado por behavior/HttpService.luau, nao e dependencia nova) e NUNCA @lune/fs. TERRITORIO: so src/services/datastore/Snapshot.luau + spec.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 51,
+      "tags": [
+        "services",
+        "persistencia-cloud",
+        "datastore"
+      ],
+      "priority": "high",
+      "acceptance": "INVARIANTE CENTRAL, property test: para todo v com Value.CheckSerializable(v)==nil, DeepEqual(Decode(decode_json(encode_json(Encode(v)))), v). Gerador cobrindo as 8 linhas da tabela do desenho MAIS os 5 casos hostis medidos (NaN, inf, -inf, array esparso, {[2]='a'}, {[-1]='a'}, {[1.5]='a'}, string com byte 0xFF, dicionario contendo a chave '$'). Documento com SchemaVersion maior que o suportado erra com mensagem nomeando encontrada vs suportada. JSON invalido erra claro. --strict sem any. ZERO require de @lune/fs no modulo.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-services-030",
+      "title": "Store.Export/Import/IsDirty + restauracao do versionCounter + poda de 30 dias",
+      "description": "Acrescenta bulk e marca-suja a src/services/datastore/Store.luau (que hoje so tem Get/Set/Update/Remove/GetVersion/ListVersions/ListKeys). Export devolve o estado inteiro deep-copiado como Snapshot = {[storeId]:{[key]:{CreatedTime, Versions:{StoredVersion}}}}, aplicando poda por IDADE: descarta toda versao NAO-CORRENTE com UpdatedTime mais velho que 30 dias (retencao confirmada em .claude/agents-memory/pesquisa-datastore-2026-09-05.md linha 127 -- NAO e numero inventado); a versao CORRENTE nunca e podada mesmo velha, senao a chave sumiria. Import substitui o estado inteiro e recusa snapshot malformado com erro claro (nunca aceita parcialmente). ACHADO QUE E ACCEPTANCE, NAO DETALHE: Store.new() comeca versionCounter=0 e o cabecalho do modulo DECLARA que a largura fixa de Version ('%013d-%010d') existe para que a ordem lexicografica bata com a ordem de insercao -- numa 2a execucao que carrega arquivo, o contador reiniciando em 1 faria uma versao NOVA escrita no mesmo milissegundo ordenar ANTES de uma versao antiga com contador maior, quebrando a garantia em silencio e fazendo ListVersionsAsync mentir sobre a ordem. Import OBRIGATORIAMENTE faz versionCounter = max(contador de toda versao carregada) + 1. IsDirty/ClearDirty: marcado por toda mutacao (Set/Update/Remove), zerado por quem persistiu -- e o que permite pular o serde.encode quando nada mudou (o encode domina o custo: 44ms de 46ms em 540KiB, medido). Store.luau continua SEM saber o que e JSON/arquivo/caminho. TERRITORIO: so src/services/datastore/Store.luau + spec. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secao 5.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 51,
+      "tags": [
+        "services",
+        "persistencia-cloud",
+        "datastore"
+      ],
+      "priority": "high",
+      "acceptance": "Export/Import round-trip preserva historico completo, CreatedTime, UpdatedTime, UserIds, Metadata e Tombstone de toda versao. Teste ESPECIFICO do versionCounter: exporta com N versoes, cria Store novo, importa, escreve mais uma -- a Version nova ordena lexicograficamente DEPOIS de todas as importadas mesmo forcando o mesmo milissegundo. Poda: versao nao-corrente com UpdatedTime > 30 dias some do Export; versao corrente antiga PERMANECE. Import de snapshot malformado erra claro, sem estado parcial. IsDirty falso apos Import; verdadeiro apos Set/Update/Remove; falso apos ClearDirty. Deep copy nos dois lados (mutar o retorno de Export nao altera o store). --strict sem any. ZERO @lune/fs.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-services-032",
+      "title": "MessagingService: auditoria OnMessagePublished em --verbose, SEM persistencia",
+      "description": "DECISAO EXPLICITA DO ARQUITETO (secao 7 do desenho): MessagingService NAO ganha persistencia nenhuma, e isso e FIDELIDADE, nao economia de escopo -- no Roblox real o pub/sub e efemero, PublishAsync entrega so a quem ja esta inscrito naquele momento; nao existe mensagem pendente, fila nem backlog. Persistir 'mensagens pendentes' inventaria comportamento que a classe real nao tem DENTRO do namespace da classe real (regra 00, invariante 1, proibido). O que serve a intencao do usuario sem mentir e OBSERVABILIDADE: acrescentar BootstrapOptions.OnMessagePublished ((topic: string, byteSize: number) -> ())?, lido SO via Context.NotifyMessagePublished (nunca de BootstrapOptions direto), chamado uma vez por PublishAsync. Precedente exato, mesmo canal, mesma forma: OnHttpRequest/Context.NotifyHttpRequest (task-services-026). O CORPO DA MENSAGEM NUNCA SAI -- topic e byteSize sao os dois unicos parametros, de proposito, mesma regra que barra corpo/headers na auditoria de HTTP. NAO e propriedade/metodo/evento de MessagingService: o script do usuario nao alcanca isso de jeito nenhum. NENHUM arquivo de log novo (ninguem pediu; inventar formato antes de existir demanda e o erro que a Decisao 10 de cli ja evitou). TERRITORIO: src/services/Types.luau, src/services/Context.luau, src/services/behavior/MessagingService.luau + specs.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 51,
+      "tags": [
+        "services",
+        "persistencia-cloud",
+        "messagingservice",
+        "observabilidade"
+      ],
+      "priority": "medium",
+      "acceptance": "OnMessagePublished chamado exatamente uma vez por PublishAsync bem-sucedido, com o topico e o tamanho em bytes (via Value.EstimateByteSize, ja usado pelo modulo). NAO chamado quando PublishAsync erra na validacao (topico/tamanho invalido) -- nada foi publicado, nada a auditar. nil/omitido e NO-OP silencioso, nunca erro (mesma disciplina de NotifyHttpRequest). Nenhuma propriedade/metodo/evento novo em MessagingService (ClassBuilder continuaria recusando). Nenhuma persistencia. Nenhum arquivo novo. --strict sem any.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-029",
+      "title": "CloudStore.luau: ponto unico de @lune/fs para o estado cloud simulado",
+      "description": "Modulo NOVO src/cli/CloudStore.luau -- o UNICO lugar do projeto autorizado a ler/escrever dentro de .luaubench/, auditavel por um grep de uma linha. DECISAO DO ARQUITETO (secao 2 do desenho): @lune/fs fica em cli, NAO em services, e por isso NENHUMA invariante da regra 00 e violada nesta feature. Razao principal: o caminho de persistencia e relativo ao .project.json que ProjectFile.Locate resolveu -- informacao que so cli tem; um modulo em services teria que RECEBER o caminho de cli de qualquer jeito, entao passar um port em vez de um caminho e estritamente melhor (services deixa de tocar disco e o teste de services injeta um fake em memoria). API: CloudStore.Open(projectRoot: string, onFirstCreate: (path: string) -> ()) -> Store, onde Store e estruturalmente compativel com Services.CloudPersistence ({Load: (document: string) -> string?, Save: (document: string, contents: string) -> ()}). 'document' e um nome logico ('datastore' hoje, 'memorystore' numa leva futura), NUNCA um caminho -- quem transforma nome em caminho e este modulo. Layout: <projectRoot>/.luaubench/cloud/<document>.json, ancorado no diretorio do .project.json RESOLVIDO e nunca em process.cwd() (para que 'luaubench run caminho/para/projeto' de qualquer cwd atinja sempre o mesmo arquivo). Open NAO toca o disco: o diretorio so nasce na primeira GRAVACAO (uma execucao que so le nunca cria pasta no projeto do usuario). Escrita ATOMICA: writeFile(tmp) + move(tmp, final, {overwrite=true}) -- custo medido irrelevante (0 a 1.3ms), e evita datastore.json truncado se o processo morrer no meio. AUTO-GITIGNORE (secao 9 do desenho): ao criar .luaubench/ pela primeira vez, escreve .luaubench/.gitignore com o conteudo '*' -- o git do usuario passa a ignorar o diretorio inteiro SEM que o LuauBench encoste no .gitignore da raiz dele (editar arquivo versionado do usuario sem ele pedir seria intrusivo). onFirstCreate dispara UMA VEZ, so na criacao, para quem chama imprimir a linha informativa. Load ERRA (nunca devolve nil) se o arquivo existe mas esta ilegivel -- perder estado do usuario em silencio e proibido; devolve nil so quando o arquivo nunca existiu. TERRITORIO: so src/cli/CloudStore.luau + spec. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secoes 2, 3, 9, 10.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 51,
+      "tags": [
+        "cli",
+        "persistencia-cloud",
+        "filesystem"
+      ],
+      "priority": "high",
+      "acceptance": "Open nao cria nada no disco. Primeira Save cria .luaubench/, .luaubench/cloud/ e .luaubench/.gitignore com conteudo '*', e dispara onFirstCreate UMA vez (nao dispara na segunda Save). Load de documento inexistente devolve nil; Load de arquivo ilegivel/sem permissao ERRA (nunca nil). Save e atomico (teste confirma que nao sobra .tmp e que o conteudo final e integro). 'document' nunca vira componente de caminho arbitrario -- teste com nome contendo '../' e barra confirma recusa ou normalizacao segura. Caminho ancorado em projectRoot, nunca em cwd (teste rodando de um cwd diferente). --strict sem any. Grep confirma que este e o unico require('@lune/fs') introduzido pela feature.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-031",
+      "title": "GAP PRE-EXISTENTE: chamar RunBindToCloseCallbacks depois de scheduler:Run",
+      "description": "Gap real descoberto pelo arquiteto durante o desenho de persistencia, INDEPENDENTE dela (por isso tarefa propria, sem depends). DataModel.RunBindToCloseCallbacks existe em src/runtime/DataModel.luau linha 338 (task-runtime-033, aprovada e testada) e NENHUM chamador existe em src/cli/** -- confirmado por grep. Consequencia hoje: game:BindToClose(callback) registra callbacks que JAMAIS disparam. Isso importa muito para o caso de uso central do projeto: a gravacao final de sessao do ProfileStore mora exatamente dentro de um BindToClose, entao a ferramenta silenciosamente pula o passo mais importante do ciclo de vida de um data manager real. FIX: RunCommand.Execute passa a chamar DataModel.RunBindToCloseCallbacks(game, scheduler) DEPOIS de scheduler:Run(shouldContinue) retornar e ANTES do sumario final (passo 12). Confira o cabecalho de DataModel.luau linhas 64-73 para a semantica exata (dispara E ESPERA todos os callbacks registrados de uma raiz antes de devolver o controle) antes de decidir onde exatamente encaixar. TERRITORIO: so src/cli/RunCommand.luau + spec.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 51,
+      "tags": [
+        "cli",
+        "bug",
+        "bindtoclose",
+        "gap-pre-existente"
+      ],
+      "priority": "high",
+      "acceptance": "Um script que chama game:BindToClose(fn) tem fn executado de verdade ao fim de luaubench run, antes do sumario. Callback que yielda (task.wait) e esperado ate terminar. Erro dentro de um callback nao derruba o processo nem impede os outros (confirma a semantica que DataModel ja garante). Projeto sem nenhum BindToClose continua identico (no-op, sem custo, sem linha nova no output). Exit code inalterado. --strict sem any. Suite de cli sem regressao.",
+      "depends": [],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-services-031",
+      "title": "Fiacao da persistencia em services: CloudPersistence, Context, marca-suja, load no Bootstrap",
+      "description": "Amarra o que task-services-029 e task-services-030 construiram. (a) src/services/Types.luau: export type CloudPersistence = {Load: (document: string) -> string?, Save: (document: string, contents: string) -> ()} e o campo BootstrapOptions.CloudPersistence: CloudPersistence? (nil == sem persistencia nenhuma, que e o comportamento de hoje e o que --no-persist produz). (b) src/services/Context.luau: Context.GetCloudPersistence(): CloudPersistence? -- canal unico, nenhum behavior/*.luau le BootstrapOptions direto (mesma disciplina de IsHttpAllowed/NotifyHttpRequest). Diferente de GetScheduler/GetDataModel, a AUSENCIA do port e estado normal e frequente, nao erro de engenharia -- devolve nil, nunca erra (mesma logica de NotifyHttpRequest). (c) src/services/behavior/GlobalDataStore.luau: toda mutacao bem-sucedida marca o store como sujo (O(1), sincrono, nenhum I/O) -- cobre SetAsync/UpdateAsync/RemoveAsync/IncrementAsync e o caminho de OrderedDataStore, ja que os metodos sao achatados pela cadeia de classes. (d) src/services/init.luau: Services.Bootstrap, se CloudPersistence ~= nil, chama Load('datastore'), decodifica via Snapshot e faz store:Import -- ANTES de qualquer script rodar; falha de decode PROPAGA (cli transforma em erro de projeto exit 2), nunca 'recomeca do zero em silencio'. (e) src/services/init.luau: Services.FlushCloudState(): (boolean, string?) -- grava se houver algo sujo, no-op silencioso se nao houver ou se nenhum port foi injetado, e NUNCA propaga erro de I/O (erro vira false + mensagem, para cli decidir o que imprimir; perder persistencia nao deve derrubar a execucao do script). Services.HasPendingCloudState(): boolean para o sumario. services continua SEM @lune/fs -- so @lune/serde, que ja usa. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secao 10.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 52,
+      "tags": [
+        "services",
+        "persistencia-cloud",
+        "datastore"
+      ],
+      "priority": "high",
+      "acceptance": "Com um port FAKE em memoria (nenhum @lune/fs no teste): escrever via SetAsync, chamar FlushCloudState, criar um Services novo com o mesmo fake e confirmar que GetAsync devolve o valor da 'execucao anterior', com Version/CreatedTime/UpdatedTime/UserIds/Metadata/Tombstone intactos e ListVersionsAsync devolvendo o historico completo na ordem certa. Sem port injetado (nil): comportamento IDENTICO ao de hoje, zero I/O, FlushCloudState no-op devolvendo false sem mensagem de erro. FlushCloudState nao serializa nada quando nada esta sujo (confirmado contando chamadas no fake). Save que erra vira (false, mensagem), nunca excecao propagada. Load que erra no Bootstrap PROPAGA. --strict sem any. ZERO require de @lune/fs em src/services/**. Suite de services sem regressao.",
+      "depends": [
+        "task-services-029",
+        "task-services-030"
+      ],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-cli-030",
+      "title": "Fiacao da persistencia em cli: --no-persist, flush por tique, flush final, mensagens",
+      "description": "Amarra CloudStore ao pipeline. (a) src/cli/Args.luau + RunCommand.RunOptions: flag --no-persist (default false, ou seja persistencia LIGADA por padrao -- e o comportamento que o usuario descreveu como natural). E a UNICA flag nova justificada: CI, cenarios deterministicos do testador, e reproduzir do zero. NAO inventar --cloud-dir/--persist-format/--cloud-reset (apagar estado e rm -rf .luaubench/). (b) RunCommand: cloud = if options.NoPersist then nil else CloudStore.Open(dirOf(projectPath), onFirstCreate) ANTES do passo 7, e passa CloudPersistence = cloud em Services.Bootstrap (que LE o arquivo ali, antes de qualquer script). (c) FLUSH COALESCIDO POR TIQUE: buildShouldContinue passa a tambem chamar Services.FlushCloudState(). Scheduler:Run consulta shouldContinue DUAS VEZES POR TIQUE (src/runtime/Scheduler.luau linhas 449-470) -- e portanto um gancho de fronteira de tique que JA EXISTE e JA E DE CLI, sem nenhuma API nova de runtime. MEDICAO QUE JUSTIFICA A COALESCENCIA (nao adivinhe, esta no desenho secao 6): @lune/fs NAO tem append, entao toda escrita e o arquivo inteiro; snapshot inteiro custa 0.98ms (10 chaves) / 7.01ms (100) / 46.24ms (1000), dominado pelo serde.encode e nao pelo I/O. Persistir sincronamente a cada SetAsync tornaria um laco de N escritas O(N^2) -- 1000 escritas num store de 1000 chaves ~= 46 SEGUNDOS. Trade-off DECLARADO: a janela de durabilidade e um tique (~16ms); kill -9 no meio de um tique perde as escritas dele. USAR shouldContinue tambem como gancho de efeito colateral e legitimo (cli e o dono dele) mas PRECISA estar comentado no codigo, senao parece acidente. (d) FLUSH FORCADO em tres pontos: depois de scheduler:Run retornar; depois de RunBindToCloseCallbacks (task-cli-031); e no caminho de saida por --timeout. (e) src/cli/Messages.luau: linha informativa de primeira criacao do diretorio (dispara via onFirstCreate, UMA vez, stderr) dizendo o que foi criado, que e git-ignored por padrao, e como desfazer (apagar .luaubench/.gitignore) para quem quiser versionar como fixture de time. (f) POLITICA DE ERRO: falha de LEITURA e erro de projeto claro apontando o arquivo, exit 2, e o arquivo NAO e sobrescrito (nunca 'comeca do zero em silencio', que apagaria estado real). Falha de ESCRITA e UM warning por execucao (nunca um por tique) e o script continua rodando com o estado em memoria. Desenho: .claude/agents-memory/arquiteto-persistencia-cloud-2026-09-06.md secoes 6, 9, 10.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 53,
+      "tags": [
+        "cli",
+        "persistencia-cloud"
+      ],
+      "priority": "high",
+      "acceptance": "Teste de integracao com projeto-fixture: 1a execucao escreve via SetAsync e sai; .luaubench/cloud/datastore.json existe com o valor; 2a execucao le o valor da 1a. --no-persist nao cria .luaubench/ e nao le estado existente. FlushCloudState nao e chamado com custo quando nada esta sujo. Linha informativa aparece UMA vez (so na criacao do diretorio), no stderr, nunca a cada execucao. Arquivo corrompido gera erro de projeto claro apontando o caminho, exit 2, E o arquivo continua intacto no disco depois da falha. Falha de escrita gera UM warning e exit code inalterado (script continua). O uso de shouldContinue como gancho de flush esta comentado explicitamente no codigo. --strict sem any. Suite de cli sem regressao.",
+      "depends": [
+        "task-cli-029",
+        "task-services-031"
+      ],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
+    },
+    {
+      "id": "task-test-cloud-001",
+      "title": "Cenario: estado cloud sobrevive entre duas execucoes de luaubench run",
+      "description": "Cenario de ponta a ponta em tests/scenarios/ provando a promessa da feature do ponto de vista de quem usa: rodar luaubench run duas vezes contra o MESMO projeto-fixture e confirmar que o DataStore persistiu entre elas, enquanto a arvore de Instance/scripts foi reconstruida do zero (que e o comportamento correto e nao muda). Cobrir tambem: --no-persist nao persiste nem le; historico de versao (ListVersionsAsync) sobrevive ao restart na ordem certa; OrderedDataStore mantem a ordenacao depois do restart. VALOR EXTRA se der: este e o unico caminho que finalmente permite testar o Steal/Cancel de sessao do ProfileStore de verdade -- o cabecalho de tests/scenarios/datastore-profilestore-pattern.scenario.luau (linhas 63-83) documenta que o passo 3 nao pode passar hoje porque JobId e constante por processo e a persistencia era so intra-processo; com dois PROCESSOS lune separados contra armazenamento persistido, a opcao (a) que aquele cabecalho lista passa a existir. Avaliar se da pra tirar o passo 3 do estado conhecido de falha, e se NAO der, dizer no relatorio por que (nao forcar). TERRITORIO: so tests/scenarios/ (mais fixtures proprias); read-only em src/**.",
+      "column": "todo",
+      "agent": "testador",
+      "reviewer": null,
+      "wave": 54,
+      "tags": [
+        "testes",
+        "persistencia-cloud",
+        "cenario"
+      ],
+      "priority": "medium",
+      "acceptance": "Cenario roda dois processos luaubench run reais contra o mesmo fixture e afirma persistencia de valor, de historico de versao e de ordenacao de OrderedDataStore. --no-persist coberto (nao cria diretorio, nao le estado). Fixture limpa o proprio .luaubench/ antes e depois (teste deterministico, nunca herda estado de uma execucao anterior da suite). Relatorio diz explicitamente se o passo 3 do cenario de ProfileStore saiu do estado conhecido de falha e, se nao saiu, por que.",
+      "depends": [
+        "task-cli-030"
+      ],
+      "createdAt": "2026-09-06",
+      "updatedAt": "2026-09-06"
     }
   ]
 }
