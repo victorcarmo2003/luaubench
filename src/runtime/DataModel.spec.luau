@@ -525,5 +525,119 @@ test("BindToClose fica protegido contra sobrescrita (mesma disciplina de GetServ
 	)
 end)
 
+--[[
+	Testes NOVOS da task-runtime-038 (fix real do achado de task-cli-033 -- ver campo `result`
+	daquela task em .claude/tasks.json e o bloco dedicado no cabeçalho de DataModel.luau).
+	`onCallbackError` filtra por identidade de THREAD PRÓPRIA: só as threads que
+	`RunBindToCloseCallbacks` cria via `scheduler:Spawn` para os callbacks de `BindToClose`
+	registrados -- nunca uma thread alheia que por acaso seja retomada e erre durante a mesma
+	janela (o cenário exato do bug: `scheduler:Run` dentro desta função é um laço GENÉRICO que
+	drena TODAS as threads vivas do Scheduler recebido).
+]]
+
+test("onCallbackError OMITIDO: comportamento observável idêntico ao de antes (erro de callback ainda só sai por ThreadError, nada mais é chamado)", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local threadErrors: { string } = {}
+
+	scheduler.ThreadError:Connect(function(_thread, message: string)
+		table.insert(threadErrors, message)
+	end)
+
+	dataModel:BindToClose(function()
+		error("callback de BindToClose falhou de propósito (teste onCallbackError omitido)")
+	end)
+
+	local ok = pcall(function()
+		DataModel.RunBindToCloseCallbacks(dataModel, scheduler)
+	end)
+
+	assert(ok, "RunBindToCloseCallbacks nunca deveria propagar o erro de um callback, com ou sem onCallbackError")
+	assert(#threadErrors == 1, `deveria ter reportado exatamente 1 ThreadError (via o listener externo do teste), recebeu {#threadErrors}`)
+end)
+
+test("onCallbackError FORNECIDO: erro de um callback de BindToClose registrado nesta mesma chamada dispara onCallbackError", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local captured: { { thread: thread, message: string } } = {}
+
+	dataModel:BindToClose(function()
+		error("callback de BindToClose falhou de propósito (teste onCallbackError fornecido)")
+	end)
+
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler, function(erroredThread: thread, message: string)
+		table.insert(captured, { thread = erroredThread, message = message })
+	end)
+
+	assert(#captured == 1, `onCallbackError deveria ter sido chamado exatamente 1 vez, recebeu {#captured}`)
+	assert(
+		string.find(captured[1].message, "callback de BindToClose falhou de propósito", 1, true) ~= nil,
+		`mensagem repassada a onCallbackError deveria conter o erro original, recebeu: {captured[1].message}`
+	)
+end)
+
+test(
+	"onCallbackError NUNCA dispara para erro de thread ALHEIA (não criada por esta chamada de RunBindToCloseCallbacks), mesmo resolvida durante a mesma janela",
+	function()
+		local scheduler = Scheduler.new()
+		local dataModel = DataModel.new()
+		local callbackErrorCalls = 0
+		local foreignThreadErrors: { string } = {}
+
+		-- Reproduz a causa raiz do bug de task-cli-033: uma thread ALHEIA (aqui, simulando o
+		-- script principal) fica suspensa em `scheduler:Wait` e só é retomada (e erra) quando
+		-- `scheduler:Run` roda de novo por dentro de `RunBindToCloseCallbacks` -- exatamente a
+		-- janela em que o laço genérico de `Run` drena QUALQUER thread viva do Scheduler, não só
+		-- as de BindToClose.
+		scheduler:Spawn(function()
+			scheduler:Wait(0.01)
+			error("erro de thread alheia -- NÃO deveria disparar onCallbackError")
+		end)
+
+		-- Escuta o ThreadError cru só para confirmar que o erro alheio de fato ocorre (sanity
+		-- check independente do filtro sob teste) -- não é o listener sob teste.
+		scheduler.ThreadError:Connect(function(_thread, message: string)
+			table.insert(foreignThreadErrors, message)
+		end)
+
+		-- Callback de BindToClose de verdade, que também yielda, para garantir que a janela de
+		-- `RunBindToCloseCallbacks` continua aberta tempo suficiente para a thread alheia acima
+		-- ser retomada e errar durante o mesmo `scheduler:Run`.
+		dataModel:BindToClose(function()
+			scheduler:Wait(0.02)
+		end)
+
+		DataModel.RunBindToCloseCallbacks(dataModel, scheduler, function(_erroredThread: thread, _message: string)
+			callbackErrorCalls += 1
+		end)
+
+		assert(#foreignThreadErrors == 1, `sanity check: a thread alheia deveria mesmo ter errado durante a janela, recebeu {#foreignThreadErrors} ThreadError(s)`)
+		assert(
+			callbackErrorCalls == 0,
+			`onCallbackError NUNCA deveria disparar para erro de thread alheia, recebeu {callbackErrorCalls} chamada(s)`
+		)
+	end
+)
+
+test("onCallbackError: desconecta seu próprio listener antes de devolver -- erro de thread alheia DEPOIS de RunBindToCloseCallbacks retornar não é mais observado por ele", function()
+	local scheduler = Scheduler.new()
+	local dataModel = DataModel.new()
+	local callbackErrorCalls = 0
+
+	dataModel:BindToClose(function() end)
+
+	DataModel.RunBindToCloseCallbacks(dataModel, scheduler, function(_erroredThread: thread, _message: string)
+		callbackErrorCalls += 1
+	end)
+
+	-- Depois que RunBindToCloseCallbacks já retornou: uma thread nova, alheia, que erra no mesmo
+	-- scheduler não deveria acionar o listener já desconectado.
+	scheduler:Spawn(function()
+		error("erro depois da janela de BindToClose já ter fechado")
+	end)
+
+	assert(callbackErrorCalls == 0, `listener deveria ter sido desconectado ao final de RunBindToCloseCallbacks, recebeu {callbackErrorCalls} chamada(s) depois da janela`)
+end)
+
 print(`\n{passedCount}/{totalCount} testes passaram`)
 process.exit(0)

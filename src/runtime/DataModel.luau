@@ -107,12 +107,41 @@
 	mesmo `JobId`, de propósito (um processo Lune == um servidor). `PlaceId`/`GameId`/
 	`PlaceVersion` ficam fixos em `0` -- o valor que o próprio Roblox usa para um lugar não
 	publicado, coerente com o LuauBench, que não tem "lugar" nenhum.
+
+	task-runtime-038 (fix real do achado de task-cli-033, ver campo `result` daquela task em
+	.claude/tasks.json): `RunBindToCloseCallbacks` ganha um 3º parâmetro OPCIONAL,
+	`onCallbackError: ((thread, string) -> ())?`. Causa raiz do bug: `cli` (`RunCommand.luau`)
+	conecta um listener PEGA-TUDO em `scheduler.ThreadError` durante a janela desta função --
+	mas esta função chama `scheduler:Run(shouldContinue)`, um laço GENÉRICO que drena TODAS as
+	threads vivas do `Scheduler` recebido, não só as que ela mesma spawna para os callbacks de
+	`BindToClose`. Se uma thread ALHEIA (ex.: o script principal, suspenso além do `--timeout` de
+	`cli`) for retomada e errar dentro dessa janela, o mesmo erro batia em dois listeners
+	pega-tudo diferentes (o de `Sandbox.Run`, que nunca desconecta, e o de `RunCommand`) --
+	contado 2x.
+
+	FIX: replica aqui o mesmo padrão `ownThreads` que `Sandbox.Run` já usa (Sandbox.luau) -- os
+	handles das threads que ESTA função cria via `scheduler:Spawn` para os callbacks registrados
+	viram um mapa por identidade. Quando `onCallbackError` é fornecido, esta função conecta seu
+	PRÓPRIO listener em `scheduler.ThreadError`, filtra por esse mapa (só repassa o erro se a
+	`thread` que errou for uma das que ela mesma criou) e desconecta esse listener antes de
+	devolver o controle -- mesma disciplina de limpeza de `Sandbox.Run`/`Scheduler.luau`. Como o
+	conjunto de threads de `BindToClose` e o conjunto de threads alheias (script principal, outros
+	`task.spawn`) são disjuntos por construção (threads diferentes = objetos `thread` diferentes,
+	nunca comparados por valor/conteúdo), um erro que ocorre dentro da janela cai em EXATAMENTE um
+	listener depois que `cli` também for atualizado para usar este parâmetro em vez do listener
+	pega-tudo próprio (task-cli-035, fora deste território).
+
+	`onCallbackError` OMITIDO: nenhum listener novo é conectado -- comportamento observável
+	idêntico ao de antes desta tarefa (nenhuma regressão de task-runtime-033: erros de callback de
+	`BindToClose` continuam só saindo por `ThreadError` do jeito que já saíam, sem essa função
+	interceptar nada).
 ]]
 
 local InstanceModule = require("./Instance")
 local ClassRegistryModule = require("./ClassRegistry")
 local UnknownClassResolverModule = require("./UnknownClassResolver")
 local SchedulerModule = require("./Scheduler")
+local SignalModule = require("./Signal")
 
 type Instance = InstanceModule.Instance
 
@@ -335,21 +364,72 @@ end
 -- `dataModel`, usando `scheduler` para criar e drenar as threads deles -- ver a seção completa no
 -- cabeçalho deste módulo (semântica, divergência do timeout de 30s, e por que isto não é método de
 -- instância). No-op se nenhum callback foi registrado.
-function DataModel.RunBindToCloseCallbacks(dataModel: DataModel, scheduler: SchedulerModule.Scheduler): ()
+--
+-- task-runtime-038: `onCallbackError` OPCIONAL -- ver o bloco dedicado no cabeçalho do módulo
+-- para a causa raiz do bug que este parâmetro corrige (contagem dupla de erro em task-cli-033) e
+-- o desenho do filtro por identidade de thread própria.
+function DataModel.RunBindToCloseCallbacks(
+	dataModel: DataModel,
+	scheduler: SchedulerModule.Scheduler,
+	onCallbackError: ((thread: thread, message: string) -> ())?
+): ()
 	local instance = (dataModel :: unknown) :: Instance
 	local callbacks = bindToCloseCallbacks[instance]
 	if callbacks == nil or #callbacks == 0 then
 		return
 	end
 
-	-- Cada callback vira uma thread do `scheduler` recebido -- `Scheduler:Spawn` já roda
-	-- sincronamente até o primeiro yield/término e já protege contra erro (sai por `ThreadError`,
-	-- nunca propaga, nunca impede os handles seguintes de serem criados). `handles` guarda cada
-	-- `thread` devolvida só para saber quando TODAS morreram -- `coroutine.status` é primitiva pura
-	-- do Luau, não precisa de nenhuma API nova do Scheduler para consultar.
+	-- `ownThreads` é populado ANTES de qualquer `scheduler:Spawn` abaixo -- só o MAPA em si, as
+	-- entradas vêm depois, uma por thread, e cada uma entra de dentro da PRÓPRIA coroutine (ver
+	-- `wrapped`, abaixo), nunca depois que `Spawn` retorna o handle pra este laço. Mesma corrida
+	-- documentada em Sandbox.luau (`buildTaskGlobal.spawn`): `Scheduler:Spawn` roda a função
+	-- SINCRONAMENTE até o primeiro yield/término -- se o callback de `BindToClose` erra na hora
+	-- (sem yield nenhum), o `ThreadError` já dispara ANTES de `Spawn` devolver o handle pra fora,
+	-- e registrar `ownThreads[handle] = true` só DEPOIS da chamada perderia esse erro por completo.
+	local ownThreads: { [thread]: boolean } = {}
+
+	-- Conecta o listener ANTES de spawnar qualquer callback -- pelo mesmo motivo da corrida
+	-- acima, só que na outra ponta: se este listener fosse conectado só depois do laço de spawn
+	-- (like a primeira versão desta função tentou), um callback que erra sincronamente durante o
+	-- PRÓPRIO `scheduler:Spawn` já teria disparado e terminado de propagar o `ThreadError` antes
+	-- de existir qualquer listener escutando -- `onCallbackError` nunca seria chamado pra esse
+	-- caso (bug pego pelo teste "onCallbackError FORNECIDO" desta tarefa). O filtro por
+	-- `ownThreads` é o que garante que um erro de thread ALHEIA (ex.: o script principal,
+	-- retomado dentro desta janela por `scheduler:Run` mais abaixo) NUNCA chega a
+	-- `onCallbackError` -- só as threads que ESTA chamada cria para os callbacks de `BindToClose`
+	-- registrados.
+	local errorConnection: SignalModule.Connection? = nil
+	if onCallbackError ~= nil then
+		-- Atribuição direta (não `::`) já é suficiente para o checker estreitar de `(...)? ` para
+		-- `(...)` aqui -- a closure abaixo captura `handleError` (já não-opcional) por upvalue,
+		-- nunca `onCallbackError` diretamente (o estreitamento de `~= nil` não atravessa fronteira
+		-- de closure em Luau).
+		local handleError: (thread: thread, message: string) -> () = onCallbackError
+		errorConnection = scheduler.ThreadError:Connect(function(erroredThread: thread, message: string)
+			if ownThreads[erroredThread] then
+				handleError(erroredThread, message)
+			end
+		end)
+	end
+
+	-- Cada callback vira uma thread do `scheduler` recebido, embrulhada (`wrapped`) para se
+	-- auto-registrar em `ownThreads` como a PRIMEIRA linha de dentro da própria coroutine -- via
+	-- `coroutine.running()`, chamado DE DENTRO da thread recém-criada -- antes de rodar o
+	-- callback real do usuário. Isso nunca corre com o `ThreadError`: só pode disparar depois que
+	-- o callback real começou a rodar, e a auto-marcação já aconteceu antes disso (mesma técnica
+	-- de `buildTaskGlobal.spawn` em Sandbox.luau, mesmo comentário de corrida). `Scheduler:Spawn`
+	-- já protege contra erro (sai por `ThreadError`, nunca propaga, nunca impede os handles
+	-- seguintes de serem criados). `handles` guarda cada `thread` devolvida só para saber quando
+	-- TODAS morreram -- `coroutine.status` é primitiva pura do Luau, não precisa de nenhuma API
+	-- nova do Scheduler para consultar.
 	local handles: { thread } = {}
 	for _, callback in callbacks do
-		table.insert(handles, scheduler:Spawn(callback))
+		local realCallback = callback
+		local wrapped = function()
+			ownThreads[coroutine.running()] = true
+			realCallback()
+		end
+		table.insert(handles, scheduler:Spawn(wrapped))
 	end
 
 	local function anyStillAlive(): boolean
@@ -366,8 +446,18 @@ function DataModel.RunBindToCloseCallbacks(dataModel: DataModel, scheduler: Sche
 	-- acordar de novo. O laço para assim que `anyStillAlive()` vira falso, mesmo que
 	-- `Scheduler:IsAlive()` continue verdadeiro por outro motivo alheio a esta chamada (ex.: uma
 	-- Connection de Heartbeat esquecida por outro script) -- a condição de `Run` é um "E", então o
-	-- primeiro dos dois a virar falso decide.
+	-- primeiro dos dois a virar falso decide. É justamente este `Run` genérico que também pode
+	-- retomar threads ALHEIAS (a causa raiz do bug desta tarefa) -- o filtro por `ownThreads`
+	-- acima é o que mantém o listener desta função imune a isso.
 	scheduler:Run(anyStillAlive)
+
+	-- Desconecta ANTES de devolver o controle -- mesma disciplina de limpeza de `Sandbox.Run`
+	-- (embora ali a Connection viva por toda a chamada de qualquer forma; aqui é ainda mais
+	-- importante: sem desconectar, este listener continuaria vivo e reagindo a QUALQUER
+	-- `ThreadError` futuro do mesmo `scheduler`, muito depois desta janela ter fechado).
+	if errorConnection ~= nil then
+		errorConnection:Disconnect()
+	end
 end
 
 return DataModel

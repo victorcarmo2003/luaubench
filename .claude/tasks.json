@@ -2668,7 +2668,7 @@
       "id": "task-runtime-038",
       "title": "DataModel.RunBindToCloseCallbacks ganha filtro proprio de erro (onCallbackError), corrigindo contagem dupla",
       "description": "Fix real do achado de task-cli-033 (investigacao ja fechou o desenho, nao precisa de arquiteto). Causa raiz: RunCommand.luau conecta um listener PEGA-TUDO em scheduler.ThreadError durante a janela de RunBindToCloseCallbacks, mas essa funcao chama scheduler:Run de novo -- um laco GENERICO que drena TODAS as threads vivas do Scheduler (nao so as de BindToClose), entao uma thread do script principal retomada durante essa janela dispara o MESMO erro nos dois listeners (o de Sandbox.Run, nunca desconectado, e o novo de RunCommand). FIX: DataModel.RunBindToCloseCallbacks ganha um parametro novo opcional, algo como onCallbackError: ((thread, string) -> ())?, e passa a filtrar erros pela sua PROPRIA lista de thread handles que ela mesma cria pros callbacks de BindToClose (mesmo padrao ownThreads que Sandbox.Run ja usa) -- conecta/desconecta esse listener filtrado INTERNAMENTE, repassando so os erros que sao dela via o callback novo. Como os conjuntos de threads (script principal vs callbacks de BindToClose) sao disjuntos por construcao, cada erro passa a cair em exatamente um listener. TERRITORIO: so src/runtime/DataModel.luau + spec.",
-      "column": "in-progress",
+      "column": "done",
       "agent": "coder-runtime",
       "reviewer": "revisor-runtime",
       "wave": 51,
@@ -2681,7 +2681,8 @@
       "acceptance": "DataModel.RunBindToCloseCallbacks(dataModel, scheduler, onCallbackError?) filtra erro por identidade de thread propria (so os handles que ela mesma spawna pros callbacks registrados), nunca captura erro de thread alheia mesmo que o Scheduler:Run interno drene threads vivas de outras origens. onCallbackError e opcional -- omitido, comportamento observavel identico ao de hoje (nenhuma regressao de task-runtime-033). Specs cobrindo: erro de callback de BindToClose dispara onCallbackError; erro de thread alheia (nao criada por RunBindToCloseCallbacks) NAO dispara onCallbackError mesmo que resolvida durante a janela. --strict sem any. Suite de runtime sem regressao.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-06",
+      "reviewResult": "APROVADO. Revisor confirmou 195/195 na suite de runtime. Reproduziu a corrida original de forma independente: versao conecta-depois-do-Spawn capturou 0 erros pra callback sincrono sem yield (prova que a correcao era necessaria), versao atual capturou corretamente. Reproduziu o cenario exato do bug: 2 threads alheias errando durante a janela + 1 callback proprio errando -- ThreadError cru disparou 3x, onCallbackError disparou exatamente 1x (so o proprio). Fechou lacuna extra nao coberta pelos specs: multiplos callbacks, um erra, outros completam independentes, onCallbackError dispara 1x certo. Confirmou disconnect do listener ao final. --strict, zero any, territorio limpo. 1 achado BAIXO cosmetico: ownThreads nao usa tabela fraca como o padrao-irmao de Sandbox.luau, mas sem vazamento real dado o escopo estritamente sincrono da funcao. Relatorio: .claude/agents-memory/revisor-runtime-task-runtime-038-2026-09-06.md"
     },
     {
       "id": "task-cli-035",
