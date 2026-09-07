@@ -428,6 +428,48 @@ function Messages.MaterializePropertyAssignmentFailed(nodePath: string, property
 	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {engineError}`
 end
 
+-- task-cli-038 (arquiteto-rojo-properties-2026-09-07.md, D4/DV-5): "Name"/"Parent"/"ClassName"
+-- são estado ESTRUTURAL da árvore do projeto (posição/nome/classe do próprio nó), não uma
+-- Property gravável -- paridade literal com o Rojo real (`src/snapshot_middleware/project.rs`,
+-- linhas 234-260: `log::warn!` + `continue` só para "Name"/"Parent"). "ClassName" entra na MESMA
+-- regra por analogia estrutural (no LuauBench é estado FORA de `data.properties`; gravar cru via
+-- SetPropertyRaw seria estado morto e silencioso, sem contraparte real -- no `rbx_dom`,
+-- "ClassName" nem é property, é a classe da própria instância). CORRIGE uma divergência anterior
+-- do LuauBench: antes desta tarefa, "$properties.Name" RENOMEAVA a instância -- o Rojo real nunca
+-- faz isso.
+function Messages.MaterializeStructuralPropertyIgnored(nodePath: string, propertyName: string): string
+	return `"$properties.{propertyName}" at "{nodePath}" cannot be set through "$properties" -- `
+		.. `"{propertyName}" is managed by the project tree structure (the node's own name, parent, `
+		.. "and class), not a regular property; it was ignored."
+end
+
+-- task-cli-038 (D4, caminho A, passo 2): o `MemberDescriptor` para esta chave é `nil` no schema
+-- ACHATADO (própria classe + herdado, que a partir de task-services-035 também enxerga as
+-- entradas load-only, `ScriptVisible = false`) -- a propriedade simplesmente não existe nesta
+-- classe. Mensagem CONSTRUÍDA aqui pelo `cli` (não mais colhida de um `pcall` sobre o
+-- `__newindex` real -- `$properties` agora escreve por `SetPropertyRaw`, que nunca consulta o
+-- schema e por isso nunca produziria este erro sozinho), mas reproduz EXATAMENTE a mesma frase
+-- que `InstanceMeta.__index`/`__newindex` usam para "chave fora do schema"
+-- (`src/runtime/Instance.luau:727/832`: `"{key} is not a valid member of {className}
+-- \"{fullName}\""`) -- mesmo texto que o script do usuário veria se tentasse ler essa chave
+-- depois. `className`/`fullName` vêm de `instance.ClassName`/`instance:GetFullName()`.
+function Messages.MaterializePropertyNotAMember(nodePath: string, propertyName: string, className: string, fullName: string): string
+	return `Could not apply "$properties.{propertyName}" at "{nodePath}": {propertyName} is not a valid member of {className} "{fullName}"`
+end
+
+-- task-cli-038 (D4, caminho A, passo 2): o `MemberDescriptor` EXISTE para esta chave, mas
+-- `Kind ~= "Property"` (é um `Event`/`Callback` da classe) -- a barreira dura que garante que
+-- NENHUM evento vira gravável por projeto, mesmo para um valor PRIMITIVO (ex.:
+-- "$properties.ChildAdded": true) que `resolvePropertyValue` devolveria direto sem NUNCA
+-- consultar o descritor sozinho (só array/objeto/string ambíguo consultam o schema ali). SEM
+-- contraparte literal no Rojo real (o `rbx_reflection` que o Rojo embute nem modela Event/Callback
+-- como property -- ver pesquisa) -- mensagem ORIGINAL do LuauBench, sem prefixo "[LuauBench]" (não
+-- é uma lacuna de simulação: é uma regra de projeto sendo recusada, mesma família de
+-- `MaterializeServiceNameMismatch`/`MaterializeNotAService`, acima).
+function Messages.MaterializePropertyNotAProperty(nodePath: string, propertyName: string, className: string, kind: string): string
+	return `Could not apply "$properties.{propertyName}" at "{nodePath}": "{propertyName}" on "{className}" is a "{kind}" member, not a "Property" -- "$properties" can only set an actual property.`
+end
+
 --------------------------------------------------------------------------------------------------
 -- Ponte com Value Types simulados (Vector3/CFrame/Color3/Enum/...) -- task-cli-025,
 -- arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7 ("$properties do Rojo:

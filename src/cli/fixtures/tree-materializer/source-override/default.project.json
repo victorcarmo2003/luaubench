@@ -1,0 +1,14 @@
+{
+  "name": "TreeMaterializerSourceOverride",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "Main": {
+        "$path": "server/Main.server.lua",
+        "$properties": {
+          "Source": "print(\"overridden by $properties.Source\")"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "TreeMaterializerLoadOnlyProperties",
+  "tree": {
+    "$className": "DataModel",
+    "Lighting": {
+      "$properties": {
+        "Technology": "Voxel"
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      }
+    }
+  }
+}

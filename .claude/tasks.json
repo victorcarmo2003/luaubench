@@ -2822,7 +2822,7 @@
     {
       "createdAt": "2026-09-07",
       "updatedAt": "2026-09-07",
-      "column": "todo",
+      "column": "done",
       "priority": "high",
       "id": "task-cli-038",
       "title": "$properties do Rojo vira caminho de HIDRATACAO (SetPropertyRaw), nao escrita de script",
@@ -2839,7 +2839,9 @@
       "acceptance": "Spec de TreeMaterializer cobrindo: (1) $properties numa propriedade com Security.Read elevado (Lighting.Technology='Voxel') materializa com sucesso, zero Diagnostic, e o valor e legivel por Runtime.Instance.GetPropertyRaw como o EnumItem certo; (2) $properties numa propriedade ReadOnly (Workspace.FilteringEnabled=true) materializa com sucesso e workspace.FilteringEnabled le true pelo caminho normal; (3) escrita de script continua bloqueada: workspace.FilteringEnabled = false erra 'Property is read only' e lighting.Technology erra 'not a valid member of'; (4) $properties.Name/.Parent/.ClassName -> warning materialize/structural-property-ignored e a instancia NAO e renomeada; (5) $properties apontando pra um Event (ex.: 'ChildAdded') e pra um nome inexistente -> error materialize/invalid-property; (6) $properties.Source num Script sobrescreve o Source do arquivo (precedencia fixada por teste). Rodar o pipeline completo contra o default.project.json do Tiktok (READ-ONLY nesse projeto) e confirmar zero materialize/invalid-property. Specs de cli (Args/Messages/RunCommand/TreeMaterializer/TreePlanner/init) passando. --!strict, sem any.",
       "depends": [
         "task-services-035"
-      ]
+      ],
+      "result": "TreeMaterializer.applyProperties bifurca em Caminho A (instancia ESTRITA) e Caminho B (LENIENTE, so game/DataModel, intocado). Caminho A: Name/Parent/ClassName -> warning materialize/structural-property-ignored + skip (corrige divergencia: antes $properties.Name renomeava a instancia, Rojo real ignora). Descritor resolvido no schema achatado (agora enxerga load-only): nome inexistente -> error materialize/invalid-property (MaterializePropertyNotAMember); Kind~=Property (Event/Callback) -> error (MaterializePropertyNotAProperty). Escrita final via Runtime.Instance.SetPropertyRaw -- ignora ReadOnly/ScriptVisible como o rojo build real ignora scriptability/serialization. Pipeline real contra Tiktok/default.project.json (rojo init template literal): ZERO materialize/invalid-property (so sobra materialize/invalid-class em Part, fora de escopo, nunca esteve em tools/coverage.luau). REGRESSAO achada em revisao e CORRIGIDA na mesma task: SetPropertyRaw sem pcall permitia crash cru + vazamento de path quando um listener de Changed (ex: Lighting.TimeOfDay) erra sincronamente pra valor malformado (Signal.Fire re-lanca fora do ThreadBroker quando a thread nao e gerida por ele, caso do Materialize rodando antes do scheduler:Run) -- corrigido envolvendo a escrita em pcall+stripEngineErrorLocation, mesmo padrao ja usado no arquivo.",
+      "reviewResult": "APROVADO (revisor-cli, 2026-09-07, apos 1 rodada de fix). Primeira rodada: APROVADO COM RESSALVAS, achou a regressao real do crash cru (reproduzida de ponta a ponta pelo revisor, confirmado que codigo antigo capturava via pcall). Coder corrigiu na mesma task. Segunda rodada (so o fix): reproduzido de forma independente com fixture propria (valor diferente do coder), confirmado exit code limpo sem crash/vazamento. Causa raiz confirmada por leitura de Signal.luau/ThreadBroker.luau (pendingError/ReportError). 33/33 TreeMaterializer.spec.luau, 16/16 specs de cli verdes, luau-lsp 0 diagnosticos, pipeline real contra Tiktok zero materialize/invalid-property e zero crash. Confirmado que o fix cobre estruturalmente qualquer listener futuro (ponto unico de escrita SetPropertyRaw), nao so o caso especifico de TimeOfDay. Territorio limpo (arquivos de services pertencem a task-services-036 rodando em paralelo)."
     },
     {
       "createdAt": "2026-09-07",

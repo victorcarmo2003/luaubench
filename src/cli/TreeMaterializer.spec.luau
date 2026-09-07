@@ -275,11 +275,20 @@ test("Materialize: fixture 'basic' materializa Service/Folder/Script/ModuleScrip
 end)
 
 --------------------------------------------------------------------------------------------------
--- $properties (Decisão 7): primitivo válido aplicado; nome inválido e propriedade somente-leitura
--- viram Diagnostic sem derrubar o comando nem impedir o resto do nó de existir
+-- $properties (task-cli-038, CAMINHO A -- instância ESTRITA): primitivo válido aplicado; nome
+-- inexistente vira 'materialize/invalid-property' (Messages.MaterializePropertyNotAMember);
+-- apontar pra um Event (Kind ~= "Property") vira 'materialize/invalid-property'
+-- (Messages.MaterializePropertyNotAProperty); NENHUM dos dois derruba o comando nem impede o
+-- resto do nó de existir. "className" (Property REAL, porém ReadOnly=true, alias legado herdado
+-- de Instance) materializa com SUCESSO -- CORREÇÃO task-cli-038: $properties escreve por
+-- SetPropertyRaw, que ignora ReadOnly de propósito (paridade com o rojo build real, que também
+-- nunca checa Scriptability/ReadOnly ao hidratar um projeto -- ver
+-- pesquisa-rojo-properties-security-2026-09-07.md). Antes desta tarefa, "className" produzia
+-- Diagnostic 'materialize/invalid-property' ("Property is read only") -- este teste FECHAVA essa
+-- divergência do Rojo real; agora ele PROVA a correção.
 --------------------------------------------------------------------------------------------------
 
-test("Materialize: $properties primitivo válido é aplicado; nome inválido e propriedade somente-leitura viram Diagnostic (não derrubam o comando)", function()
+test("Materialize: $properties primitivo válido é aplicado (inclusive numa Property real-porém-ReadOnly); nome inexistente e Event viram Diagnostic (não derrubam o comando)", function()
 	local plan, planBag = planFixture("properties")
 	assert(plan ~= nil, `fixture 'properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
 	if plan == nil then
@@ -304,53 +313,75 @@ test("Materialize: $properties primitivo válido é aplicado; nome inválido e p
 	end
 	assert(badProps.ClassName == "Folder", "BadProps deveria ser um Folder")
 
-	-- $properties primitivo válido (archivable: false) -- aplicado pela via pública de verdade.
 	local badPropsDot = (badProps :: unknown) :: { [string]: unknown }
+
+	-- $properties primitivo válido (archivable: false) -- aplicado via SetPropertyRaw (A4).
 	assert(badPropsDot["archivable"] == false, "'archivable' deveria ter sido aplicado como false via $properties")
 
-	-- Nome inválido ("Gravty" não é membro de Folder/Instance) -> Diagnostic, nunca crash.
-	local invalidNameDiagnostic = findByCode(bag, "materialize/invalid-property")
-	assert(invalidNameDiagnostic ~= nil, "deveria haver ao menos um Diagnostic 'materialize/invalid-property'")
-	assert(countByCode(bag, "materialize/invalid-property") == 2, `esperava exatamente 2 diagnostics de propriedade inválida (nome desconhecido + somente-leitura), achou {countByCode(bag, "materialize/invalid-property")}`)
+	-- task-cli-038: "className" é uma Property REAL (ReadOnly=true, ScriptVisible=true, alias
+	-- legado herdado de Instance) -- SetPropertyRaw ignora ReadOnly de propósito, então isto
+	-- materializa com SUCESSO agora (nenhum Diagnostic para "className").
+	assert(badPropsDot["className"] == "Hacked", "'className' (Property real, ReadOnly) deveria ter sido aplicada via $properties -- SetPropertyRaw ignora ReadOnly de propósito (A4)")
+	assert(findByCodeAndField(bag, "materialize/invalid-property", "className") == nil, "'className' NÃO deveria mais produzir Diagnostic -- ReadOnly é ignorado na hidratação (paridade com o rojo build real)")
+
+	-- "className" (Property, entrada do schema) é um data slot TOTALMENTE separado do ClassName
+	-- REAL da Instance (estado estrutural fora de `data.properties`, nunca gravável por
+	-- $properties -- ver A1/DV-5) -- escrever nele nunca poderia ter afetado badProps.ClassName.
+	assert(badProps.ClassName == "Folder", "o ClassName REAL da Instance é estado estrutural separado -- $properties.className nunca poderia afetá-lo")
+
+	assert(countByCode(bag, "materialize/invalid-property") == 2, `esperava exatamente 2 diagnostics de propriedade inválida (nome inexistente + Event), achou {countByCode(bag, "materialize/invalid-property")}`)
 
 	local gravtyDiagnostic: Diagnostics.Diagnostic? = nil
-	local classNameDiagnostic: Diagnostics.Diagnostic? = nil
+	local childAddedDiagnostic: Diagnostics.Diagnostic? = nil
 	for _, diagnostic in bag:All() do
 		if diagnostic.Code == "materialize/invalid-property" and diagnostic.Field == "Gravty" then
 			gravtyDiagnostic = diagnostic
-		elseif diagnostic.Code == "materialize/invalid-property" and diagnostic.Field == "className" then
-			classNameDiagnostic = diagnostic
+		elseif diagnostic.Code == "materialize/invalid-property" and diagnostic.Field == "ChildAdded" then
+			childAddedDiagnostic = diagnostic
 		end
 	end
 
-	assert(gravtyDiagnostic ~= nil, "deveria haver um Diagnostic citando o campo 'Gravty' (nome inválido)")
+	-- Nome inexistente ("Gravty" não é membro de Folder/Instance) -> Messages.MaterializePropertyNotAMember.
+	assert(gravtyDiagnostic ~= nil, "deveria haver um Diagnostic citando o campo 'Gravty' (nome inexistente)")
 	if gravtyDiagnostic ~= nil then
-		assert(gravtyDiagnostic.Severity == "error", "propriedade inválida deveria ser Severity 'error'")
+		assert(gravtyDiagnostic.Severity == "error", "propriedade inexistente deveria ser Severity 'error'")
 		assert(gravtyDiagnostic.NodePath ~= nil and string.find(gravtyDiagnostic.NodePath, "BadProps", 1, true) ~= nil, "Diagnostic deveria citar o NodePath de 'BadProps'")
 		assert(string.find(gravtyDiagnostic.Message, "Gravty", 1, true) ~= nil, "mensagem deveria citar a propriedade 'Gravty'")
+		assert(string.find(gravtyDiagnostic.Message, "is not a valid member of", 1, true) ~= nil, "mensagem deveria reproduzir a frase real do runtime ('is not a valid member of')")
 	end
 
-	-- Propriedade real, porém somente-leitura ("className", alias legado herdado de Instance).
-	assert(classNameDiagnostic ~= nil, "deveria haver um Diagnostic citando o campo 'className' (somente-leitura)")
-	if classNameDiagnostic ~= nil then
-		assert(classNameDiagnostic.Severity == "error", "propriedade somente-leitura deveria ser Severity 'error'")
-		assert(string.find(classNameDiagnostic.Message, "read only", 1, true) ~= nil, "mensagem deveria citar o erro real do motor ('read only')")
+	-- "ChildAdded" EXISTE no schema (Instance.ChildAdded, herdado), mas Kind == "Event" -> barreira
+	-- dura A2, Messages.MaterializePropertyNotAProperty -- garante que nenhum Event vira gravável.
+	assert(childAddedDiagnostic ~= nil, "deveria haver um Diagnostic citando o campo 'ChildAdded' (Event, não Property)")
+	if childAddedDiagnostic ~= nil then
+		assert(childAddedDiagnostic.Severity == "error", "$properties apontando pra um Event deveria ser Severity 'error'")
+		assert(string.find(childAddedDiagnostic.Message, "ChildAdded", 1, true) ~= nil, "mensagem deveria citar a propriedade 'ChildAdded'")
+		assert(string.find(childAddedDiagnostic.Message, "Event", 1, true) ~= nil, "mensagem deveria citar que 'ChildAdded' é um Event, não uma Property")
 	end
 
-	-- A propriedade somente-leitura NUNCA foi de fato sobrescrita -- continua o valor original
-	-- ("Folder", o ClassName real), nunca "Hacked".
-	assert(badProps.ClassName == "Folder", "ClassName real nunca deveria ter sido sobrescrito pelo $properties inválido")
+	-- Nenhum dos dois erros gravou nada -- "Gravty" nem é membro do schema (ler por acesso normal
+	-- ERRARIA "is not a valid member of", a mesma família que a Diagnostic acima já confirma; não
+	-- há como ler um valor "gravado" que nunca existiu no schema em primeiro lugar).
+	local gravtyReadOk = pcall(function()
+		return badPropsDot["Gravty"]
+	end)
+	assert(not gravtyReadOk, "'Gravty' NUNCA deveria ter sido gravado -- nem existe no schema pra ser lido por acesso normal")
 
 	assert(#tree.Scripts == 0, "fixture 'properties' não tem nenhum Script/LocalScript/ModuleScript")
 end)
 
 --------------------------------------------------------------------------------------------------
 -- task-cli-010 (correção de revisão): erro de $properties inválido NUNCA vaza caminho absoluto de
--- disco nem "TreeMaterializer:NNN:" (o call site interno do pcall, via error(msg, 2) do __newindex
--- real) -- só NodePath/Field/a mensagem real do motor. Achado MÉDIO de
+-- disco nem "TreeMaterializer:NNN:" -- só NodePath/Field/a mensagem. Achado MÉDIO de
 -- revisor-cli-runcommand-2026-09-05.md, reproduzido por mim (thread principal) antes da correção:
 -- sem o strip, `gravtyDiagnostic.Message` continha literalmente o caminho de instalação do
 -- LuauBench em disco (ex.: "D:\UserData\Documents\GitHub\luaubench\src\cli\TreeMaterializer:136: ").
+--
+-- task-cli-038: as duas mensagens cobertas por este teste (NotAMember/"Gravty", NotAProperty/
+-- "ChildAdded") não passam mais por `pcall`+`error(msg, 2)`+`stripEngineErrorLocation` NENHUM --
+-- CAMINHO A constrói as duas direto (ver Messages.luau) -- então este teste continua valendo como
+-- regressão (nenhuma delas tem COMO vazar um caminho interno, mas confirma que ninguém reintroduz
+-- isso no futuro).
 --------------------------------------------------------------------------------------------------
 
 test("Materialize: erro de $properties inválido não vaza caminho absoluto de disco nem 'TreeMaterializer:NNN:' (task-cli-010)", function()
@@ -389,26 +420,26 @@ test("Materialize: erro de $properties inválido não vaza caminho absoluto de d
 		)
 	end
 
-	-- A mensagem real do motor continua presente e acionável -- o strip só remove o PREFIXO de
-	-- localização interna, nunca o texto que ajuda o usuário a corrigir o .project.json.
+	-- A mensagem continua presente e acionável -- o que este teste garante é que ela NUNCA carrega
+	-- um prefixo de localização interna, nunca que ela deixe de citar o motivo real.
 	local gravty: Diagnostics.Diagnostic? = nil
-	local classNameProp: Diagnostics.Diagnostic? = nil
+	local childAdded: Diagnostics.Diagnostic? = nil
 	for _, diagnostic in propertyDiagnostics do
 		if diagnostic.Field == "Gravty" then
 			gravty = diagnostic
-		elseif diagnostic.Field == "className" then
-			classNameProp = diagnostic
+		elseif diagnostic.Field == "ChildAdded" then
+			childAdded = diagnostic
 		end
 	end
 
 	assert(gravty ~= nil, "deveria haver um diagnostic para o campo 'Gravty'")
 	if gravty ~= nil then
-		assert(string.find(gravty.Message, "is not a valid member of", 1, true) ~= nil, "mensagem real do motor ('is not a valid member of') deveria continuar presente")
+		assert(string.find(gravty.Message, "is not a valid member of", 1, true) ~= nil, "mensagem (mesma frase do runtime) deveria continuar presente")
 	end
 
-	assert(classNameProp ~= nil, "deveria haver um diagnostic para o campo 'className'")
-	if classNameProp ~= nil then
-		assert(string.find(classNameProp.Message, "read only", 1, true) ~= nil, "mensagem real do motor ('read only') deveria continuar presente")
+	assert(childAdded ~= nil, "deveria haver um diagnostic para o campo 'ChildAdded'")
+	if childAdded ~= nil then
+		assert(string.find(childAdded.Message, "Event", 1, true) ~= nil, "mensagem deveria continuar citando que 'ChildAdded' é um Event, não uma Property")
 	end
 end)
 
@@ -1337,7 +1368,20 @@ test("Materialize: forma indecodificável (array de tamanho errado) vira erro 'm
 	assert(badPositionDot["Position"] == nil, "Position deveria ter mantido o Default (nil) -- nunca gravar a forma malformada")
 end)
 
-test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vira warning 'materialize/property-shape-unknown' (task-cli-025)", function()
+-- task-cli-038 (mudança de comportamento DECLARADA -- ver o cabeçalho de TreeMaterializer.luau,
+-- "CORREÇÃO task-cli-038"): "UnknownShape.Mystery" é uma Instance ESTRITA (Folder, classe
+-- registrada) com uma propriedade que NÃO existe em Folder/Instance -- antes desta tarefa,
+-- `resolvePropertyValue` só descobria isso DEPOIS de já ter decidido que o valor era não-primitivo
+-- (array), produzindo o diagnóstico GENÉRICO 'materialize/property-shape-unknown' (warning,
+-- "[LuauBench] ... shape desconhecida"). Agora o CAMINHO A resolve o descritor uma vez, ANTES de
+-- decodificar QUALQUER valor (primitivo ou não) -- nome inexistente é sempre
+-- 'materialize/invalid-property' (Messages.MaterializePropertyNotAMember), a MESMA família que
+-- "Gravty" já cobre no fixture 'properties'. 'materialize/property-shape-unknown' continua
+-- existindo, mas só é alcançável pelo CAMINHO B (instância LENIENTE, `game`/DataModel -- ver o
+-- teste "$properties NÃO-PRIMITIVO na raiz", acima, task-cli-027) e pela inconsistência interna
+-- defensiva de `resolvePropertyValue` (descritor com ValueType/ValueCategory nil), nunca mais por
+-- um nome desconhecido numa Instance real.
+test("Materialize: propriedade não-primitiva com nome INEXISTENTE numa Instance ESTRITA vira 'materialize/invalid-property' (NÃO mais 'property-shape-unknown', task-cli-038)", function()
 	local plan, planBag = planFixture("value-types")
 	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
 	if plan == nil then
@@ -1348,12 +1392,14 @@ test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vir
 	local bag = Diagnostics.newBag()
 	TreeMaterializer.Materialize(plan, game, bag)
 
-	local diagnostic = findByCode(bag, "materialize/property-shape-unknown")
-	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/property-shape-unknown'")
+	assert(findByCodeAndField(bag, "materialize/property-shape-unknown", "Mystery") == nil, "'Mystery' NÃO deveria mais produzir o diagnóstico genérico 'property-shape-unknown' -- a Instance é ESTRITA (Folder registrado)")
+
+	local diagnostic = findByCodeAndField(bag, "materialize/invalid-property", "Mystery")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/invalid-property' para 'Mystery'")
 	if diagnostic ~= nil then
-		assert(diagnostic.Severity == "warning", "forma desconhecida deveria ser Severity 'warning', nunca erro")
-		assert(diagnostic.Field == "Mystery", "Diagnostic deveria citar a propriedade 'Mystery'")
-		assert(string.find(diagnostic.Message, "[LuauBench]", 1, true) ~= nil, `mensagem deveria ter o prefixo [LuauBench], recebeu: {diagnostic.Message}`)
+		assert(diagnostic.Severity == "error", "nome inexistente deveria ser Severity 'error', mesma família de 'Gravty'")
+		assert(string.find(diagnostic.Message, "Mystery", 1, true) ~= nil, "mensagem deveria citar a propriedade 'Mystery'")
+		assert(string.find(diagnostic.Message, "is not a valid member of", 1, true) ~= nil, "mensagem deveria reproduzir a frase real do runtime ('is not a valid member of')")
 	end
 
 	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
@@ -1362,7 +1408,7 @@ test("Materialize: propriedade não-primitiva sem MemberDescriptor conhecido vir
 		return
 	end
 	local unknownShape = findChild(workspaceInstance, "UnknownShape")
-	assert(unknownShape ~= nil, "deveria haver um 'UnknownShape' mesmo com a propriedade não-decodificável -- só a propriedade falha, não o nó inteiro")
+	assert(unknownShape ~= nil, "deveria haver um 'UnknownShape' mesmo com a propriedade inexistente -- só a propriedade falha, não o nó inteiro")
 	if unknownShape ~= nil then
 		assert(unknownShape.ClassName == "Folder", "UnknownShape deveria ser um Folder")
 	end
@@ -1602,7 +1648,14 @@ test("Materialize: string de Enum com item INEXISTENTE (StarterPlayer.DevCameraO
 	assert(tostring(occlusionMode) == "Enum.DevCameraOcclusionMode.Zoom", `esperava o Default "Enum.DevCameraOcclusionMode.Zoom" preservado, recebeu "{tostring(occlusionMode)}"`)
 end)
 
-test("Materialize: string primitiva normal SEM MemberDescriptor de Enum (Folder.Name via $properties) continua idêntica a antes -- regressão (task-cli-028-fix)", function()
+-- task-cli-038 (DV-5, mudança de comportamento DECLARADA -- CORRIGE a divergência que este mesmo
+-- teste antes CONFIRMAVA como comportamento esperado): "$properties.Name" era aplicado pela via
+-- pública de escrita (o ramo "Name" de `InstanceMeta.__newindex`, que de fato RENOMEIA a
+-- Instance) -- o Rojo real NUNCA faz isso (`src/snapshot_middleware/project.rs`, linhas 234-260:
+-- `log::warn!` + `continue` para "Name"/"Parent"). Agora CAMINHO A trata "Name" como estrutural
+-- (A1): warning `materialize/structural-property-ignored`, SKIP -- a Instance mantém o nome que o
+-- `.project.json` deu ao NÓ ("RenameMe"), nunca o valor de "$properties.Name".
+test("Materialize: $properties.Name é estrutural -- warning 'materialize/structural-property-ignored', NUNCA renomeia a Instance (task-cli-038, fecha divergência do Rojo real)", function()
 	local plan, planBag = planFixture("value-types")
 	assert(plan ~= nil, `fixture 'value-types' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
 	if plan == nil then
@@ -1616,10 +1669,17 @@ test("Materialize: string primitiva normal SEM MemberDescriptor de Enum (Folder.
 	-- NUNCA `not bag:HasErrors()` aqui -- esta MESMA fixture 'value-types' tem outros nós que
 	-- deliberadamente produzem erro (BadPosition.Position, StarterPlayer.DevCameraOcclusionMode,
 	-- ver os testes acima). O que importa pra ESTE teste é que 'RenameMe'/'Name' especificamente
-	-- não produziu Diagnostic nenhum.
+	-- não produziu Diagnostic de ERRO nenhum -- só o warning estrutural esperado.
 	assert(findByCodeAndField(bag, "materialize/invalid-property", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/invalid-property'")
 	assert(findByCodeAndField(bag, "materialize/undecodable-property", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/undecodable-property'")
 	assert(findByCodeAndField(bag, "materialize/property-shape-unknown", "Name") == nil, "'Name' não deveria produzir Diagnostic 'materialize/property-shape-unknown'")
+
+	local nameDiagnostic = findByCodeAndField(bag, "materialize/structural-property-ignored", "Name")
+	assert(nameDiagnostic ~= nil, "deveria haver um Diagnostic 'materialize/structural-property-ignored' para 'Name'")
+	if nameDiagnostic ~= nil then
+		assert(nameDiagnostic.Severity == "warning", "propriedade estrutural ignorada deveria ser Severity 'warning', nunca erro")
+		assert(nameDiagnostic.NodePath ~= nil and string.find(nameDiagnostic.NodePath, "RenameMe", 1, true) ~= nil, "Diagnostic deveria citar o NodePath de 'RenameMe'")
+	end
 
 	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
 	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
@@ -1627,16 +1687,252 @@ test("Materialize: string primitiva normal SEM MemberDescriptor de Enum (Folder.
 		return
 	end
 
-	-- "RenameMe" (nome original do nó no .project.json) não deveria mais existir -- $properties.Name
-	-- renomeou de verdade, via a via pública (__newindex real, ramo "Name" de Instance.luau).
-	assert(workspaceInstance:FindFirstChild("RenameMe") == nil, "'RenameMe' não deveria mais existir depois do $properties.Name renomear a Instance")
-
-	local renamed = workspaceInstance:FindFirstChild("RenamedViaProperties")
-	assert(renamed ~= nil, "'RenamedViaProperties' deveria existir -- Name (string SEM MemberDescriptor, tratada pelo Instance base) continua indo pelo caminho primitivo direto")
-	if renamed ~= nil then
-		assert(renamed.ClassName == "Folder", "a Instance renomeada deveria continuar sendo o mesmo Folder")
-		assert(renamed.Name == "RenamedViaProperties", "Instance.Name deveria refletir o valor aplicado via $properties")
+	-- "RenameMe" (nome original do nó no .project.json) continua existindo -- $properties.Name
+	-- NUNCA mais renomeia a Instance (paridade com o Rojo real).
+	local original = workspaceInstance:FindFirstChild("RenameMe")
+	assert(original ~= nil, "'RenameMe' deveria CONTINUAR existindo -- $properties.Name não renomeia mais a Instance (task-cli-038)")
+	if original ~= nil then
+		assert(original.ClassName == "Folder", "'RenameMe' deveria continuar sendo o mesmo Folder")
+		assert(original.Name == "RenameMe", "Instance.Name deveria continuar sendo o nome do NÓ do projeto, nunca o valor de $properties.Name")
 	end
+
+	assert(workspaceInstance:FindFirstChild("RenamedViaProperties") == nil, "'RenamedViaProperties' NUNCA deveria existir -- $properties.Name é ignorado, não aplicado")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-038 (arquiteto-rojo-properties-2026-09-07.md, D4 -- é o BUG DE ALTO IMPACTO que esta
+-- tarefa fecha): $properties numa propriedade "load-only" (ScriptVisible=false, ex.: Security.Read
+-- elevado no dump -- Lighting.Technology) e numa propriedade ReadOnly (Workspace.FilteringEnabled)
+-- materializam com SUCESSO -- exatamente como o `rojo build` real, que nunca consulta Security/
+-- Scriptability/ReadOnly ao hidratar $properties (pesquisa-rojo-properties-security-2026-09-07.md).
+-- É o MESMO par de propriedades do template LITERAL do `rojo init` (Tiktok/default.project.json)
+-- que travava antes desta tarefa.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties numa Property load-only (Lighting.Technology, Security.Read elevado) materializa com SUCESSO, zero Diagnostic, legível via GetPropertyRaw como o EnumItem certo (task-cli-038)", function()
+	local plan, planBag = planFixture("load-only-properties")
+	assert(plan ~= nil, `fixture 'load-only-properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(findByCodeAndField(bag, "materialize/invalid-property", "Technology") == nil, "'Technology' NÃO deveria produzir 'materialize/invalid-property' -- é load-only (ScriptVisible=false), não ausente do schema")
+	assert(not bag:HasErrors(), `materialização de 'load-only-properties' não deveria produzir NENHUM erro (bag: {#bag:All()} diagnostic(s))`)
+
+	local lighting = game:FindFirstChildOfClass("Lighting")
+	assert(lighting ~= nil, "game deveria ter um Lighting depois de Materialize")
+	if lighting == nil then
+		return
+	end
+
+	-- Legível pela via de ENGENHARIA (GetPropertyRaw, que nunca consulta ScriptVisible) como o
+	-- EnumItem REAL -- prova que a decodificação (A3, resolvePropertyValue/ValueTypes.Decode)
+	-- rodou normalmente para uma propriedade load-only, não só para uma gravável comum.
+	local technology = Runtime.Instance.GetPropertyRaw(lighting, "Technology")
+	assert(ValueTypes.TypeNameOf(technology) == "EnumItem", `Lighting.Technology deveria ter virado um EnumItem real via GetPropertyRaw, TypeNameOf devolveu {tostring(ValueTypes.TypeNameOf(technology))}`)
+	assert(tostring(technology) == "Enum.Technology.Voxel", `esperava tostring "Enum.Technology.Voxel", recebeu "{tostring(technology)}"`)
+
+	-- DV-1 (declarada no desenho): INVISÍVEL ao script -- __index estrito erra "is not a valid
+	-- member of" pra quem tenta ler lighting.Technology como o script do usuário faria (mesma
+	-- barreira que já protegia antes desta tarefa -- o eixo de SCRIPT não muda em nada).
+	local scriptReadOk, scriptReadErr = pcall(function()
+		local lightingDot = (lighting :: unknown) :: { [string]: unknown }
+		return lightingDot["Technology"]
+	end)
+	assert(not scriptReadOk, "Lighting.Technology NÃO deveria ser legível por acesso normal de script -- só por GetPropertyRaw")
+	assert(string.find(tostring(scriptReadErr), "is not a valid member of", 1, true) ~= nil, `erro de leitura por script deveria ser a família "is not a valid member of", recebeu: {tostring(scriptReadErr)}`)
+end)
+
+test("Materialize: $properties numa Property ReadOnly (Workspace.FilteringEnabled) materializa com SUCESSO e lê pelo caminho normal; escrita de SCRIPT continua bloqueada (task-cli-038)", function()
+	local plan, planBag = planFixture("load-only-properties")
+	assert(plan ~= nil, `fixture 'load-only-properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(findByCodeAndField(bag, "materialize/invalid-property", "FilteringEnabled") == nil, "'FilteringEnabled' NÃO deveria produzir 'materialize/invalid-property' -- ReadOnly é ignorado na hidratação")
+	assert(not bag:HasErrors(), `materialização de 'load-only-properties' não deveria produzir NENHUM erro (bag: {#bag:All()} diagnostic(s))`)
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter um Workspace depois de Materialize")
+	if workspaceInstance == nil then
+		return
+	end
+
+	-- Lê PELO CAMINHO NORMAL (__index estrito, script comum) -- FilteringEnabled é ScriptVisible
+	-- = true, só ReadOnly = true, então a LEITURA sempre funcionou; o que muda com esta tarefa é
+	-- que a HIDRATAÇÃO em si (a escrita vinda de $properties) não erra mais "Property is read
+	-- only".
+	local workspaceDot = (workspaceInstance :: unknown) :: { [string]: unknown }
+	assert(workspaceDot["FilteringEnabled"] == true, "workspace.FilteringEnabled deveria ler 'true' pelo caminho normal depois de hidratado via $properties")
+
+	-- Escrita de SCRIPT continua bloqueada -- o eixo de ESCRITA POR SCRIPT (ReadOnly) não muda em
+	-- nada por esta tarefa, só o caminho de HIDRATAÇÃO (que nunca é escrita de script).
+	local scriptWriteOk, scriptWriteErr = pcall(function()
+		workspaceDot["FilteringEnabled"] = false
+	end)
+	assert(not scriptWriteOk, "workspace.FilteringEnabled = false (escrita de SCRIPT) deveria continuar errando -- ReadOnly não muda de eixo")
+	assert(string.find(tostring(scriptWriteErr), "read only", 1, true) ~= nil, `erro de escrita por script deveria citar "read only", recebeu: {tostring(scriptWriteErr)}`)
+
+	-- Confirma que a escrita de script NUNCA teve efeito -- continua 'true'.
+	assert(workspaceDot["FilteringEnabled"] == true, "FilteringEnabled deveria continuar 'true' -- a tentativa de escrita de script acima nunca deveria ter tido efeito")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- CORREÇÃO DE REVISÃO (regressão real achada pelo revisor de task-cli-038, não cosmética):
+-- `Runtime.Instance.SetPropertyRaw` (A4) dispara `Changed:Fire` de forma SÍNCRONA, que pode
+-- invocar um listener que `services` já conectou no bootstrap (`behavior/Lighting.luau`, o
+-- listener de "TimeOfDay") ANTES de qualquer script do usuário rodar. `resolvePropertyValue` (A3)
+-- só valida FORMA (ValueType/ValueCategory) -- "not-a-real-time-boom" é uma STRING perfeitamente
+-- válida pro decode de uma propriedade `string` comum, então o listener É alcançado, e
+-- `parseTimeOfDay` (`behavior/Lighting.luau`) erra pra qualquer formato não reconhecido.
+-- REPRODUZIDO pelo revisor: SEM o `pcall` em A4, esse erro escapava cru de `Signal.Fire`
+-- (`Signal.luau` re-lança o primeiro erro quando a thread chamadora não é gerida pelo
+-- `ThreadBroker` -- o caso de `Materialize` rodando antes do `scheduler:Run`), derrubando
+-- `Materialize`/`luaubench run` inteiro com um stack trace cru vazando o caminho de instalação em
+-- disco -- reabrindo a MESMA classe de vazamento que task-cli-010/011 já fecharam. Este teste
+-- confirma o FIX: o mesmo cenário agora vira um `Diagnostic` normal, formatado, sem crash.
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties.TimeOfDay malformado (Lighting) NÃO derruba o comando -- listener de Changed conectado por 'services' que erra vira Diagnostic 'materialize/invalid-property' (CORREÇÃO DE REVISÃO, regressão real de task-cli-038)", function()
+	local plan, planBag = planFixture("behavior-listener-error")
+	assert(plan ~= nil, `fixture 'behavior-listener-error' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+
+	-- `pcall` PRÓPRIO deste teste (mesmo protocolo do teste task-cli-027, acima) -- transforma "o
+	-- processo inteiro crasha" (o bug real, sem o fix) numa FALHA DE TESTE legível em vez de um
+	-- crash opaco levando o resto da suíte junto.
+	local ok, treeOrError = pcall(function(): TreeMaterializer.MaterializedTree
+		return TreeMaterializer.Materialize(plan, game, bag)
+	end)
+	assert(ok, `Materialize NUNCA deveria crashar por um listener de Changed de 'services' errando -- crashou com: {tostring(treeOrError)}`)
+	if not ok then
+		return
+	end
+
+	assert(bag:HasErrors(), "$properties.TimeOfDay malformado deveria produzir um erro")
+	local diagnostic = findByCodeAndField(bag, "materialize/invalid-property", "TimeOfDay")
+	assert(diagnostic ~= nil, "deveria haver um Diagnostic 'materialize/invalid-property' para 'TimeOfDay'")
+	if diagnostic ~= nil then
+		assert(diagnostic.Severity == "error", "TimeOfDay malformado deveria ser Severity 'error'")
+		assert(diagnostic.NodePath ~= nil and string.find(diagnostic.NodePath, "Lighting", 1, true) ~= nil, "Diagnostic deveria citar o NodePath de 'Lighting'")
+		assert(string.find(diagnostic.Message, "not-a-real-time-boom", 1, true) ~= nil, `mensagem deveria citar o valor malformado, recebeu: {diagnostic.Message}`)
+
+		-- Mesma disciplina de task-cli-010/011: nunca vaza caminho absoluto de disco nem chunk
+		-- interno -- confirma que o `pcall`+`stripEngineErrorLocation` novo se comporta como os
+		-- outros dois pontos já existentes no arquivo.
+		assert(string.match(diagnostic.Message, "%a:\\") == nil, `mensagem NÃO deveria conter um caminho absoluto de disco (letra:\\), achou: {diagnostic.Message}`)
+		assert(string.find(diagnostic.Message, ".luau:", 1, true) == nil, `mensagem NÃO deveria conter '.luau:' (chunk interno vazando), achou: {diagnostic.Message}`)
+		assert(string.find(diagnostic.Message, "TreeMaterializer:", 1, true) == nil, `mensagem NÃO deveria conter 'TreeMaterializer:' (call site interno vazando), achou: {diagnostic.Message}`)
+	end
+
+	assert(#treeOrError.Scripts == 0, "fixture 'behavior-listener-error' não tem nenhum Script/LocalScript/ModuleScript")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-038 (D4, A1/DV-5): $properties.Name/.Parent/.ClassName juntos, no MESMO nó -- os TRÊS
+-- viram warning 'materialize/structural-property-ignored' e SKIP, nenhum efeito estrutural (nem
+-- rename, nem reparent, nem troca de classe).
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties.Name/.Parent/.ClassName juntos viram warning 'materialize/structural-property-ignored', SEM NENHUM efeito estrutural (task-cli-038)", function()
+	local plan, planBag = planFixture("structural-properties")
+	assert(plan ~= nil, `fixture 'structural-properties' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(not bag:HasErrors(), `materialização de 'structural-properties' não deveria produzir NENHUM erro (bag: {#bag:All()} diagnostic(s))`)
+	assert(countByCode(bag, "materialize/structural-property-ignored") == 3, `esperava exatamente 3 warnings 'materialize/structural-property-ignored' (Name/Parent/ClassName), achou {countByCode(bag, "materialize/structural-property-ignored")}`)
+
+	for _, field in { "Name", "Parent", "ClassName" } do
+		local diagnostic = findByCodeAndField(bag, "materialize/structural-property-ignored", field)
+		assert(diagnostic ~= nil, `deveria haver um Diagnostic 'materialize/structural-property-ignored' para '{field}'`)
+		if diagnostic ~= nil then
+			assert(diagnostic.Severity == "warning", `'{field}' estrutural deveria ser Severity 'warning', nunca erro`)
+		end
+	end
+
+	local workspaceInstance = game:FindFirstChildOfClass("Workspace")
+	assert(workspaceInstance ~= nil, "game deveria ter Workspace")
+	if workspaceInstance == nil then
+		return
+	end
+
+	-- Name: continua "RenameMe" -- nunca virou "RenamedViaProperties".
+	local original = workspaceInstance:FindFirstChild("RenameMe")
+	assert(original ~= nil, "'RenameMe' deveria continuar existindo com o nome original -- $properties.Name é ignorado")
+	if original == nil then
+		return
+	end
+	assert(original.Name == "RenameMe", "Instance.Name NUNCA deveria ter mudado via $properties.Name")
+
+	-- Parent: continua sob Workspace -- nunca migrou para ReplicatedStorage.
+	assert(original.Parent == workspaceInstance, "Instance.Parent NUNCA deveria ter mudado via $properties.Parent -- continua sob Workspace")
+	local replicatedStorage = game:FindFirstChildOfClass("ReplicatedStorage")
+	if replicatedStorage ~= nil then
+		assert(replicatedStorage:FindFirstChild("RenameMe") == nil, "'RenameMe' NUNCA deveria ter migrado para ReplicatedStorage via $properties.Parent")
+	end
+
+	-- ClassName: continua "Folder" -- nunca virou "Model".
+	assert(original.ClassName == "Folder", "Instance.ClassName NUNCA deveria ter mudado via $properties.ClassName -- continua o Folder real")
+end)
+
+--------------------------------------------------------------------------------------------------
+-- task-cli-038 (DV-6): $properties.Source num Script SOBRESCREVE o Source vindo do $path -- a
+-- escrita de node.Source (via SetPropertyRaw, `materializeNode`) roda ANTES de applyProperties, e
+-- $properties.Source (também via SetPropertyRaw, agora que "Source" existe no schema achatado
+-- como load-only -- task-services-035) roda DEPOIS -- a segunda escrita vence. O Rojo real também
+-- aceita "Source" em $properties (pesquisa-rojo-properties-security-2026-09-07.md, seção 3: nenhum
+-- caso especial pra "Source" em project.rs, só "Name"/"Parent").
+--------------------------------------------------------------------------------------------------
+
+test("Materialize: $properties.Source num Script SOBRESCREVE o Source vindo do $path -- precedência fixada (task-cli-038, DV-6)", function()
+	local plan, planBag = planFixture("source-override")
+	assert(plan ~= nil, `fixture 'source-override' deveria produzir um InstancePlan válido (bag: {#planBag:All()} diagnostic(s))`)
+	if plan == nil then
+		return
+	end
+
+	local game = newGame()
+	local bag = Diagnostics.newBag()
+	TreeMaterializer.Materialize(plan, game, bag)
+
+	assert(not bag:HasErrors(), `materialização de 'source-override' não deveria produzir NENHUM erro (bag: {#bag:All()} diagnostic(s))`)
+
+	local serverScriptService = game:FindFirstChildOfClass("ServerScriptService")
+	assert(serverScriptService ~= nil, "game deveria ter ServerScriptService")
+	if serverScriptService == nil then
+		return
+	end
+	local mainScript = findChild(serverScriptService, "Main")
+	assert(mainScript ~= nil, "ServerScriptService deveria ter um filho 'Main'")
+	if mainScript == nil then
+		return
+	end
+
+	local rawSource = Runtime.Instance.GetPropertyRaw(mainScript, "Source")
+	assert(rawSource == 'print("overridden by $properties.Source")', `Source deveria ter sido SOBRESCRITO pelo valor de $properties.Source, recebeu: {tostring(rawSource)}`)
+
+	local fileContent = require("@lune/fs").readFile(fixturePath("source-override") .. "/server/Main.server.lua")
+	assert(rawSource ~= fileContent, "Source NÃO deveria mais ser o conteúdo cru do arquivo -- $properties.Source venceu a precedência")
 end)
 
 print(`\n{passedCount}/{totalCount} testes passaram`)

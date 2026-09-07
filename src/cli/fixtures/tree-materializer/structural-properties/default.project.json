@@ -1,0 +1,17 @@
+{
+  "name": "TreeMaterializerStructuralProperties",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {},
+    "Workspace": {
+      "RenameMe": {
+        "$className": "Folder",
+        "$properties": {
+          "Name": "RenamedViaProperties",
+          "Parent": "ReplicatedStorage",
+          "ClassName": "Model"
+        }
+      }
+    }
+  }
+}

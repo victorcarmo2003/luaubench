@@ -56,18 +56,71 @@
 	que está no `ClassSchema`) -- fiel ao Roblox, onde `Source` também não é lido por um script
 	rodando dentro do próprio jogo.
 
-	`$properties` vai pela via PÚBLICA de escrita, nunca por `SetPropertyRaw` (Decisão 7): a chave
-	vem do `.project.json` (entrada não confiável, pode ser um typo tipo "Gravty"), e
-	`SetPropertyRaw` IGNORA o schema -- gravaria uma propriedade fantasma que o script depois não
-	conseguiria LER (o `__index` estrito erraria "Gravty is not a valid member of ..."), um erro
-	dez passos depois da causa real. Em vez disso: `local writable = (instance :: unknown) :: {
-	[string]: unknown }` -- um dos casts de fronteira deste módulo (o outro é o narrowing do
-	resultado de `pcall(Services.new)`, mais abaixo), cada um comentado no próprio ponto de uso
-	-- e a escrita roda dentro de `pcall`, deixando o `__newindex` REAL do runtime (que já sabe
-	validar contra o `ClassSchema` e devolver a mensagem certa da família Roblox) fazer o
-	enforcement. Falha -> `Diagnostic` de erro citando `NodePath` + o nome da propriedade + a
-	mensagem do motor (via `pcall`), NUNCA derruba `Materialize` -- o resto da árvore continua
-	sendo materializado.
+	CORREÇÃO task-cli-038 (arquiteto-rojo-properties-2026-09-07.md, seções D4/4/5 -- LER ANTES de
+	mexer em `applyProperties`): a Decisão 7 original ("`$properties` vai pela via PÚBLICA de
+	escrita, nunca por `SetPropertyRaw`") tratava `$properties` como se fosse ESCRITA DE SCRIPT --
+	e por isso herdava, sem querer, o gate de `Security`/`ReadOnly` que só faz sentido para um
+	`Script` do projeto lendo/escrevendo em runtime. Pesquisa confirmada contra o código-fonte real
+	do Rojo (`pesquisa-rojo-properties-security-2026-09-07.md`): `rojo build` é um caminho de
+	DESERIALIZAÇÃO/HIDRATAÇÃO que nunca consulta Security/Scriptability/Serialization ao aplicar
+	`$properties` -- só valida que o NOME existe como `Property` na cadeia de classes e que a FORMA
+	do JSON bate com o `DataType`. Isso derrubava o template padrão do `rojo init`
+	(`Lighting.Technology`, `Workspace.FilteringEnabled`), que antes desta correção nem chegava a
+	existir no schema ou errava "Property is read only".
+
+	`applyProperties`, abaixo, agora bifurca por instância (uma vez por nó, nunca por propriedade):
+
+	CAMINHO A -- instância ESTRITA (`Runtime.ClassRegistry.IsRegistered(ClassName) == true`, todo
+	nó real do projeto): `Name`/`Parent`/`ClassName` são SKIP com warning
+	`materialize/structural-property-ignored` (paridade literal com `project.rs:234-260`, que só
+	trata `Name`/`Parent` como caso especial via `log::warn!`+`continue`; `ClassName` entra pela
+	MESMA regra por analogia estrutural -- no LuauBench é estado FORA de `data.properties`, e
+	gravar cru seria estado morto e silencioso). Daí resolve o `MemberDescriptor` no schema
+	ACHATADO (`findMemberDescriptor`, que a partir de task-services-035 também enxerga as entradas
+	`ScriptVisible = false` -- "existe estruturalmente" é o eixo certo para hidratação, não "o
+	script enxerga"): descritor `nil` -> `materialize/invalid-property`
+	(`Messages.MaterializePropertyNotAMember`, mesma frase que o `__newindex` real produziria, mas
+	CONSTRUÍDA aqui -- ver por quê, abaixo); `Kind ~= "Property"` (Event/Callback) ->
+	`materialize/invalid-property` (`Messages.MaterializePropertyNotAProperty`) -- é a barreira
+	dura que garante que NENHUM evento vira gravável por projeto, mesmo para um valor primitivo
+	que passaria batido pelo decode. Passadas as duas guardas, a escrita é por
+	`Runtime.Instance.SetPropertyRaw(instance, key, value)` -- ignora `ReadOnly` E `ScriptVisible`,
+	exatamente como o `rojo build` real ignora `scriptability`/`serialization`. `Messages.
+	MaterializePropertyNotAMember`/`MaterializePropertyNotAProperty` precisam CONSTRUIR a frase (não
+	colher de um `pcall`): não existe mais nenhum `__newindex` real sendo chamado neste caminho para
+	produzi-la sozinho -- essas duas guardas (nome inexistente/Kind errado) SÃO alcançáveis sem
+	efeito colateral nenhum. A escrita em si, porém, PRECISA de `pcall` (CORREÇÃO DE REVISÃO,
+	achado do revisor de task-cli-038): `SetPropertyRaw` dispara `Changed:Fire` de forma SÍNCRONA,
+	que pode invocar um listener que `services` já conectou no bootstrap (ex.:
+	`behavior/Lighting.luau`, "TimeOfDay") e que pode `error()`ar sobre um valor que passou pelo
+	decode de FORMA (A3) mas é semanticamente inválido (ex.: `"not-a-real-time"` é uma `string`
+	válida, mas `parseTimeOfDay` a rejeita) -- ver o comentário completo no ponto de uso, abaixo,
+	para a cadeia exata (`Signal.Fire` re-lança o primeiro erro quando a thread chamadora não é
+	gerida pelo `ThreadBroker`, o caso de `Materialize` rodando antes do `scheduler:Run`).
+
+	CAMINHO B -- instância LENIENTE (só `game`/DataModel, `IsRegistered == false`): INTOCADO --
+	`local writable = (instance :: unknown) :: { [string]: unknown }` -- um dos casts de fronteira
+	deste módulo (o outro é o narrowing do resultado de `pcall(Services.new)`, mais abaixo), cada
+	um comentado no próprio ponto de uso -- e a escrita roda dentro de `pcall`, deixando o
+	`__newindex` REAL do runtime (que já sabe validar contra o `ClassSchema`/`readOnlyRawKeys` e
+	devolver a mensagem certa da família Roblox) fazer o enforcement. Falha -> `Diagnostic` de erro
+	citando `NodePath` + o nome da propriedade + a mensagem do motor (via `pcall`), NUNCA derruba
+	`Materialize`. DV-2 (declarada no desenho): `PlaceId`/`JobId`/`GameId`/`PlaceVersion` continuam
+	recusadas aqui -- são estado do HOST que o próprio LuauBench define, não estado do projeto; o
+	Rojo real as aceitaria, mas abrir isso é decisão de usuário fora do escopo desta tarefa.
+
+	Em AMBOS os caminhos: a decodificação (`resolvePropertyValue`/`ValueTypes.Decode.FromRojoJson`,
+	os 3 diagnósticos que ela já produzia) é INALTERADA -- só a guarda de ENTRADA (Caminho A) e o
+	mecanismo de ESCRITA final divergem.
+
+	DV-1 (declarada no desenho): um valor hidratado numa propriedade `ScriptVisible = false` fica
+	só no DOM -- nenhum comportamento simulado reage a ele (`Lighting.Technology = Voxel` não muda
+	render nenhum, porque não há render). DV-6 (declarada no desenho): `$properties.Source` num
+	`Script`/`ModuleScript` agora É aceito (a partir de task-services-035, `Source` existe no schema
+	achatado como `ScriptVisible = false`) e SOBRESCREVE o `Source` vindo do `$path` -- a escrita de
+	`node.Source` via `SetPropertyRaw` roda ANTES de `applyProperties` em `materializeNode`, então a
+	segunda escrita (via `$properties`) vence. O Rojo real também aceita `Source` em `$properties`
+	e não concede poder novo (o `$path` do próprio projeto já traz código arbitrário).
 
 	task-cli-025 (arquiteto-valuetypes-2026-09-05.md, seção 3.4 "cli" / Decisão 5, seção 7):
 	`TreePlanner` deixou de filtrar `$properties` não-primitivo (array/objeto do JSON) -- o valor
@@ -415,6 +468,16 @@ end
 -- pra array/objeto) e adiciona qualquer `Diagnostic` de "não decodificável"/"tipo não
 -- simulado"/"forma desconhecida" ANTES de chegar aqui -- `applyProperties` só cuida da ESCRITA em
 -- si (e do `materialize/invalid-property` que só o `__newindex` real sabe produzir).
+-- task-cli-038 (D4): as três chaves ESTRUTURAIS que o CAMINHO A recusa sempre, ANTES de resolver
+-- qualquer descritor -- ver Messages.MaterializeStructuralPropertyIgnored para o porquê de cada
+-- uma. Tabela module-local (não recriada por chamada) pelo mesmo motivo de SCRIPT_CLASS_NAMES,
+-- acima -- conjunto fixo, nunca deriva de dado de entrada.
+local STRUCTURAL_PROPERTY_NAMES: { [string]: boolean } = {
+	Name = true,
+	Parent = true,
+	ClassName = true,
+}
+
 local function applyProperties(instance: Runtime.Instance, properties: { [string]: TreePlanner.PlanPropertyValue }, nodePath: string, bag: Diagnostics.Bag): ()
 	local propertyNames: { string } = {}
 	for key in properties do
@@ -422,7 +485,104 @@ local function applyProperties(instance: Runtime.Instance, properties: { [string
 	end
 	table.sort(propertyNames)
 
+	-- task-cli-038: CAMINHO decidido UMA VEZ por nó (nunca por propriedade individual) -- é a
+	-- MESMA pergunta que `findMemberDescriptor` já faz internamente (`IsRegistered`), então nunca
+	-- diverge do que a resolução de descritor, abaixo, também enxerga. Toda Instance que chega
+	-- aqui vinda de `game:GetService(...)`/adoção de filho fixo/`Services.new(...)` tem
+	-- `ClassSchema` instalado (registrada); só a raiz `game`/`DataModel` não (construída à mão,
+	-- nunca via `ClassRegistry.Register` -- ver `findMemberDescriptor`, acima).
+	local isStrict = Runtime.ClassRegistry.IsRegistered(instance.ClassName)
+
 	for _, key in propertyNames do
+		if isStrict then
+			-- CAMINHO A (instância ESTRITA) -- ver o cabeçalho deste arquivo, "CORREÇÃO
+			-- task-cli-038", para o desenho completo.
+			if STRUCTURAL_PROPERTY_NAMES[key] then
+				-- A1 (DV-5): paridade literal com o Rojo real -- skip com warning, NUNCA escreve.
+				bag:Add({
+					Severity = "warning",
+					Code = "materialize/structural-property-ignored",
+					Message = Messages.MaterializeStructuralPropertyIgnored(nodePath, key),
+					NodePath = nodePath,
+					Field = key,
+				})
+				continue
+			end
+
+			-- A2: resolve o descritor no schema ACHATADO e barra qualquer coisa que não seja
+			-- `Kind == "Property"` ANTES de decodificar/escrever -- é a barreira dura que garante
+			-- que $properties nunca torna um Event/Callback gravável por projeto, mesmo para um
+			-- valor PRIMITIVO que `resolvePropertyValue`, abaixo, devolveria direto sem consultar
+			-- descritor nenhum (ver aquela função, ramo boolean/number).
+			local descriptor = findMemberDescriptor(instance.ClassName, key)
+			if descriptor == nil then
+				bag:Add({
+					Severity = "error",
+					Code = "materialize/invalid-property",
+					Message = Messages.MaterializePropertyNotAMember(nodePath, key, instance.ClassName, instance:GetFullName()),
+					NodePath = nodePath,
+					Field = key,
+				})
+				continue
+			end
+			if descriptor.Kind ~= "Property" then
+				bag:Add({
+					Severity = "error",
+					Code = "materialize/invalid-property",
+					Message = Messages.MaterializePropertyNotAProperty(nodePath, key, instance.ClassName, descriptor.Kind),
+					NodePath = nodePath,
+					Field = key,
+				})
+				continue
+			end
+
+			-- A3: decodificação INALTERADA -- `resolvePropertyValue` já adiciona o Diagnostic
+			-- correspondente (undecodable/type-not-simulated/shape-unknown) e devolve `nil` quando
+			-- a propriedade deve ser pulada.
+			local valueToWrite = resolvePropertyValue(instance.ClassName, key, properties[key], nodePath, bag)
+			if valueToWrite == nil then
+				continue
+			end
+
+			-- A4: `SetPropertyRaw` ignora `ReadOnly` E `ScriptVisible`, exatamente como o `rojo
+			-- build` real ignora `scriptability`/`serialization` ao hidratar $properties
+			-- (pesquisa-rojo-properties-security-2026-09-07.md).
+			--
+			-- CORREÇÃO DE REVISÃO (achado do revisor de task-cli-038, regressão real): `SetPropertyRaw`
+			-- dispara `Changed:Fire(key)` de forma SÍNCRONA (`Instance.luau`, `SetPropertyRaw`) --
+			-- que pode invocar um listener que `services` já conectou no bootstrap (ex.:
+			-- `behavior/Lighting.luau`, o listener de `TimeOfDay`, que chama `parseTimeOfDay` e
+			-- `error()`a pra qualquer string malformada). A3 só valida FORMA (ValueType/
+			-- ValueCategory via `ValueTypes.Decode`) -- "not-a-real-time" é uma STRING perfeitamente
+			-- válida pro decode de uma propriedade `string`, então NÃO sobra "nenhum caminho de erro
+			-- real" como o comentário original desta função afirmava: o erro pode vir de FORA deste
+			-- módulo, de um listener de `services` reagindo à mudança. `Signal.Fire` (`Signal.luau`)
+			-- isola cada listener com `pcall` individual, mas RE-LANÇA o primeiro erro depois do
+			-- laço quando a thread chamadora não é gerida pelo `ThreadBroker` (o caso aqui --
+			-- `Materialize` roda antes do `scheduler:Run`, fora de qualquer coroutine gerida) -- sem
+			-- proteção, esse erro escapa cru de `SetPropertyRaw` e derruba `Materialize`/
+			-- `luaubench run` inteiro, reabrindo a MESMA classe de vazamento de path (caminho
+			-- absoluto de instalação em disco) que task-cli-010/011 já fecharam. Por isso a escrita
+			-- também vai por `pcall` + `stripEngineErrorLocation` (MESMO padrão já usado no Caminho
+			-- B, abaixo, e no `pcall(Services.new(...))` de `createInstance` -- reusado, nunca
+			-- duplicado) -- vira o MESMO `Diagnostic` `materialize/invalid-property` de sempre,
+			-- nunca um crash cru.
+			local ok, err = pcall(function()
+				Runtime.Instance.SetPropertyRaw(instance, key, valueToWrite)
+			end)
+			if not ok then
+				bag:Add({
+					Severity = "error",
+					Code = "materialize/invalid-property",
+					Message = Messages.MaterializePropertyAssignmentFailed(nodePath, key, stripEngineErrorLocation(tostring(err))),
+					NodePath = nodePath,
+					Field = key,
+				})
+			end
+			continue
+		end
+
+		-- CAMINHO B (instância LENIENTE, DV-2) -- INTOCADO: só `game`/DataModel chega aqui.
 		local valueToWrite = resolvePropertyValue(instance.ClassName, key, properties[key], nodePath, bag)
 		if valueToWrite == nil then
 			-- `resolvePropertyValue` já adicionou o Diagnostic correspondente -- pula a escrita,
@@ -430,14 +590,15 @@ local function applyProperties(instance: Runtime.Instance, properties: { [string
 			continue
 		end
 
-		-- Cast de fronteira (Decisão 7): `Runtime.Instance` é um tipo de campos
-		-- NOMEADOS (o schema de cada classe concreta é uma interseção fechada, decidida por
-		-- `services`) -- não existe assinatura estática para "escreva a propriedade cujo nome é
-		-- esta string que veio de um arquivo JSON em disco". O cast widening por `unknown` (nunca
-		-- um `any` disfarçado -- o valor É de fato uma Instance em runtime) é o que permite indexar
-		-- por uma chave dinâmica; a VALIDAÇÃO real (a chave existe? é gravável?) continua 100% a
-		-- cargo do `__newindex` verdadeiro, chamado logo abaixo dentro do `pcall` -- este cast não
-		-- pula NENHUM enforcement, só muda o tipo que o compilador enxerga do lado esquerdo do `=`.
+		-- Cast de fronteira (Decisão 7 original, ainda válida para o caminho LENIENTE):
+		-- `Runtime.Instance` é um tipo de campos NOMEADOS (o schema de cada classe concreta é uma
+		-- interseção fechada, decidida por `services`) -- não existe assinatura estática para
+		-- "escreva a propriedade cujo nome é esta string que veio de um arquivo JSON em disco". O
+		-- cast widening por `unknown` (nunca um `any` disfarçado -- o valor É de fato uma Instance
+		-- em runtime) é o que permite indexar por uma chave dinâmica; a VALIDAÇÃO real (a chave
+		-- existe? é gravável?) continua 100% a cargo do `__newindex` verdadeiro, chamado logo
+		-- abaixo dentro do `pcall` -- este cast não pula NENHUM enforcement, só muda o tipo que o
+		-- compilador enxerga do lado esquerdo do `=`.
 		local writable = (instance :: unknown) :: { [string]: unknown }
 		local ok, err = pcall(function()
 			writable[key] = valueToWrite

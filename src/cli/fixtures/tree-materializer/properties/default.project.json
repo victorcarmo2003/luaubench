@@ -7,8 +7,9 @@
         "$className": "Folder",
         "$properties": {
           "archivable": false,
+          "className": "Hacked",
           "Gravty": 10,
-          "className": "Hacked"
+          "ChildAdded": true
         }
       }
     }

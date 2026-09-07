@@ -1,0 +1,11 @@
+{
+  "name": "TreeMaterializerBehaviorListenerError",
+  "tree": {
+    "$className": "DataModel",
+    "Lighting": {
+      "$properties": {
+        "TimeOfDay": "not-a-real-time-boom"
+      }
+    }
+  }
+}
