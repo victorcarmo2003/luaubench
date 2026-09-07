@@ -395,34 +395,41 @@ end
 test("Processo real: fixture 'http-audit' -- OnHttpRequest/HttpRequestAuditLine fiados de ponta a ponta contra uma requisição HTTP real (achado MÉDIO, revisão task-cli-026)", function()
 	local RESPONSE_BODY = "http-audit-ok"
 
-	-- ACHADO EXTRA desta tarefa (task-cli-034), FORA do território de `cli` -- não corrigido aqui,
-	-- só mitigado no teste (ver `MAX_ROUNDTRIP_ATTEMPTS` abaixo): mesmo com a porta escolhida
-	-- dinamicamente (nunca mais a fixa 47210) e o servidor local comprovadamente pronto (testado
-	-- isoladamente com uma checagem de `net.tcp.connect` bem-sucedida IMEDIATAMENTE antes de
-	-- spawnar o processo filho -- não eliminou a falha, o que descarta "servidor ainda não subiu"
-	-- como causa), `HttpService:GetAsync` (`src/services/behavior/HttpService.luau:1255/1353`)
-	-- ainda falha esporadicamente com "the request could not be completed". Taxa medida nesta
-	-- investigação, isolando o cenário fora deste spec (só `net.serve` local + `net.request` de um
-	-- processo `lune` novo, em loop apertado): de ~5% (2/40) a ~20% por tentativa dependendo da
-	-- carga da máquina no momento -- e as falhas às vezes vêm em RAJADAS de 2-3 tentativas seguidas
-	-- (medido ao vivo), não são estritamente independentes. Mais grave que a falha em si: quando
-	-- isso acontece, o erro ESCAPA do pipeline normal de formatação/contagem de erro (o formato de
-	-- uma linha só "error ServerScriptService.Main:2: ..." + ErrorCount>=1 que qualquer OUTRO erro
-	-- de script já usa, ex. teste 'module-error' acima) -- em vez disso sai como um dump CRU de
-	-- stack do próprio Lune (`[Stack Begin]/[Stack End]`, citando `src/runtime/Sandbox:549`) com o
-	-- sumário final ainda dizendo "0 error(s)" e exit code 0. É um bug real de `services`/`runtime`
-	-- (o erro do `GetAsync` não propaga pelo mesmo caminho de `ThreadError` que outros erros de
-	-- script usam), fora do território desta tarefa para corrigir. Reportado à parte para
-	-- `coder-services`/`coder-runtime` investigarem.
+	-- HISTÓRICO (achado original de task-cli-034, FORA do território de `cli`, CORRIGIDO em
+	-- task-services-034 -- fix em `src/services/behavior/HttpService.luau`, commit `eb60019`):
+	-- mesmo com a porta escolhida dinamicamente (nunca mais a fixa 47210) e o servidor local
+	-- comprovadamente pronto (testado isoladamente com uma checagem de `net.tcp.connect`
+	-- bem-sucedida IMEDIATAMENTE antes de spawnar o processo filho -- o que descartou "servidor
+	-- ainda não subiu" como causa), `HttpService:GetAsync` falhava esporadicamente com "the request
+	-- could not be completed". Taxa medida na investigação original, isolando o cenário fora deste
+	-- spec (só `net.serve` local + `net.request` de um processo `lune` novo, em loop apertado): de
+	-- ~5% (2/40) a ~20% por tentativa dependendo da carga da máquina no momento -- e as falhas às
+	-- vezes vinham em RAJADAS de 2-3 tentativas seguidas, não estritamente independentes. Mais grave
+	-- que a falha em si: quando acontecia, o erro ESCAPAVA do pipeline normal de formatação/contagem
+	-- de erro (o formato de uma linha só "error ServerScriptService.Main:2: ..." + ErrorCount>=1 que
+	-- qualquer OUTRO erro de script já usa, ex. teste 'module-error' acima) -- em vez disso saía como
+	-- um dump CRU de stack do próprio Lune (`[Stack Begin]/[Stack End]`, citando
+	-- `src/runtime/Sandbox:549`) com o sumário final ainda dizendo "0 error(s)" e exit code 0.
 	--
-	-- MITIGAÇÃO (nunca um sleep -- reação determinística a uma falha REAL, com teto): repete o
-	-- round-trip inteiro (nova porta a cada tentativa) até `MAX_ROUNDTRIP_ATTEMPTS` vezes -- 8, com
-	-- margem generosa por causa das rajadas observadas (mesmo a uma taxa pessimista de 20% por
-	-- tentativa E tratando cada rajada como perfeitamente correlacionada em pares, esgotar 8
-	-- tentativas seguidas é um evento overwhelmingly raro). Isto NÃO mascara uma regressão de
-	-- verdade: uma quebra sistemática do contrato (`GetAsync` sempre falhando, ou a linha de
-	-- auditoria sumindo) continua falhando em TODAS as tentativas -- a asserção final roda sem rede
-	-- de segurança nenhuma na última tentativa.
+	-- CAUSA RAIZ (task-services-034): `net.request` (Lune) é nativamente assíncrono -- a coroutine
+	-- chamadora é retomada pelo runtime interno do próprio Lune, nunca por `Scheduler.resumeThread`,
+	-- o único ponto do projeto que transforma um resume com erro em `ThreadError:Fire`. Quando esse
+	-- resume nativo entregava um erro, ele escapava direto pro caminho de erro-não-tratado do Lune em
+	-- vez de passar pelo `ThreadError`. FIX: `performNetRequest` agora isola o `net.request` dentro
+	-- de uma coroutine `task.spawn` descartável (com seu próprio `pcall`), enquanto a thread gerida
+	-- pelo Scheduler faz polling do resultado via `scheduler:Wait(0.001)` -- devolvendo o erro pelo
+	-- caminho normal de `ThreadError` como qualquer outro erro de script.
+	--
+	-- O RETRY abaixo continua válido mesmo com a causa raiz corrigida: cobre flakiness normal de rede
+	-- (a requisição real ainda pode falhar por motivo transitório de rede/SO, só que agora formatada
+	-- e contada corretamente em vez de vazar). Repete o round-trip inteiro (nova porta a cada
+	-- tentativa) até `MAX_ROUNDTRIP_ATTEMPTS` vezes -- 8, com margem generosa por causa das rajadas
+	-- observadas na investigação original (mesmo a uma taxa pessimista de 20% por tentativa E
+	-- tratando cada rajada como perfeitamente correlacionada em pares, esgotar 8 tentativas seguidas
+	-- é um evento overwhelmingly raro). Isto NÃO mascara uma regressão de verdade: uma quebra
+	-- sistemática do contrato (`GetAsync` sempre falhando, ou a linha de auditoria sumindo) continua
+	-- falhando em TODAS as tentativas -- a asserção final roda sem rede de segurança nenhuma na
+	-- última tentativa.
 	local MAX_ROUNDTRIP_ATTEMPTS = 8
 	local finalResult: process.ExecResult? = nil
 

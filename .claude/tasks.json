@@ -2734,7 +2734,7 @@
       "id": "task-cli-036",
       "title": "Atualizar comentario desatualizado sobre bug de GetAsync em RunCommand.spec.luau",
       "description": "task-services-034 corrigiu o bug real de HttpService:GetAsync escapando do pipeline de ThreadError (fix em src/services/behavior/HttpService.luau). src/cli/RunCommand.spec.luau, linhas ~398-425, tem um comentario descrevendo esse bug como pendente para coder-services/coder-runtime -- esta desatualizado desde o fix. Atualizar o comentario para refletir que o bug foi corrigido (referenciar task-services-034), sem remover o contexto historico se ainda for util para entender por que o teste tem retry deterministico.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-cli",
       "reviewer": "revisor-cli",
       "wave": 53,
@@ -2746,7 +2746,9 @@
       "acceptance": "Comentario em RunCommand.spec.luau reflete o estado atual (bug corrigido em task-services-034), nao o estado antigo (pendente). Nenhuma logica de teste alterada nesta tarefa -- so o comentario.",
       "depends": [],
       "createdAt": "2026-09-07",
-      "updatedAt": "2026-09-07"
+      "updatedAt": "2026-09-07",
+      "result": "Comentario nas linhas ~398-425 de RunCommand.spec.luau reescrito em 3 blocos: HISTORICO (o bug original, sintomas e taxa observada), CAUSA RAIZ (explicacao do fix real de task-services-034/commit eb60019 -- net.request e assincrono nativo, resume nao passava por Scheduler.resumeThread/ThreadError; fix isola a chamada num task.spawn com pcall proprio e a thread do Scheduler faz polling via scheduler:Wait(0.001)), e RETRY (reafirma que MAX_ROUNDTRIP_ATTEMPTS continua valido so para flakiness normal de rede, nao mascara regressao). Nenhuma linha de logica alterada. Verificacao: lune run src/cli/RunCommand.spec.luau -- 31/31 testes passaram, incluindo o teste http-audit afetado.",
+      "reviewResult": "APROVADO (revisor-cli, 2026-09-07). Confirmado: diff exclusivamente comentario (MAX_ROUNDTRIP_ATTEMPTS e resto da logica identicos). Referencias a task-services-034/commit eb60019 confirmadas via git log. Descricao do mecanismo (net.request assincrono nativo, task.spawn+pcall, polling via scheduler:Wait(0.001)/NET_REQUEST_POLL_INTERVAL) bate exatamente com performNetRequest real em HttpService.luau:1294-1345. lune run RunCommand.spec.luau: 31/31."
     }
   ]
 }
