@@ -25,7 +25,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
-		["IsFinished"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["IsFinished"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetCurrentPage",

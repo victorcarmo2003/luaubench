@@ -30,14 +30,19 @@
 	  idem, `Instance` direto, ver L2.5.3) + 1 de task-services-019-fix (`DataStoreKey` -- entrada
 	  MANUAL de coverage.luau, `Instance` direto no dump, mas NUNCA seria descoberta pelo fecho
 	  automático -- ver o comentário de coverage.luau, "task-services-019-fix", para o porquê)
-	- exatamente 4 membros de schema excluídos pelo eixo Capabilities na leva 1 (Script.Source,
+	- exatamente 4 membros marcados por Capability reservada na leva 1 (Script.Source,
 	  ModuleScript.Source, RunService.Misprediction, RunService.FrameNumber) -- nem a leva 2 nem
-	  task-services-022/023/025 acrescentam exclusão nova por este eixo (pesquisa-datastore-
+	  task-services-022/023/025 acrescentam marca nova por este eixo (pesquisa-datastore-
 	  2026-09-05.md, seção A, e pesquisa-http-messaging-2026-09-05.md, seção A: `HttpService`/
-	  `MessagingService` não têm membro excluído por Capability -- `Network`/`ServerCommunication`
+	  `MessagingService` não têm membro afetado por Capability -- `Network`/`ServerCommunication`
 	  são grantable; `PhysicsService`/`SoundService` idem, ver pesquisa-lighting-sound-physics-
 	  2026-09-05.md) fora de `DataStoreService.AutomaticRetry`/`LegacyNamingScheme`, que são
-	  `Property`, não afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo)
+	  `Property`, não afetam esta contagem de MÉTODOS -- ver teste dedicado abaixo). task-
+	  services-035 (.claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md): dos 4, os 3
+	  `Property` (Script.Source/ModuleScript.Source/RunService.FrameNumber) DEIXARAM de estar
+	  ausentes do schema -- agora ficam LOAD-ONLY (`ScriptVisible = false`, presentes no schema,
+	  invisíveis a `instance.X`); só o `Event` (RunService.Misprediction) continua de fato AUSENTE
+	  do schema, regra literalmente inalterada.
 	- 201 métodos emitidos no total no fecho (171 até task-services-017 + 9 de `HttpService` +
 	  2 de `MessagingService`, task-services-022 (182) + 15 de `PhysicsService` (8 de grupo de
 	  colisão + 7 `Deprecated`), task-services-023 (197) + 4 de `SoundService` (`GetListener`/
@@ -47,14 +52,25 @@
 	  de que a regra ingênua "capability != Basic é restritiva" não foi implementada)
 	- RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema
 	- Generated.Schema vem sempre congelado (table.freeze)
-	- DataStoreService.AutomaticRetry/LegacyNamingScheme (LocalUserSecurity) ficam FORA do schema
-	  -- único filtro de Security/Capabilities que a leva 2 introduz (task-services-017)
+	- DataStoreService.AutomaticRetry/LegacyNamingScheme (LocalUserSecurity) ficam PRESENTES no
+	  schema, porém LOAD-ONLY (`ScriptVisible = false`, task-services-035) -- único filtro de
+	  Security/Capabilities que a leva 2 introduz (task-services-017)
 	- HttpService.HttpEnabled semeada Default=false/ReadOnly=true (task-services-022, L2.2.1)
+	- task-services-035 (.claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md, seções
+	  "D2", "2" e "4"; pesquisa em pesquisa-rojo-properties-security-2026-09-07.md): TODA
+	  `Property` de uma classe do fecho entra no schema (`Security`/`Tags`/capability reservada só
+	  decidem `ScriptVisible`, nunca mais existência) -- 143 Property novas, load-only, em 17
+	  classes (Workspace 48, StarterPlayer 24, Instance 15, Model 11, LuaSourceContainer 7,
+	  WorldRoot 7, Players 6, StarterGui 6, SoundService 4, ModuleScript 3, RunService 3,
+	  DataStoreService 2, Lighting 2, PVInstance 2, Folder 1, Script 1, ServerScriptService 1).
+	  `Event`/`Callback` continuam seguindo a regra ANTIGA (ausentes do schema quando
+	  Security/Tags batem) -- zero mudança na contagem de `Event` no schema.
 
 	Roda com `lune run tools/generate-services.spec.luau`.
 ]]
 
 local process = require("@lune/process")
+local fs = require("@lune/fs")
 
 local Manifest = require("../src/services/generated/Manifest")
 local Index = require("../src/services/generated/Index")
@@ -141,40 +157,133 @@ test("O fecho tem exatamente 45 classes (24 da leva 1 + 16 de DataStoreService d
 	end
 end)
 
-test("Eixo Capabilities exclui EXATAMENTE os 4 membros de schema esperados na leva 1", function()
-	local scriptSchema = Index["Script"].Schema
-	local moduleScriptSchema = Index["ModuleScript"].Schema
-	local runServiceSchema = Index["RunService"].Schema
-
-	assert(scriptSchema["Source"] == nil, "Script.Source deveria estar FORA do schema (Capabilities.Read=[PluginOrOpenCloud])")
-	assert(
-		moduleScriptSchema["Source"] == nil,
-		"ModuleScript.Source deveria estar FORA do schema (Capabilities.Read=[PluginOrOpenCloud])"
-	)
-	assert(
-		runServiceSchema["Misprediction"] == nil,
-		"RunService.Misprediction deveria estar FORA do schema (Capabilities=[Basic,PluginOrOpenCloud])"
-	)
-	assert(
-		runServiceSchema["FrameNumber"] == nil,
-		"RunService.FrameNumber deveria estar FORA do schema (Capabilities.Read=[Basic,InternalTest])"
-	)
-end)
-
 test(
-	"task-services-017: DataStoreService.AutomaticRetry/LegacyNamingScheme ficam FORA do schema (LocalUserSecurity -- pesquisa-datastore-2026-09-05.md, seção A)",
+	"task-services-035: Capability reservada -- Property vira LOAD-ONLY (presente, ScriptVisible=false); Event continua AUSENTE",
 	function()
-		local dataStoreServiceSchema = Index["DataStoreService"].Schema
+		local scriptSchema = Index["Script"].Schema
+		local moduleScriptSchema = Index["ModuleScript"].Schema
+		local runServiceSchema = Index["RunService"].Schema
+
+		-- Script.Source/ModuleScript.Source (Property, Capabilities.Read=[PluginOrOpenCloud]) e
+		-- RunService.FrameNumber (Property, Capabilities.Read=[Basic,InternalTest]) EXISTEM no
+		-- schema (a hidratação de `$properties` precisa deles), mas são invisíveis ao script.
+		local scriptSource = scriptSchema["Source"]
+		assert(scriptSource ~= nil, "Script.Source deveria estar NO schema (task-services-035, load-only)")
+		assert(scriptSource.Kind == "Property", "Script.Source deveria ser Kind=\"Property\"")
+		assert(scriptSource.ScriptVisible == false, "Script.Source deveria ter ScriptVisible = false")
+		assert(scriptSource.Default == nil, "Script.Source.Default deveria ser nil (load-only nunca chama computeDefault)")
 		assert(
-			dataStoreServiceSchema["AutomaticRetry"] == nil,
-			"DataStoreService.AutomaticRetry deveria estar FORA do schema (Security Read/Write = LocalUserSecurity, fora do alcance de um Script comum)"
+			scriptSource.ValueType == "ProtectedString",
+			`Script.Source.ValueType esperado "ProtectedString", recebeu {tostring(scriptSource.ValueType)}`
 		)
+
+		local moduleScriptSource = moduleScriptSchema["Source"]
+		assert(moduleScriptSource ~= nil, "ModuleScript.Source deveria estar NO schema (task-services-035, load-only)")
+		assert(moduleScriptSource.ScriptVisible == false, "ModuleScript.Source deveria ter ScriptVisible = false")
+
+		local frameNumber = runServiceSchema["FrameNumber"]
+		assert(frameNumber ~= nil, "RunService.FrameNumber deveria estar NO schema (task-services-035, load-only)")
+		assert(frameNumber.ScriptVisible == false, "RunService.FrameNumber deveria ter ScriptVisible = false")
+
+		-- RunService.Misprediction é Event -- regra LITERALMENTE inalterada, continua AUSENTE.
 		assert(
-			dataStoreServiceSchema["LegacyNamingScheme"] == nil,
-			"DataStoreService.LegacyNamingScheme deveria estar FORA do schema (idem, e também Deprecated no dump)"
+			runServiceSchema["Misprediction"] == nil,
+			"RunService.Misprediction (Event) deveria continuar FORA do schema (Capabilities=[Basic,PluginOrOpenCloud]) -- regra de Event inalterada"
 		)
 	end
 )
+
+test(
+	"task-services-017 + task-services-035: DataStoreService.AutomaticRetry/LegacyNamingScheme ficam LOAD-ONLY no schema (LocalUserSecurity -- pesquisa-datastore-2026-09-05.md, seção A)",
+	function()
+		local dataStoreServiceSchema = Index["DataStoreService"].Schema
+		local automaticRetry = dataStoreServiceSchema["AutomaticRetry"]
+		assert(
+			automaticRetry ~= nil,
+			"DataStoreService.AutomaticRetry deveria estar NO schema (task-services-035, load-only) -- Security Read/Write = LocalUserSecurity, fora do alcance de um Script comum"
+		)
+		assert(automaticRetry.Kind == "Property", "DataStoreService.AutomaticRetry deveria ser Kind=\"Property\"")
+		assert(automaticRetry.ScriptVisible == false, "DataStoreService.AutomaticRetry deveria ter ScriptVisible = false")
+		assert(automaticRetry.Default == nil, "DataStoreService.AutomaticRetry.Default deveria ser nil (load-only)")
+
+		local legacyNamingScheme = dataStoreServiceSchema["LegacyNamingScheme"]
+		assert(
+			legacyNamingScheme ~= nil,
+			"DataStoreService.LegacyNamingScheme deveria estar NO schema (task-services-035, load-only) -- idem, e também Deprecated no dump"
+		)
+		assert(legacyNamingScheme.ScriptVisible == false, "DataStoreService.LegacyNamingScheme deveria ter ScriptVisible = false")
+	end
+)
+
+-- ================================================================================================
+-- task-services-035 -- cobertura DEDICADA da classificação nova (classifySchemaMember bifurcado
+-- no ramo Property; classifyMethodMember/o ramo Event-Callback continuam INALTERADOS). Critério
+-- de pronto do board: "Property com Security.Read elevado -> included + scriptVisible=false;
+-- Event com Security elevado -> continua excluído".
+-- ================================================================================================
+
+test("task-services-035: Property com Security.Read elevado -> included=true, scriptVisible=false (Lighting.Technology)", function()
+	local technology = Index["Lighting"].Schema["Technology"]
+	assert(technology ~= nil, "Lighting.Technology deveria estar NO schema (Security.Read=RobloxScriptSecurity vira load-only, não ausência)")
+	assert(technology.Kind == "Property", "Lighting.Technology deveria ser Kind=\"Property\"")
+	assert(technology.ScriptVisible == false, "Lighting.Technology deveria ter ScriptVisible = false")
+	assert(technology.Default == nil, "Lighting.Technology.Default deveria ser nil (load-only nunca chama computeDefault)")
+	-- ValueType/ValueCategory SEMPRE emitidos, mesmo invisível -- é o dado que `cli` precisa para
+	-- decodificar `$properties` (D2 do desenho).
+	assert(technology.ValueType == "Technology", `Lighting.Technology.ValueType esperado "Technology", recebeu {tostring(technology.ValueType)}`)
+	assert(technology.ValueCategory == "Enum", `Lighting.Technology.ValueCategory esperado "Enum", recebeu {tostring(technology.ValueCategory)}`)
+end)
+
+test("task-services-035: Property com NotScriptable -> included=true, scriptVisible=false (Workspace.CollisionGroups)", function()
+	local collisionGroups = Index["Workspace"].Schema["CollisionGroups"]
+	assert(collisionGroups ~= nil, "Workspace.CollisionGroups deveria estar NO schema (tag NotScriptable vira load-only, não ausência)")
+	assert(collisionGroups.ScriptVisible == false, "Workspace.CollisionGroups deveria ter ScriptVisible = false")
+end)
+
+test("task-services-035: Event com Security elevado -> continua EXCLUÍDO do schema (RunService.RobloxGuiFocusedChanged)", function()
+	assert(
+		Index["RunService"].Schema["RobloxGuiFocusedChanged"] == nil,
+		"RunService.RobloxGuiFocusedChanged (Event, Security=RobloxScriptSecurity) deveria continuar AUSENTE do schema -- regra de Event/Callback literalmente inalterada por task-services-035"
+	)
+end)
+
+test("task-services-035: Workspace.FilteringEnabled continua ScriptVisible=true/ReadOnly=true (Security.Write elevado, não Read)", function()
+	local filteringEnabled = Index["Workspace"].Schema["FilteringEnabled"]
+	assert(filteringEnabled ~= nil, "Workspace.FilteringEnabled deveria estar no schema (sempre esteve)")
+	assert(filteringEnabled.ScriptVisible == true, "Workspace.FilteringEnabled deveria continuar ScriptVisible = true (só Security.Write é elevado, Security.Read é None)")
+	assert(filteringEnabled.ReadOnly == true, "Workspace.FilteringEnabled deveria continuar ReadOnly = true (Security.Write=PluginSecurity)")
+end)
+
+test("task-services-035: nenhuma entrada load-only aparece no export type público (checker nunca aceita lighting.Technology)", function()
+	local path = "src/services/generated/classes/Lighting.luau"
+	local ok, contents = pcall(fs.readFile, path)
+	assert(ok, `não consegui ler {path}: {tostring(contents)}`)
+	local typeBlockStart, typeBlockEnd = string.find(contents, "export type Lighting = Runtime%.Instance & {.-\n}")
+	assert(typeBlockStart ~= nil, "não encontrei o bloco `export type Lighting` no arquivo gerado")
+	local typeBlock = string.sub(contents, typeBlockStart :: number, typeBlockEnd :: number)
+	assert(
+		string.find(typeBlock, "Technology", 1, true) == nil,
+		"\"Technology\" não deveria aparecer no export type público de Lighting (load-only, ScriptVisible=false)"
+	)
+end)
+
+test("task-services-035: contagem de Event no schema do fecho é IDÊNTICA à esperada (zero Event novo por causa da bifurcação de Property)", function()
+	-- Fotografia do total de Event emitido no schema do fecho inteiro -- prova de que bifurcar o
+	-- ramo Property não vazou nenhum Event/Callback para dentro do schema (D2, item 2: regra de
+	-- Event/Callback literalmente inalterada). Número medido por inspeção direta da saída deste
+	-- gerador nesta mesma leva (task-services-035) -- se um Event/Callback novo aparecer ou
+	-- sumir do schema por qualquer motivo, este teste falha e precisa de investigação, nunca de
+	-- um ajuste silencioso do número.
+	local eventCount = 0
+	for _, generated in Index do
+		for _, descriptor in generated.Schema do
+			if descriptor.Kind == "Event" or descriptor.Kind == "Callback" then
+				eventCount += 1
+			end
+		end
+	end
+	assert(eventCount == 24, `esperava 24 Event/Callback no schema do fecho, contei {eventCount}`)
+end)
 
 test("RunService.Heartbeat/Stepped/RenderStepped/PreRender continuam no schema (Capabilities=[Basic])", function()
 	local schema = Index["RunService"].Schema

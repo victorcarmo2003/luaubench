@@ -33,7 +33,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["HttpEnabled"] = { Kind = "Property", Default = false, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive" },
+		["HttpEnabled"] = { Kind = "Property", Default = false, ReadOnly = true, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"CreateWebStreamClient",

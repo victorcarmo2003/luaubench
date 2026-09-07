@@ -22,6 +22,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
+		["LoadStringEnabled"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

@@ -23,7 +23,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
-		["KeyName"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "string", ValueCategory = "Primitive" },
+		["KeyName"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "string", ValueCategory = "Primitive", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

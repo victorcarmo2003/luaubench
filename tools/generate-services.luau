@@ -17,6 +17,15 @@
 	"Módulos" e "Revisão pós-pesquisa 2026-09-05 -- Capabilities e RenderStepped", seção "A"
 	(regra de emissão de 4 eixos: Security/Tags/ReadOnly/Capabilities).
 
+	task-services-035 (.claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md, seções "D2",
+	"2" e "4"; pesquisa em pesquisa-rojo-properties-security-2026-09-07.md): toda Property da
+	classe no dump SEMPRE entra no schema -- Security/Tags/capability reservada não decidem mais
+	EXISTÊNCIA, só decidem `ScriptVisible` (invisível a `instance.X`/`instance.X = v` de um script,
+	mas alcançável por `Instance.SetPropertyRaw`/`GetPropertyRaw`, o caminho que a hidratação de
+	`$properties` do Rojo usa -- o Rojo real nunca consulta Security/Scriptability para aplicar
+	`$properties`, só nome+tipo). Event/Callback continuam seguindo a regra ANTIGA (ausentes do
+	schema quando Security/Tags batem) -- ver classifySchemaMember.
+
 	Pipeline, na ordem (espelha a seção "Módulos" do desenho):
 	 1. lê tools/api-dump.lock.json
 	 2. lê tools/capabilities.lock.json (grantable/reserved -- NUNCA baixa a doc de novo)
@@ -33,7 +42,9 @@
 	 9. emite src/services/generated/Index.luau (requires LITERAIS -- o `require` do Lune resolve
 	    estaticamente, não há require dinâmico por string)
 	10. imprime RELATÓRIO: deprecated emitidas, defaults não representáveis por classe, membros de
-	    Object/Instance não cobertos por runtime/Instance.luau, classes sem schema/métodos
+	    Object/Instance não cobertos por runtime/Instance.luau, classes sem schema/métodos, e
+	    (task-services-035) Property presentes no schema porém INVISÍVEIS ao script (load-only),
+	    por classe e motivo
 
 	IDEMPOTÊNCIA: `src/services/generated/` é APAGADO e RECRIADO do zero a cada execução (Decisão 1:
 	"Saída ... 100% sobrescrito a cada execução") -- nunca uma mescla incremental. Toda iteração de
@@ -391,20 +402,49 @@ end
 -- ============================================================================================
 -- Classificação de membro Schema (Property/Event/Callback) -- tabela A.4, passos 1-8 (o passo 1,
 -- abort por capability desconhecida, já foi tratado acima para o fecho inteiro).
+--
+-- task-services-035 (bifurcação do ramo Property, .claude/agents-memory/arquiteto-rojo-
+-- properties-2026-09-07.md, "D2 -- Regra de emissão do gerador"): confirmado por pesquisa
+-- (pesquisa-rojo-properties-security-2026-09-07.md) que o `rojo build` real NUNCA consulta
+-- Security/Scriptability/Capabilities para decidir se uma Property EXISTE -- só usa o NOME e o
+-- TIPO. `$properties` de um projeto Rojo, portanto, precisa enxergar toda Property da classe,
+-- mesmo uma que o SCRIPT do usuário não pode ler/escrever. A partir desta tarefa:
+--   - `MemberType == "Property"`: `included = true` SEMPRE (toda Property do dump entra no
+--     schema). Os passos 2/3 (que antes EXCLUÍAM do schema) agora só marcam
+--     `scriptVisible = false` -- a Property continua EXISTINDO estruturalmente (alcançável só via
+--     `Instance.SetPropertyRaw`/`GetPropertyRaw`, nunca por `instance.X`/`instance.X = v` de um
+--     script), correspondência 1:1 com `rbx_reflection::Scriptability::None` (ver
+--     `src/runtime/Instance.luau`, `MemberDescriptor.ScriptVisible`, task-runtime-039).
+--   - `MemberType == "Event"` / `"Callback"`: regra LITERALMENTE INALTERADA -- continuam
+--     EXCLUÍDOS do schema quando os passos 2/3 batem. `$properties` só carrega `Property`
+--     (`rbx_reflection` nem modela evento como propriedade serializável); emitir um Event
+--     invisível custaria um `Signal` por instância sem NENHUM consumidor (nem script, que não o
+--     enxerga, nem hidratação, que não escreve nele).
 -- ============================================================================================
 
 type SchemaClassification = {
 	included: boolean,
+	-- task-services-035: só relevante quando `included == true`. `true` (ou, para Event/Callback,
+	-- sempre `true` quando incluído) = o script do usuário enxerga o membro. `false` = SÓ Property
+	-- pode chegar aqui -- membro existe no schema (hidratação), mas é invisível a `instance.X`/
+	-- `instance.X = v` de um script (emitido no gerado como `ScriptVisible = false`).
+	scriptVisible: boolean,
 	readOnly: boolean,
 	excludedByCapability: boolean,
+	-- task-services-035: motivo pelo qual uma Property ficou `scriptVisible = false`, só para o
+	-- relatório novo ("Property no schema porém INVISÍVEIS ao script"). `nil` quando
+	-- `scriptVisible == true` ou quando o membro foi de fato EXCLUÍDO (Event/Callback).
+	scriptInvisibleReason: string?,
 }
 
 local function classifySchemaMember(member: RawMember): SchemaClassification
+	local isProperty = member.MemberType == "Property"
+
 	local hasNotScriptable = hasStringTag(member.Tags, "NotScriptable")
 	local hasWriteOnly = hasStringTag(member.Tags, "WriteOnly")
 
 	local securityReadElevated: boolean
-	if member.MemberType == "Property" then
+	if isProperty then
 		local sec = member.Security :: { Read: string, Write: string }
 		securityReadElevated = sec.Read ~= "None"
 	else
@@ -412,51 +452,92 @@ local function classifySchemaMember(member: RawMember): SchemaClassification
 		securityReadElevated = sec ~= "None"
 	end
 
-	-- passo 2
+	-- passo 2: Property -> load-only invisível (permanece INCLUÍDA); Event/Callback -> excluído,
+	-- exatamente como antes desta tarefa.
 	if hasNotScriptable or securityReadElevated or hasWriteOnly then
-		return { included = false, readOnly = false, excludedByCapability = false }
+		if isProperty then
+			local reason: string
+			if hasNotScriptable then
+				reason = "NotScriptable"
+			elseif securityReadElevated then
+				reason = "Security.Read"
+			else
+				reason = "WriteOnly"
+			end
+			return {
+				included = true,
+				scriptVisible = false,
+				readOnly = false,
+				excludedByCapability = false,
+				scriptInvisibleReason = reason,
+			}
+		end
+		return {
+			included = false,
+			scriptVisible = false,
+			readOnly = false,
+			excludedByCapability = false,
+			scriptInvisibleReason = nil,
+		}
 	end
 
 	local requiredRead, requiredWrite = requiredCapabilitySets(member)
 
-	-- passo 3: required_read ∩ reserved ~= {} -> excluído
-	for name in requiredRead do
+	-- passo 3: required_read ∩ reserved ~= {} -> Property vira load-only invisível (schemaExcluded-
+	-- ByCapability continua marcado, agora significando "load-only por capability" em vez de
+	-- "ausente"); Event/Callback continuam excluídos, sem mudança.
+	for _, name in sortedKeys(requiredRead) do
 		if reservedSet[name] then
-			return { included = false, readOnly = false, excludedByCapability = true }
+			if isProperty then
+				return {
+					included = true,
+					scriptVisible = false,
+					readOnly = false,
+					excludedByCapability = true,
+					scriptInvisibleReason = `capability reservada: {name}`,
+				}
+			end
+			return {
+				included = false,
+				scriptVisible = false,
+				readOnly = false,
+				excludedByCapability = true,
+				scriptInvisibleReason = nil,
+			}
 		end
 	end
 
-	-- passo 4: required_write ∩ reserved ~= {} (com read livre) -> incluído, ReadOnly = true
-	-- (zero casos neste dump -- especificado por robustez, ver seção A.4 da revisão)
+	-- passo 4: required_write ∩ reserved ~= {} (com read livre) -> incluído, VISÍVEL, ReadOnly =
+	-- true (zero casos neste dump -- especificado por robustez, ver seção A.4 da revisão)
 	for name in requiredWrite do
 		if reservedSet[name] then
-			return { included = true, readOnly = true, excludedByCapability = false }
+			return { included = true, scriptVisible = true, readOnly = true, excludedByCapability = false }
 		end
 	end
 
 	-- passo 5
 	local hasReadOnlyTag = hasStringTag(member.Tags, "ReadOnly")
 	local securityWriteElevated = false
-	if member.MemberType == "Property" then
+	if isProperty then
 		local sec = member.Security :: { Read: string, Write: string }
 		securityWriteElevated = sec.Write ~= "None"
 	end
 	if hasReadOnlyTag or securityWriteElevated then
-		return { included = true, readOnly = true, excludedByCapability = false }
+		return { included = true, scriptVisible = true, readOnly = true, excludedByCapability = false }
 	end
 
 	-- passo 6
 	if member.MemberType == "Event" then
-		return { included = true, readOnly = true, excludedByCapability = false }
+		return { included = true, scriptVisible = true, readOnly = true, excludedByCapability = false }
 	end
 
 	-- passo 7
 	if member.MemberType == "Callback" then
-		return { included = true, readOnly = false, excludedByCapability = false }
+		return { included = true, scriptVisible = true, readOnly = false, excludedByCapability = false }
 	end
 
 	-- passo 8
-	return { included = true, readOnly = false, excludedByCapability = false }
+	return { included = true, scriptVisible = true, readOnly = false, excludedByCapability = false }
 end
 
 -- Classificação de MethodNames (Function) -- MESMOS passos 1-3 da tabela A.4 (a correção "C" da
@@ -888,6 +969,11 @@ local report = {
 	-- Default deixou de nascer `nil` e passou a ser um construtor/EnumItem real -- entradas
 	-- "ClasseName.Membro (Vector3 default)"/"(Enum default)", uma por membro afetado.
 	realValueTypeDefaultsEmitted = {} :: { string },
+	-- task-services-035: Property presentes no schema porém INVISÍVEIS ao script (load-only) --
+	-- `scriptVisible == false`. Contagem por classe + lista "Classe.Membro (motivo)", motivo em
+	-- {"NotScriptable", "Security.Read", "WriteOnly", "capability reservada: <nome>"}.
+	scriptInvisibleByClass = {} :: { [string]: number },
+	scriptInvisibleEntries = {} :: { string },
 }
 
 local function classTagFlag(class: RawClass, tag: string): boolean
@@ -1042,41 +1128,64 @@ local function generateClassFile(className: string): string
 			emittedSchemaCount += 1
 			local kind = member.MemberType -- "Property" | "Event" | "Callback"
 
-			local defaultExpr, representable = computeDefault(className, member)
-			if member.MemberType == "Property" and not representable then
-				report.nonRepresentableDefaultsByClass[className] = (report.nonRepresentableDefaultsByClass[className] or 0)
-					+ 1
-			end
-			-- task-services-015: conta só os casos NOVOS (DataType/Enum já simulados que antes
-			-- desta tarefa SEMPRE eram `nil`/não-representáveis) -- Primitive representável já
-			-- existia antes, não é "ganho" desta ponte.
-			if
-				representable
-				and member.MemberType == "Property"
-				and member.ValueType ~= nil
-				and (member.ValueType.Category == "DataType" or member.ValueType.Category == "Enum")
-			then
-				table.insert(
-					report.realValueTypeDefaultsEmitted,
-					`{className}.{member.Name} ({member.ValueType.Category} {member.ValueType.Name})`
-				)
+			-- task-services-035: `Default` de uma entrada load-only (`scriptVisible == false`,
+			-- só acontece para Property) é SEMPRE `nil` literal -- `computeDefault` NUNCA é chamado
+			-- para ela. Motivo (decisão deliberada, não esquecimento): o valor é inalcançável por
+			-- LEITURA de script (a hidratação de `$properties`, quando o projeto define a
+			-- propriedade, sobrescreve via `SetPropertyRaw` de qualquer forma) -- chamar
+			-- `computeDefault` obrigaria construir `ValueTypes`/resolver `enumDefault` no LOAD de
+			-- classes que hoje nem importam `valuetypes`, por um valor que nenhum consumidor lê.
+			-- NUNCA leia isto como "o dump não tem Default" -- o dump pode ter um Default real; o
+			-- gerador escolhe deliberadamente não emiti-lo aqui.
+			local defaultExpr = "nil"
+			local representable = false
+			if classification.scriptVisible then
+				defaultExpr, representable = computeDefault(className, member)
+				if member.MemberType == "Property" and not representable then
+					report.nonRepresentableDefaultsByClass[className] = (report.nonRepresentableDefaultsByClass[className] or 0)
+						+ 1
+				end
+				-- task-services-015: conta só os casos NOVOS (DataType/Enum já simulados que antes
+				-- desta tarefa SEMPRE eram `nil`/não-representáveis) -- Primitive representável já
+				-- existia antes, não é "ganho" desta ponte.
+				if
+					representable
+					and member.MemberType == "Property"
+					and member.ValueType ~= nil
+					and (member.ValueType.Category == "DataType" or member.ValueType.Category == "Enum")
+				then
+					table.insert(
+						report.realValueTypeDefaultsEmitted,
+						`{className}.{member.Name} ({member.ValueType.Category} {member.ValueType.Name})`
+					)
+				end
 			end
 
 			if hasStringTag(member.Tags, "Deprecated") then
 				table.insert(report.deprecatedEmitted, `{className}.{member.Name} ({member.MemberType})`)
 			end
 
+			-- task-services-035: `ValueType`/`ValueCategory` são SEMPRE emitidos, mesmo para uma
+			-- entrada load-only -- é exatamente o dado de que `cli` precisa para decodificar
+			-- `$properties` (ex.: `Lighting.Technology` -> `Category = "Enum"`, `Name =
+			-- "Technology"`), independente de o script poder ler o valor ou não.
 			local valueTypeLiteral, valueCategoryLiteral = valueTypeFieldLiterals(member)
 			table.insert(
 				schemaValueLines,
 				`\t\t[{luaStringLiteral(member.Name)}] = \{ Kind = {luaStringLiteral(kind)}, Default = {defaultExpr}, ReadOnly = {tostring(
 					classification.readOnly
-				)}, ValueType = {valueTypeLiteral}, ValueCategory = {valueCategoryLiteral} \},\n`
+				)}, ValueType = {valueTypeLiteral}, ValueCategory = {valueCategoryLiteral}, ScriptVisible = {tostring(
+					classification.scriptVisible
+				)} \},\n`
 			)
 
-			-- Só entra no TIPO público se `runtime/Instance.luau` ainda não cobre nativamente
-			-- (evita redeclarar um campo que `Runtime.Instance &` já traz com o tipo real).
-			if not NATIVE_COVERED_BY_RUNTIME_INSTANCE[member.Name] then
+			-- task-services-035: uma entrada load-only (`scriptVisible == false`) NUNCA entra no
+			-- `export type` público da classe -- emitir o campo faria o checker Luau aceitar
+			-- `lighting.Technology` em código de usuário que erra em runtime (divergência
+			-- estática/dinâmica inaceitável). Só entra no TIPO público se, além de visível,
+			-- `runtime/Instance.luau` ainda não cobre nativamente (evita redeclarar um campo que
+			-- `Runtime.Instance &` já traz com o tipo real).
+			if classification.scriptVisible and not NATIVE_COVERED_BY_RUNTIME_INSTANCE[member.Name] then
 				if member.MemberType == "Property" then
 					local fieldType = if representable then luauTypeForValueType(member.ValueType) else "unknown"
 					table.insert(typeFieldLines, `\t[{luaStringLiteral(member.Name)}]: {fieldType},\n`)
@@ -1089,8 +1198,20 @@ local function generateClassFile(className: string): string
 
 			-- membros de Object/Instance não cobertos nativamente -- só interessa reportar para a
 			-- classe "Instance" (Decisão 1: é o único lugar onde o fold de Object acontece).
+			-- Independente de scriptVisible: é um relatório de cobertura do SCHEMA, não do que o
+			-- script enxerga.
 			if className == "Instance" and not NATIVE_COVERED_BY_RUNTIME_INSTANCE[member.Name] then
 				table.insert(report.notCoveredByRuntimeInstance, `{member.Name} ({member.MemberType})`)
+			end
+
+			-- task-services-035: nova seção do relatório -- toda Property que ficou load-only
+			-- (scriptVisible == false; só Property chega aqui, ver classifySchemaMember).
+			if not classification.scriptVisible then
+				report.scriptInvisibleByClass[className] = (report.scriptInvisibleByClass[className] or 0) + 1
+				table.insert(
+					report.scriptInvisibleEntries,
+					`{className}.{member.Name} ({classification.scriptInvisibleReason or "?"})`
+				)
 			end
 		end
 	end
@@ -1275,8 +1396,36 @@ print(
 )
 
 table.sort(report.schemaExcludedByCapability)
-print(`\n  Schema (Property/Event/Callback) excluído por Capability reservada ({#report.schemaExcludedByCapability}):`)
+print(
+	`\n  Schema com capability reservada (Property/Event/Callback) ({#report.schemaExcludedByCapability}) -- `
+		.. `task-services-035: Property aqui é LOAD-ONLY (segue no schema, invisível ao script -- ver seção `
+		.. `abaixo); Event/Callback continuam AUSENTES do schema (regra inalterada):`
+)
 for _, entry in report.schemaExcludedByCapability do
+	print(`    {entry}`)
+end
+
+-- task-services-035: Property no schema porém INVISÍVEIS ao script (load-only) -- toda Property
+-- com scriptVisible == false, motivo em {NotScriptable, Security.Read, WriteOnly, capability
+-- reservada}. Event/Callback NUNCA aparecem aqui (ver classifySchemaMember, o universo de
+-- load-only é 100% Property).
+local scriptInvisibleClasses = sortedKeys((function(): { [string]: boolean }
+	local set: { [string]: boolean } = {}
+	for name in report.scriptInvisibleByClass do
+		set[name] = true
+	end
+	return set
+end)())
+local scriptInvisibleTotal = 0
+for _, count in report.scriptInvisibleByClass do
+	scriptInvisibleTotal += count
+end
+print(`\n  Property no schema porém INVISÍVEIS ao script (load-only) ({scriptInvisibleTotal} em {#scriptInvisibleClasses} classes):`)
+for _, className in scriptInvisibleClasses do
+	print(`    {className}: {report.scriptInvisibleByClass[className]}`)
+end
+table.sort(report.scriptInvisibleEntries)
+for _, entry in report.scriptInvisibleEntries do
 	print(`    {entry}`)
 end
 

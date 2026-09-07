@@ -26,10 +26,10 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
-		["Disabled"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
-		["Enabled"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
-		["LinkedSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ContentId", ValueCategory = "DataType" },
-		["RunContext"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "RunContext", ValueCategory = "Enum" },
+		["Disabled"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
+		["Enabled"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
+		["LinkedSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ContentId", ValueCategory = "DataType", ScriptVisible = true },
+		["RunContext"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "RunContext", ValueCategory = "Enum", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

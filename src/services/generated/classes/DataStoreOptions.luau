@@ -24,7 +24,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = false,
 	Schema = {
-		["AllScopes"] = { Kind = "Property", Default = false, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["AllScopes"] = { Kind = "Property", Default = false, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"SetExperimentalFeatures",

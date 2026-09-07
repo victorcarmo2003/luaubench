@@ -25,9 +25,9 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
-		["CreatedTime"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int64", ValueCategory = "Primitive" },
-		["DataStoreName"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "string", ValueCategory = "Primitive" },
-		["UpdatedTime"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int64", ValueCategory = "Primitive" },
+		["CreatedTime"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int64", ValueCategory = "Primitive", ScriptVisible = true },
+		["DataStoreName"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "string", ValueCategory = "Primitive", ScriptVisible = true },
+		["UpdatedTime"] = { Kind = "Property", Default = nil, ReadOnly = true, ValueType = "int64", ValueCategory = "Primitive", ScriptVisible = true },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

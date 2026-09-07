@@ -25,6 +25,8 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
+		["Origin"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "CFrame", ValueCategory = "DataType", ScriptVisible = false },
+		["Pivot Offset"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "CFrame", ValueCategory = "DataType", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetPivot",

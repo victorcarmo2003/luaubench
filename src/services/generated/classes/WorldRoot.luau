@@ -50,6 +50,13 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
+		["AutoSimulate"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["CollisionGroupData"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "BinaryString", ValueCategory = "DataType", ScriptVisible = false },
+		["GravityDirection"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "Vector3", ValueCategory = "DataType", ScriptVisible = false },
+		["PhysicsStepTime"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive", ScriptVisible = false },
+		["SimulationRate"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive", ScriptVisible = false },
+		["Wind"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive", ScriptVisible = false },
+		["WindDirection"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "Vector3", ValueCategory = "DataType", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"ArePartsTouchingOthers",

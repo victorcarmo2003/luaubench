@@ -22,6 +22,7 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = false,
 	Schema = {
+		["ReplicatedGuiInsertionOrder"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "int", ValueCategory = "Primitive", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

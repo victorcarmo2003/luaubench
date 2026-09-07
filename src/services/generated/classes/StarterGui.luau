@@ -30,9 +30,15 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
-		["ResetPlayerGuiOnSpawn"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
-		["ScreenOrientation"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ScreenOrientation", ValueCategory = "Enum" },
-		["ShowDevelopmentGui"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive" },
+		["ClipsDescendantsSupportsRotation"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "RolloutState", ValueCategory = "Enum", ScriptVisible = false },
+		["ProcessUserInput"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["ResetPlayerGuiOnSpawn"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
+		["RtlTextSupport"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "RtlTextSupport", ValueCategory = "Enum", ScriptVisible = false },
+		["ScreenOrientation"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ScreenOrientation", ValueCategory = "Enum", ScriptVisible = true },
+		["ShowDevelopmentGui"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = true },
+		["StudioDefaultStyleSheet"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "StyleSheet", ValueCategory = "Class", ScriptVisible = false },
+		["StudioInsertWidgetLayerCollectorAutoLinkStyleSheet"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "StyleSheet", ValueCategory = "Class", ScriptVisible = false },
+		["VirtualCursorMode"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "VirtualCursorMode", ValueCategory = "Enum", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetCoreGuiEnabled",

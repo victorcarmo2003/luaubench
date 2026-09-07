@@ -22,6 +22,13 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = true,
 	Schema = {
+		["CachedRemoteSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ProtectedString", ValueCategory = "DataType", ScriptVisible = false },
+		["CachedRemoteSourceLoadState"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "int", ValueCategory = "Primitive", ScriptVisible = false },
+		["HasAssociatedDrafts"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["IsDifferentFromFileSystem"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["SandboxedSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ProtectedString", ValueCategory = "DataType", ScriptVisible = false },
+		["ScriptGuid"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "string", ValueCategory = "Primitive", ScriptVisible = false },
+		["isPlayerScript"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

@@ -29,6 +29,8 @@ local Generated: Types.GeneratedClass = {
 	IsService = true,
 	IsAbstract = true,
 	Schema = {
+		["AutomaticRetry"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["LegacyNamingScheme"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 		"GetDataStore",

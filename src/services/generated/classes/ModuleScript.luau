@@ -23,7 +23,10 @@ local Generated: Types.GeneratedClass = {
 	IsService = false,
 	IsAbstract = false,
 	Schema = {
-		["LinkedSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ContentId", ValueCategory = "DataType" },
+		["Confidential"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
+		["LinkedSource"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ContentId", ValueCategory = "DataType", ScriptVisible = true },
+		["Source"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "ProtectedString", ValueCategory = "DataType", ScriptVisible = false },
+		["UnrestrictedRequireAllowed"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "bool", ValueCategory = "Primitive", ScriptVisible = false },
 	} :: Runtime.ClassSchema,
 	MethodNames = {
 	},

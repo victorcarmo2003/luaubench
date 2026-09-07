@@ -2797,7 +2797,7 @@
     {
       "createdAt": "2026-09-07",
       "updatedAt": "2026-09-07",
-      "column": "todo",
+      "column": "done",
       "priority": "high",
       "id": "task-services-035",
       "title": "Gerador: toda Property do dump entra no schema; Security/Tags decidem ScriptVisible, nao existencia",
@@ -2815,7 +2815,9 @@
       "acceptance": "src/services/generated/classes/Lighting.luau tem ['Technology'] no Schema com Kind='Property', ScriptVisible=false, ValueType='Technology', ValueCategory='Enum', Default=nil, e NAO tem Technology no export type publico. Workspace.FilteringEnabled continua ScriptVisible=true/ReadOnly=true. Nenhum Event/Callback ganhou entrada nova (contagem de Event no schema identica a de antes). Nenhum MethodNames mudou. Relatorio do gerador imprime a secao nova e bate com os numeros do desenho. tools/generate-services.spec.luau cobre a classificacao nova (Property com Security.Read elevado -> included + scriptVisible=false; Event com Security elevado -> continua excluido). Specs de services (incluindo Integration.spec) passando. --!strict, sem any. Declarar no relatorio qualquer divergencia observada.",
       "depends": [
         "task-runtime-039"
-      ]
+      ],
+      "result": "classifySchemaMember: toda Property do dump agora included=true sempre; NotScriptable/Security.Read/WriteOnly/capability reservada decidem so scriptVisible (nao mais existencia). Event/Callback e classifyMethodMember literalmente inalterados. Entrada scriptVisible=false: Default=nil sempre, ValueType/ValueCategory sempre emitidos, nunca entra no export type publico. Regenerado src/services/generated/** (30 arquivos): 143 Property load-only novas em 17 classes, numeros batendo exatamente com o desenho do arquiteto. Lighting.Technology e Workspace.FilteringEnabled conforme criterio de pronto.",
+      "reviewResult": "APROVADO COM RESSALVAS (revisor-services, 2026-09-07). Reproduzido de forma independente: diff isolado confirma Event/Callback/classifyMethodMember byte-a-byte inalterados (24 Events, zero novo/removido). Recontagem independente (script proprio do revisor, nao do coder) sobre os 45 arquivos gerados: 143 entradas ScriptVisible=false em exatamente 17 classes, numero por classe identico ao alegado. Nenhuma classe fora dessas 17 ganhou entrada nova. Determinismo confirmado (3 execucoes, sha256 identico). Suites completas rodadas pelo revisor (generate-services.spec 26/26, services 31 specs, cli TreeMaterializer/ModuleLoader/ScriptRunner/init/RunCommand todos passando) -- unica falha foi HttpService.spec DNS timeout, confirmado pre-existente/fora do arquivo tocado. --strict/zero any confirmado, luau-lsp validado (testou que a ferramenta pega erro de verdade antes de confiar no limpo). Ressalva BAIXA nao-bloqueante: a nota de decisao deliberada (Default=nil pra entrada invisivel, pedida pelo arquiteto no cabecalho do arquivo GERADO) ficou so no comentario do gerador-fonte, nao propagou pros 17 arquivos gerados afetados -- registrado como task-services-036 (baixa prioridade)."
     },
     {
       "createdAt": "2026-09-07",
@@ -2860,6 +2862,26 @@
       "depends": [
         "task-cli-038"
       ]
+    },
+    {
+      "id": "task-services-036",
+      "title": "Propagar nota de Default=nil deliberado pros arquivos gerados afetados",
+      "description": "Ressalva nao-bloqueante do revisor de task-services-035: a decisao de nunca chamar computeDefault pra entrada scriptVisible=false (Default=nil sempre, evita puxar construtor de ValueTypes/enumDefault por um valor inalcancavel) esta documentada no comentario do gerador-fonte (tools/generate-services.luau) mas nao propaga pro cabecalho dos 17 arquivos GERADOS afetados (Workspace.luau, Lighting.luau, etc) -- um leitor que abra so o arquivo gerado pode achar que a propriedade nao tem default real no Roblox (tem, so nao e representavel/alcancavel aqui). Adicionar uma linha de comentario no template de emissao do gerador (perto de onde Default=nil e escrito pra entrada ScriptVisible=false) explicando a decisao, pra que apareca nos arquivos gerados.",
+      "column": "todo",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 59,
+      "tags": [
+        "services",
+        "gerador",
+        "documentacao",
+        "baixa-prioridade"
+      ],
+      "priority": "low",
+      "acceptance": "Arquivos gerados com entrada ScriptVisible=false (ex: Lighting.luau, Workspace.luau) tem um comentario proximo ao Schema explicando que Default=nil e deliberado (property real do Roblox tem default, so nao e representavel/semeavel aqui). tools/generate-services.spec.luau continua passando. Regenerar src/services/generated/** e conferir que so o comentario mudou (nenhum valor de Schema/Default/ScriptVisible alterado).",
+      "depends": [],
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07"
     }
   ]
 }
