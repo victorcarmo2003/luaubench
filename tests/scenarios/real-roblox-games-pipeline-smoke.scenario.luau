@@ -30,6 +30,33 @@
 -- `invalid-class`) -- o `LocalScript` de `StarterPlayerScripts.Client` é materializado e
 -- corretamente listado como "not executed" (LuauBench roda como servidor). Os asserts abaixo
 -- foram atualizados pra refletir isso.
+--
+-- ATUALIZAÇÃO 2026-09-07 (task-test-rojo-properties-001, pós task-runtime-039 + task-services-035 +
+-- task-cli-038 -- ver `.claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md`): reexecutado
+-- contra o binário real. Os asserts de 'Tiktok' e 'Panic - CHESSS' ESTAVAM DESATUALIZADOS mesmo
+-- antes desta leva (mesmo aviso já registrado em `value-types-real-project.scenario.luau`) --
+-- corrigidos aqui para o estado observado agora, não uma regressão desta leva:
+--   - 'Tiktok': os 2 erros que a leva de `$properties` existe para fechar SUMIRAM de verdade --
+--     `Lighting.Technology`/`Workspace.FilteringEnabled` não erram mais (ver cenário dedicado
+--     `tests/scenarios/rojo-init-template-hydration.scenario.luau` para a prova ponta a ponta,
+--     incluindo a garantia de que o eixo de ACESSO POR SCRIPT continua intacto). O erro de
+--     `SoundService` "ainda não simulado" também sumiu -- mas por um motivo TOTALMENTE independente
+--     desta leva: `SoundService` (a CLASSE) passou a ser coberta por `services` numa leva anterior
+--     (commit `ad83d97`, território cobertura, não `$properties`/Security) -- documentado aqui pra
+--     não atribuir esse progresso à leva errada. Único erro remanescente: `Part` (Baseplate) ainda
+--     não simulado (`materialize/invalid-class`, território `services`, cobertura de classe --
+--     achado LEGÍTIMO e não relacionado, mantido).
+--   - 'Panic - CHESSS': avançou MAIS ALÉM do que o teste antigo esperava (`HttpService` não
+--     registrada) -- entre a escrita original deste cenário e agora, `HttpService` passou a ser
+--     simulado (task-services-026/task-cli-026, `--allow-http`), então a pipeline chega mais longe
+--     e erra agora em `Instance.new("RemoteEvent")` (`RemoteEvent` ainda não simulado) dentro de
+--     `ReplicatedStorage.Shared.Chess.Network:49`. É um erro de SCRIPT (`ThreadError` do sandbox,
+--     não um `Diagnostic` de `TreeMaterializer`) -- por isso o ExitCode mudou de 2 para 1 (política
+--     de exit code de `RunCommand.Execute`: erro de projeto tem prioridade sobre erro de script, e
+--     aqui não sobrou NENHUM diagnóstico de projeto -- só o erro de script). Achado LEGÍTIMO,
+--     território `services` (cobertura de `RemoteEvent`), não relacionado a esta leva.
+--   - 'TheGame': inalterado -- continua batendo só na parede de pacotes Wally não instalados neste
+--     checkout, achado incidental não relacionado a nenhuma leva do LuauBench.
 
 local process = require("@lune/process")
 
@@ -154,41 +181,61 @@ test("FIXED (task-cli-014 + task-cli-016): 'Tiktok' (projeto Rojo 'default' padr
 		`esperava o resumo confirmar 1 LocalScript materializado e corretamente não executado (roda como servidor), recebeu stdout: {result.stdout}`
 	)
 
-	-- Ainda assim, o processo termina em erro -- mas por causas LEGÍTIMAS, todas em território
-	-- `services`/`runtime` (não `cli`): `Lighting.Technology` não é uma propriedade válida na
-	-- simulação atual (propriedade removida/deprecada no Roblox moderno -- divergência esperada,
-	-- não bug), `SoundService` ainda não é simulado, `Part` (do Baseplate) ainda não tem cobertura
-	-- de `services`, e `Workspace.FilteringEnabled` é somente-leitura na simulação -- o que bate
-	-- com o Roblox real atual (FilteringEnabled foi deprecada e é sempre true, não pode mais ser
-	-- setada por script/projeto). Documentado aqui pra não confundir uma regressão futura DESTE
-	-- bug com esses achados, que são de outro território e refletem fidelidade correta com o
-	-- Roblox real, não bugs.
-	assert(result.code == 2, `esperava ExitCode 2 (erros legítimos remanescentes, não relacionados a este bug), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
+	-- ATUALIZAÇÃO 2026-09-07 (task-test-rojo-properties-001, pós task-cli-038 -- ver comentário do
+	-- cabeçalho do arquivo, "ATUALIZAÇÃO 2026-09-07"): os asserts abaixo estavam desatualizados
+	-- (SoundService/FilteringEnabled já não erram mais desde antes desta leva ou por causa dela --
+	-- ver detalhamento no cabeçalho). Reescritos para o estado ATUAL, medido rodando o binário real:
+	-- só resta 1 erro legítimo, `Part` (Baseplate) ainda não simulado por `services` -- território
+	-- `services` (cobertura de classe), não relacionado a `$properties`/Security desta leva. Ver
+	-- `tests/scenarios/rojo-init-template-hydration.scenario.luau` para a prova dedicada (ponta a
+	-- ponta, incluindo o eixo de acesso por script) de que `Lighting.Technology`/
+	-- `Workspace.FilteringEnabled`/`SoundService.RespectFilteringEnabled` hidratam sem erro.
+	assert(result.code == 2, `esperava ExitCode 2 (1 erro legítimo remanescente, não relacionado a esta leva -- Part/Baseplate), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
 	assert(
-		string.find(result.stderr, "materialize/service-not-simulated", 1, true) ~= nil and string.find(result.stderr, "SoundService", 1, true) ~= nil,
-		`esperava "SoundService" reportado como ainda não simulado (achado legítimo, território services), recebeu: {result.stderr}`
+		string.find(result.stdout, "1 error(s), 0 warning(s).", 1, true) ~= nil,
+		`esperava exatamente "1 error(s), 0 warning(s)." no resumo (só Part/Baseplate remanescente) -- se isto falhar porque MAIS erros apareceram, investigue antes de apenas atualizar este número: pode ser regressão real, recebeu stdout: {result.stdout}`
 	)
 	assert(
 		string.find(result.stderr, "materialize/invalid-class", 1, true) ~= nil and string.find(result.stderr, "Part", 1, true) ~= nil,
-		`esperava "Part" (Baseplate) reportado como ainda não simulado por "materialize/invalid-class", recebeu: {result.stderr}`
-	)
-	assert(
-		string.find(result.stderr, "FilteringEnabled", 1, true) ~= nil and string.find(result.stderr, "read only", 1, true) ~= nil,
-		`esperava "Workspace.FilteringEnabled" reportado como somente-leitura (fidelidade correta com o Roblox real -- propriedade deprecada), recebeu: {result.stderr}`
+		`esperava "Part" (Baseplate) reportado como ainda não simulado por "materialize/invalid-class" (achado remanescente, território services, NÃO desta leva), recebeu: {result.stderr}`
 	)
 
-	-- Efeito colateral documentado, NÃO um bug (mantido de antes da correção): `$properties` com
-	-- array (Vector3/Color3 -- ainda não simulados, ver `src/cli/UnsimulatedGlobals.luau`) vira
-	-- WARNING (não erro), citando o campo exato -- comportamento correto e gracioso (regra 00:
-	-- nunca inventa valor, nunca falha silenciosamente). Confirma que esta parte da pipeline já
-	-- estava bem tratada mesmo antes desta correção.
+	-- As 3 propriedades que motivaram esta leva NÃO aparecem mais em NENHUM diagnóstico -- é a
+	-- mesma asserção central de `rojo-init-template-hydration.scenario.luau`, repetida aqui como
+	-- guarda de regressão adicional (redundância deliberada: este cenário já rodava contra o Tiktok
+	-- real antes da leva existir, então mantém o histórico de "antes/depois" num lugar só).
 	assert(
-		string.find(result.stderr, "plan/non-primitive-property", 1, true) ~= nil,
-		`esperava warning "plan/non-primitive-property" (Vector3/Color3 array em $properties) no stderr, recebeu: {result.stderr}`
+		string.find(result.stderr, "materialize/invalid-property", 1, true) == nil,
+		`NÃO deveria mais haver "materialize/invalid-property" no stderr (fechado por task-cli-038) -- recebeu: {result.stderr}`
+	)
+	assert(
+		string.find(result.stderr, "SoundService", 1, true) == nil,
+		`"SoundService" NÃO deveria mais aparecer em nenhum diagnóstico (classe coberta por services desde antes desta leva), recebeu: {result.stderr}`
+	)
+	assert(
+		string.find(result.stderr, "Technology", 1, true) == nil,
+		`"Technology" NÃO deveria mais aparecer em nenhum diagnóstico (hidratação bypassa Security.Read, fechado por task-cli-038), recebeu: {result.stderr}`
+	)
+	assert(
+		string.find(result.stderr, "FilteringEnabled", 1, true) == nil,
+		`"FilteringEnabled" NÃO deveria mais aparecer em nenhum diagnóstico (hidratação bypassa ReadOnly/Security.Write, fechado por task-cli-038), recebeu: {result.stderr}`
+	)
+
+	-- `plan/non-primitive-property` também sumiu -- mas não porque o decode de Vector3/Color3 do
+	-- Baseplate rodou com sucesso: é porque `TreeMaterializer.materializeNode` pula a subárvore
+	-- INTEIRA (incluindo `$properties`) quando `createInstance` falha (`Part` não simulado bate em
+	-- `materialize/invalid-class` ANTES de `applyProperties` rodar) -- mesma explicação já registrada
+	-- em `value-types-real-project.scenario.luau`, "Achado 2". Documentado aqui pra não confundir
+	-- ausência deste warning com "Vector3/Color3 decodificando certo sobre o Baseplate" -- essa
+	-- pergunta continua sem resposta a partir do Tiktok sozinho (respondida pela fixture daquele
+	-- outro cenário).
+	assert(
+		string.find(result.stderr, "plan/non-primitive-property", 1, true) == nil,
+		`NÃO esperava mais "plan/non-primitive-property" (Part/Baseplate falha antes de $properties rodar -- ver comentário acima), recebeu: {result.stderr}`
 	)
 end)
 
-test("FIXED (task-cli-014) + achado novo: 'Panic - CHESSS' (jogo de xadrez real, framework Modux) avança até EXECUTAR código real do jogo -- erra em runtime por 'HttpService' não registrada (achado LEGÍTIMO, território services/runtime, não cli)", function()
+test("FIXED (task-cli-014) + achado atualizado 2026-09-07: 'Panic - CHESSS' (jogo de xadrez real, framework Modux) avança AINDA MAIS LONGE que antes -- HttpService já é simulado (leva independente), erra agora em runtime por 'RemoteEvent' não simulado (achado LEGÍTIMO, território services, não cli/não relacionado a esta leva)", function()
 	local result = runRealProcess(CHESS_PATH)
 
 	assert(
@@ -196,19 +243,38 @@ test("FIXED (task-cli-014) + achado novo: 'Panic - CHESSS' (jogo de xadrez real,
 		`NÃO deveria mais haver "plan/missing-class-name" no stderr (bug corrigido por task-cli-014) -- recebeu: {result.stderr}`
 	)
 
-	-- A pipeline chega a EXECUTAR código real do jogo (framework Modux próprio,
-	-- `src/server/Services/MatchmakingService.luau`) e erra DENTRO dele -- prova de progresso
-	-- ainda mais forte que 'Tiktok': aqui é um erro de linha de SCRIPT do usuário (via
-	-- `DataModel:GetService`), não mais um diagnóstico de planejamento/materialização.
+	-- ATUALIZAÇÃO 2026-09-07 (task-test-rojo-properties-001 -- ver "ATUALIZAÇÃO 2026-09-07" no
+	-- cabeçalho do arquivo): o assert original esperava o erro em "HttpService" (não registrado) --
+	-- DESATUALIZADO já antes desta leva, porque `HttpService` passou a ser simulado numa leva
+	-- independente (task-services-026/task-cli-026, `--allow-http`). A pipeline agora avança mais
+	-- longe e erra em `Instance.new("RemoteEvent")` -- `RemoteEvent` ainda não simulado --, dentro
+	-- de `ReplicatedStorage.Shared.Chess.Network:49` (chamado a partir de
+	-- `ServerScriptService.Server`, mensagem citando "required by"). Progresso real (mais uma classe
+	-- coberta), não regressão -- e continua sendo um achado de território `services` (cobertura),
+	-- não `cli`, e não relacionado à leva de `$properties`/Security que este cenário existe para
+	-- verificar.
 	assert(
-		string.find(result.stderr, "MatchmakingService:4", 1, true) ~= nil,
-		`esperava o erro citar a linha real do script do usuário (MatchmakingService:4), recebeu: {result.stderr}`
+		string.find(result.stderr, "ReplicatedStorage.Shared.Chess.Network:49", 1, true) ~= nil,
+		`esperava o erro citar o módulo real do jogo que chama Instance.new("RemoteEvent") (ReplicatedStorage.Shared.Chess.Network:49), recebeu: {result.stderr}`
 	)
 	assert(
-		string.find(result.stderr, "HttpService", 1, true) ~= nil,
-		`esperava o erro citar "HttpService" (Service real do jogo ainda não registrado em ClassRegistry -- achado legítimo, território services, não cli), recebeu: {result.stderr}`
+		string.find(result.stderr, "RemoteEvent", 1, true) ~= nil,
+		`esperava o erro citar "RemoteEvent" (classe real do jogo ainda não simulada -- achado legítimo, território services, não relacionado a esta leva), recebeu: {result.stderr}`
 	)
-	assert(result.code == 2, `esperava ExitCode 2, recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
+	assert(
+		string.find(result.stderr, "required by ServerScriptService.Server", 1, true) ~= nil,
+		`esperava o erro citar o Script que disparou o require (ServerScriptService.Server), recebeu: {result.stderr}`
+	)
+
+	-- ExitCode mudou de 2 (achado antigo, diagnóstico de PROJETO) para 1 (achado atual, erro de
+	-- SCRIPT -- `Instance.new` levantando dentro de um `ModuleScript` requerido pelo `Script`
+	-- principal): `RunCommand.Execute` só devolve ExitCode 2 quando `bag:HasErrors()` -- e não
+	-- sobrou NENHUM diagnóstico de projeto para este projeto (nem `$properties` inválido, nem
+	-- classe não registrada na materialização -- `RemoteEvent` nunca chega a ser criado via
+	-- `$properties` aqui, só via `Instance.new` dentro do script). Ver `RunCommand.luau`, "EXIT
+	-- CODES (verbatim do desenho)": erro de projeto tem prioridade sobre erro de script, mas aqui
+	-- não há erro de projeto algum.
+	assert(result.code == 1, `esperava ExitCode 1 (erro de SCRIPT, não de projeto -- Instance.new("RemoteEvent") levanta dentro do sandbox, não na materialização), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
 
 	-- Nenhum stack trace cru do Lune deveria vazar (regra 04: "Falha ao ler .project.json ... é
 	-- um erro claro apontando o campo problemático -- nunca stack trace cru do parser"). Mantido

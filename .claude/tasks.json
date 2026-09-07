@@ -2846,7 +2846,7 @@
     {
       "createdAt": "2026-09-07",
       "updatedAt": "2026-09-07",
-      "column": "todo",
+      "column": "done",
       "priority": "high",
       "id": "task-test-rojo-properties-001",
       "title": "Cenario: template padrao do rojo init (Tiktok) carrega limpo fim a fim",
@@ -2863,7 +2863,8 @@
       "acceptance": "Cenario novo (ou extensao declarada do smoke existente) roda por lune e falha se voltar a aparecer materialize/invalid-property nas 3 propriedades do template. Relatorio comparando o numero de Diagnostics por severidade dos 3 projetos reais antes e depois da leva. Territorio exclusivo tests/scenarios/; read-only em src/** e em C:\\Users\\hakor\\Documents\\Roblox-Games.",
       "depends": [
         "task-cli-038"
-      ]
+      ],
+      "result": "Cenario novo tests/scenarios/rojo-init-template-hydration.scenario.luau (2 testes) + fixture tests/scenarios/fixtures/rojo-init-template-hydration/ (default.project.json + init.server.luau). Teste 1: binario real contra Tiktok/default.project.json confirma ZERO materialize/invalid-property para Technology/FilteringEnabled/RespectFilteringEnabled (unico erro remanescente: Part/Baseplate nao simulado, materialize/invalid-class, territorio services, fora de escopo). Teste 2: fixture sintetica com script real prova D3/D4 do desenho -- Workspace.FilteringEnabled le true (hidratado) mas escrita por SCRIPT continua barrada (ReadOnly inalterado); Lighting.Technology continua INVISIVEL por script (ScriptVisible=false inalterado, mesma mensagem de membro ausente); SoundService.RespectFilteringEnabled le true (property normal, nunca precisou do bypass -- Security.Read=Write=None no dump). Achado de precisao: RespectFilteringEnabled NUNCA precisou do fix de ScriptVisible desta leva -- o que bloqueava era SoundService como CLASSE nao simulada, corrigido numa leva anterior (commit ad83d97), documentado no cenario pra nao atribuir credito errado. Reexecutei real-roblox-games-pipeline-smoke.scenario.luau contra os 3 projetos reais: Tiktok 2->1 erros (Lighting.Technology + Workspace.FilteringEnabled fechados por esta leva; SoundService ja fechado antes por leva independente; resta so Part), Panic-CHESSS avancou de erro em HttpService (leva independente, ja fechada antes desta rodada) para erro em RemoteEvent nao simulado (ExitCode 2->1, script error nao project error -- achado legitimo services, nao relacionado), TheGame inalterado (Wally packages ausentes). Zero regressao nova encontrada. Asserts desatualizados (existiam ANTES desta leva) corrigidos em real-roblox-games-pipeline-smoke.scenario.luau e em value-types-real-project.scenario.luau (achado colateral: bug de Enum via $properties virando string crua, achado 3 daquele cenario, ja tinha sido corrigido por task-cli-027, independente -- assert atualizado de FIXTURE-FAIL/7-8 para FIXTURE-PASS/8-8). Todos os 12 arquivos .scenario.luau do territorio rodados: 12/12 exit 0. Relatorio completo: .claude/agents-memory/testador-task-test-rojo-properties-001-2026-09-07.md"
     },
     {
       "id": "task-services-036",

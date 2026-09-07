@@ -24,9 +24,28 @@
 -- `$properties` primitivo vs. array vs. string-de-enum), `valuetypes` (`Decode.FromRojoJson`,
 -- globais `Vector3`/`CFrame`/`Color3`/`Enum` injetados no sandbox), `runtime` `Sandbox`
 -- (`typeof` fiel dentro do script real).
--- Status: passa hoje -- documentando tanto o comportamento CORRIGIDO (achado 1) quanto um BUG
--- REAL novo e confirmado (achado 2, território `cli`) e uma limitação de cobertura ainda aberta
--- (achado 3, território `services`, já esperada). Ver comentários de cada teste abaixo.
+-- Status: passa hoje -- documentando tanto o comportamento CORRIGIDO (achado 1) quanto uma
+-- limitação de cobertura ainda aberta (achado 2, território `services`, já esperada). Ver
+-- comentários de cada teste abaixo.
+--
+-- ATUALIZAÇÃO 2026-09-07 (task-test-rojo-properties-001, verificação de rotina ao reexecutar
+-- `real-roblox-games-pipeline-smoke.scenario.luau` -- ver `.claude/agents-memory/
+-- arquiteto-rojo-properties-2026-09-07.md` para a leva que motivou a rodada): este cenário estava
+-- com 2 asserções desatualizadas, por causas TOTALMENTE independentes da leva de `$properties`/
+-- Security -- atualizadas aqui como manutenção de rotina de território (mesmo aviso já registrado
+-- em `real-roblox-games-pipeline-smoke.scenario.luau`), não como parte do trabalho daquela leva:
+--   - Teste 1 ('Tiktok'): o assert de "SoundService ainda não simulado"/"FilteringEnabled somente-
+--     leitura" ficou obsoleto -- `SoundService` passou a ser coberto por `services` numa leva
+--     anterior (commit `ad83d97`) e `Workspace.FilteringEnabled` hidrata sem erro desde
+--     task-cli-038 (ver `rojo-init-template-hydration.scenario.luau` para a prova dedicada). Único
+--     erro remanescente contra o Tiktok real: `Part` (Baseplate) ainda não simulado.
+--   - Teste 2 (achado 3, fixture): o bug de `Enum` via `$properties` virando string crua (em vez de
+--     `EnumItem`) JÁ FOI CORRIGIDO -- `git log -- src/cli/TreeMaterializer.luau` confirma
+--     `9ea5cef fix(cli): decode Enum via \$properties instead of writing raw string`, task
+--     independente (task-cli-027) escrita bem antes desta leva. `StarterPlayer.CameraMode` agora
+--     resolve como `EnumItem` de verdade -- o teste foi atualizado de "FIXTURE-FAIL esperado" para
+--     "FIXTURE-PASS esperado" (8/8), e o achado 3 (antes documentado como bug aberto) foi removido
+--     do comentário do teste -- mantido só aqui, no cabeçalho, como histórico.
 
 local process = require("@lune/process")
 
@@ -111,16 +130,22 @@ test("'Tiktok': os 4 warnings 'plan/non-primitive-property' (Ambient/Position/Co
 		`esperava "Part"/"Baseplate" reportados como ainda não simulados por "materialize/invalid-class" (achado 2, território services), recebeu: {result.stderr}`
 	)
 
-	-- Os outros 2 erros legítimos remanescentes (paridade com `real-roblox-games-pipeline-smoke`,
-	-- território services/runtime -- fidelidade correta com o Roblox real atual, não bugs):
+	-- ATUALIZAÇÃO 2026-09-07 (ver "ATUALIZAÇÃO 2026-09-07" no cabeçalho do arquivo): os 2 asserts
+	-- abaixo esperavam "SoundService"/"FilteringEnabled" como erros remanescentes -- DESATUALIZADO.
+	-- `SoundService` já é coberto por `services` (leva anterior, não relacionada) e
+	-- `Workspace.FilteringEnabled` hidrata sem erro desde task-cli-038. Único erro legítimo
+	-- remanescente contra o Tiktok real hoje: `Part` (Baseplate) ainda não simulado.
 	assert(
-		string.find(result.stderr, "SoundService", 1, true) ~= nil
-			and string.find(result.stderr, "materialize/service-not-simulated", 1, true) ~= nil,
-		`esperava "SoundService" reportado como ainda não simulado, recebeu: {result.stderr}`
+		string.find(result.stderr, "SoundService", 1, true) == nil,
+		`"SoundService" NÃO deveria mais aparecer em nenhum diagnóstico (classe coberta por services), recebeu: {result.stderr}`
 	)
 	assert(
-		string.find(result.stderr, "FilteringEnabled", 1, true) ~= nil and string.find(result.stderr, "read only", 1, true) ~= nil,
-		`esperava "Workspace.FilteringEnabled" reportado como somente-leitura (fidelidade correta, propriedade deprecada), recebeu: {result.stderr}`
+		string.find(result.stderr, "FilteringEnabled", 1, true) == nil,
+		`"FilteringEnabled" NÃO deveria mais aparecer em nenhum diagnóstico (hidratação bypassa ReadOnly desde task-cli-038), recebeu: {result.stderr}`
+	)
+	assert(
+		string.find(result.stderr, "materialize/invalid-class", 1, true) ~= nil and string.find(result.stderr, "Part", 1, true) ~= nil,
+		`esperava "Part" (Baseplate) reportado como ainda não simulado por "materialize/invalid-class" (único erro legítimo remanescente), recebeu: {result.stderr}`
 	)
 
 	-- Baseline inalterado: o script real do servidor continua rodando.
@@ -128,7 +153,7 @@ test("'Tiktok': os 4 warnings 'plan/non-primitive-property' (Ambient/Position/Co
 		string.find(result.stdout, "Hello world, from server!", 1, true) ~= nil,
 		`esperava o script real do servidor ter rodado, recebeu stdout: {result.stdout}`
 	)
-	assert(result.code == 2, `esperava ExitCode 2 (2 erros legítimos remanescentes -- SoundService/Part/FilteringEnabled), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
+	assert(result.code == 2, `esperava ExitCode 2 (1 erro legítimo remanescente -- Part/Baseplate), recebeu {result.code} (stdout: {result.stdout} stderr: {result.stderr})`)
 end)
 
 -- ====================================================================================================
@@ -188,60 +213,29 @@ test("fixture 'value-types-project': script real confirma Vector3/Color3/CFrame 
 	)
 
 	-- ------------------------------------------------------------------------------------------
-	-- Achado 3 -- BUG REAL NOVO, CONFIRMADO, território `cli` (`src/cli/TreeMaterializer.luau`,
-	-- função `resolvePropertyValue`). NÃO escondido -- documentado aqui como comportamento ATUAL
-	-- (o assert abaixo captura o que a bancada observou rodando o binário real, não uma suposição).
-	--
-	-- `resolvePropertyValue` (linhas ~280-284) trata QUALQUER `raw` cujo `typeof` seja
-	-- "boolean"/"number"/"string" como primitivo e grava DIRETO, sem consultar o `ValueCategory`
-	-- do `MemberDescriptor` da propriedade. Isso é CORRETO para uma property realmente primitiva
-	-- (ex.: `Lighting.TimeOfDay = "14:00:00"`, uma string de verdade) mas ERRADO para uma property
-	-- `ValueCategory == "Enum"` expressa como string -- o formato Rojo PADRÃO para Enum via
-	-- `$properties` (confirmado por `src/valuetypes/Decode.spec.luau`, "string com alvo Enum ->
-	-- EnumItem", e é exatamente como `StarterPlayer.CameraMode = "LockFirstPerson"` está escrito
-	-- nesta fixture). O `rawKind == "string"` do início da função faz `return raw` ANTES de a
-	-- função sequer chegar no bloco que consultaria `descriptor.ValueCategory == "Enum"` e chamaria
-	-- `ValueTypes.Decode.FromRojoJson` -- ou seja, o branch de decode de Enum (linhas ~318-333)
-	-- nunca é alcançado quando o valor bruto já É uma string.
-	--
-	-- Consequência observada (reproduzida rodando o binário real, não inferida por leitura de
-	-- código): `StarterPlayer.CameraMode` termina com uma STRING Lua crua ("LockFirstPerson") em
-	-- vez de um `EnumItem` (`Enum.CameraMode.LockFirstPerson`) -- `typeof()` mente (devolve
-	-- "string" em vez de "EnumItem", divergência de FIDELIDADE com o Roblox real, regra 00) e
-	-- `== Enum.CameraMode.LockFirstPerson` nunca bate. NENHUM erro/warning é emitido -- é uma
-	-- CORRUPÇÃO SILENCIOSA de tipo, exatamente a categoria de bug que o comentário da própria
-	-- função diz querer evitar ("um array cru escrito direto num Vector3/Color3 real seria a
-	-- corrupção silenciosa que a invariante 2 do projeto proíbe") -- só que o mesmo raciocínio não
-	-- foi estendido ao caso "string crua escrita direto num Enum real".
-	--
-	-- Alcance provável (por leitura de código, NÃO testado nesta rodada -- sinalizado como
-	-- hipótese, não fato confirmado): o MESMO `rawKind == "number"` early-return sugere que um
-	-- Enum property setado por VALOR numérico (`Value`) em vez de nome, outro formato válido de
-	-- Rojo, teria o mesmo problema -- vale confirmar numa tarefa de fix, não assumido aqui como
-	-- comprovado.
-	--
-	-- Impacto real: `Enum` via `$properties` é um padrão MUITO comum em projetos Rojo reais
-	-- (`Part.Material`, `Lighting.LightingStyle`, `StarterPlayer.CameraMode`, etc. -- mais comum,
-	-- inclusive, que Vector3/Color3 via array) -- qualquer projeto real que configure uma
-	-- propriedade Enum via `$properties` recebe hoje um valor com tipo ERRADO na árvore
-	-- materializada, sem nenhum diagnóstico. Recomendo tarefa de fix em `cli`.
+	-- Achado 3 (HISTÓRICO -- FECHADO, ver "ATUALIZAÇÃO 2026-09-07" no cabeçalho do arquivo): esta
+	-- fixture já capturou aqui um bug real de `src/cli/TreeMaterializer.luau` (`resolvePropertyValue`
+	-- tratava QUALQUER `raw` string como primitivo, sem consultar `ValueCategory == "Enum"" do
+	-- `MemberDescriptor` -- `StarterPlayer.CameraMode = "LockFirstPerson"` terminava como STRING Lua
+	-- crua em vez de `EnumItem`, `typeof()` mentindo, `== Enum.CameraMode.LockFirstPerson` nunca
+	-- batendo, sem nenhum diagnóstico). Corrigido por `9ea5cef fix(cli): decode Enum via
+	-- \$properties instead of writing raw string` (task-cli-027, independente desta leva de
+	-- `$properties`/Security) -- confirmado rodando o binário real: `StarterPlayer.CameraMode`
+	-- resolve como `EnumItem` de verdade agora. Assert abaixo atualizado de "FIXTURE-FAIL esperado"
+	-- para "FIXTURE-PASS esperado" (8/8).
 	-- ------------------------------------------------------------------------------------------
 	assert(
 		string.find(
 			result.stdout,
-			'[FIXTURE-FAIL] StarterPlayer.CameraMode é um EnumItem de verdade (typeof), igual a Enum.CameraMode.LockFirstPerson',
+			'[FIXTURE-PASS] StarterPlayer.CameraMode é um EnumItem de verdade (typeof), igual a Enum.CameraMode.LockFirstPerson',
 			1,
 			true
 		) ~= nil,
-		`BUG CONFIRMADO (achado 3, território cli) esperado no stdout -- se este assert falhar, o bug foi CORRIGIDO: atualize este teste para esperar "[FIXTURE-PASS]" em vez de "[FIXTURE-FAIL]". Recebeu stdout: {result.stdout}`
+		`esperava a checagem de Enum via $properties passar (bug fechado por task-cli-027) -- se este assert falhar, pode ser uma REGRESSÃO real: recebeu stdout: {result.stdout}`
 	)
 	assert(
-		string.find(result.stdout, 'recebeu string', 1, true) ~= nil,
-		`esperava a mensagem do FIXTURE-FAIL citar "recebeu string" (typeof mentiu -- deveria ser EnumItem), recebeu stdout: {result.stdout}`
-	)
-	assert(
-		string.find(result.stdout, "[FIXTURE-SUMMARY] 7/8 verificações passaram, 1 falharam", 1, true) ~= nil,
-		`esperava o resumo da fixture confirmar 7/8 (só a checagem de Enum via $properties falha hoje), recebeu stdout: {result.stdout}`
+		string.find(result.stdout, "[FIXTURE-SUMMARY] 8/8 verificações passaram, 0 falharam", 1, true) ~= nil,
+		`esperava o resumo da fixture confirmar 8/8 (todas as checagens passam, incluindo Enum via $properties), recebeu stdout: {result.stdout}`
 	)
 
 	assert(string.find(result.stderr, "stack traceback", 1, true) == nil, "stack trace cru do Lune vazou pro usuário")
