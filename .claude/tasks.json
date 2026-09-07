@@ -2712,7 +2712,7 @@
       "id": "task-services-034",
       "title": "HttpService:GetAsync falha esporadica com erro que escapa do pipeline de contagem",
       "description": "Achado do revisor de task-cli-034 (nao relacionado ao fix daquela task; reproduzido de forma independente, ~1/40 execucoes tanto pelo coder quanto pelo revisor, sem concorrencia envolvida -- nao e o mesmo bug de porta/scratch). HttpService:GetAsync falha intermitentemente (~5-20%/tentativa, taxa exata nao determinada) com mensagem \"the request could not be completed\" (ou similar) vinda de @lune/net. O problema real nao e a falha em si (rede real pode falhar), mas que NESSA condicao especifica o erro ESCAPA do pipeline normal de formatacao/contagem de RunCommand: sai como stack trace cru do Lune (visto vazando de HttpService.luau:1353 e Sandbox.luau:549 em vez de passar por OutputFormatter), o sumario final mente \"0 error(s)\", e o processo termina com exit 0 mesmo tendo havido erro real. Investigar por que esse caminho de erro especifico nao esta sendo capturado pelo mecanismo normal de ThreadError/pcall que os demais erros de script usam -- pode ser um pcall faltando em HttpService.luau ao redor da chamada net.request, ou um erro lancado fora do coroutine que Sandbox.luau monitora. TERRITORIO: provavelmente src/services/behavior/HttpService.luau (pcall ausente/incorreto ao redor de net.request) -- se a investigacao mostrar que a causa e em como Sandbox.luau/scheduler captura ThreadError para esse tipo de erro assincrono, precisa virar tarefa cross-territorio (avisar antes de expandir para runtime). NAO mascarar com retry no codigo de producao -- o objetivo e o erro aparecer corretamente formatado e contado, nao desaparecer nem ser escondido.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 52,
@@ -2726,7 +2726,27 @@
       "acceptance": "Reproduzir a falha esporadica de GetAsync isoladamente (script de teste que repete a chamada N vezes ate reproduzir). Apos o fix: quando a falha ocorre, o erro passa pelo pipeline normal (OutputFormatter, contagem correta de erros no sumario, exit code != 0 quando aplicavel) em vez de vazar stack cru. --strict sem any. Documentar no relatorio se a causa raiz era em services ou cruzava para runtime.",
       "depends": [],
       "createdAt": "2026-09-06",
-      "updatedAt": "2026-09-06"
+      "updatedAt": "2026-09-07",
+      "result": "Causa raiz confirmada em services, nao cruza pra runtime: net.request (Lune) e assincrona nativa -- a coroutine que chama e resumida pelo runtime interno do Lune, nunca por Scheduler.resumeThread (unico ponto do projeto que converte falha de resume em ThreadError:Fire). Quando essa retomada nativa entrega erro, ele escapava direto pro handler de erro nao tratado do Lune (dump cru), RunCommand mentia 0 error(s)/exit 0. Fix: performNetRequest isola net.request numa coroutine descartavel via task.spawn (com pcall proprio), thread gerida pelo Scheduler le o resultado de volta via loop scheduler:Wait(0.001) -- cujo resume sempre passa por Scheduler.resumeThread. Achado critico: intervalo precisa ser POSITIVO (nunca Wait(0)), porque Scheduler.Run so chama task.wait de verdade (unico jeito de dar chance ao reator assincrono do Lune) quando ha sleep calculado > 0 -- Wait(0) trava a requisicao pra sempre.",
+      "reviewResult": "APROVADO COM RESSALVAS (revisor-services, 2026-09-07). Reproduzido de forma independente: bug original confirmado 3/3 com git stash (dump cru, threadErrorCount=0, exit 1); com fix restaurado, 8/8 corretos via ThreadError. Wait(0) trava (300k+ tiques/0.83s) vs Wait(0.001) funciona (1 tique/7ms) confirmado com probe proprio. Suite completa: 102/102 (nao 101/101 como o self-report do coder alegou -- pequena imprecisao, sem impacto). Teste novo confirmado genuino (sem pcall protetor). Territorio limpo, --strict/zero any confirmado, luau-lsp 0 diagnosticos. Ressalva nao-bloqueante: fix e um workaround via polling especifico pra net.request -- se outras chamadas nativas assincronas do Lune precisarem do mesmo tratamento no futuro, vale o arquiteto avaliar um helper generico em runtime em vez de cada modulo de services reimplementar o padrao (risco de copiar Wait(0) por engano). Comentario desatualizado em src/cli/RunCommand.spec.luau:398-425 (fora de escopo, apontado pelo coder e confirmado pelo revisor) fica pendente pra task pequena de coder-cli."
+    },
+    {
+      "id": "task-cli-036",
+      "title": "Atualizar comentario desatualizado sobre bug de GetAsync em RunCommand.spec.luau",
+      "description": "task-services-034 corrigiu o bug real de HttpService:GetAsync escapando do pipeline de ThreadError (fix em src/services/behavior/HttpService.luau). src/cli/RunCommand.spec.luau, linhas ~398-425, tem um comentario descrevendo esse bug como pendente para coder-services/coder-runtime -- esta desatualizado desde o fix. Atualizar o comentario para refletir que o bug foi corrigido (referenciar task-services-034), sem remover o contexto historico se ainda for util para entender por que o teste tem retry deterministico.",
+      "column": "todo",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 53,
+      "tags": [
+        "cli",
+        "documentacao"
+      ],
+      "priority": "low",
+      "acceptance": "Comentario em RunCommand.spec.luau reflete o estado atual (bug corrigido em task-services-034), nao o estado antigo (pendente). Nenhuma logica de teste alterada nesta tarefa -- so o comentario.",
+      "depends": [],
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07"
     }
   ]
 }

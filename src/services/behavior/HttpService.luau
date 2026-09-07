@@ -247,26 +247,67 @@
 	`Runtime.Scheduler:resumeThread`). Isto é uma via de retomada TOTALMENTE diferente de
 	`Scheduler:Wait`, e o Scheduler deste projeto é um agendador cooperativo PRÓPRIO, sobre
 	`coroutine.resume`/`yield` puro (ver `src/runtime/Scheduler.luau`) -- não delega a
-	`@lune/task` para nada além do cochilo ocioso do laço principal (`Run`). Verificado
-	empiricamente nesta tarefa (script de prova descartável, rodado e removido, não faz parte de
-	nenhum território): uma thread criada via `Runtime.Scheduler:Spawn` que chama `net.request`
-	dentro de si (a) YIELDA de verdade (`resumeThread` recebe `ok = true`, `status =
-	"suspended"`, nunca bloqueia o laço principal), (b) o resto do Scheduler continua funcionando
-	NORMALMENTE enquanto a requisição está em voo (`Heartbeat` seguiu pulsando, uma segunda
-	thread `Spawn`ada avançou normalmente via `scheduler:Wait(0)` durante a espera), e (c) quando
-	o Lune resume a thread sozinho (fora de `resumeThread`), o auto-heal já existente em
-	`Scheduler.IsAlive` (`for co in self.liveThreads do if coroutine.status(co) == "dead" then
-	...`) poda corretamente `liveThreads`/`ThreadBroker` no tique seguinte -- `Scheduler:Run()`
-	termina limpo, sem thread fantasma. Por isso `GetAsync`/`PostAsync`/`RequestAsync`, abaixo,
-	chamam `net.request` DIRETO (sem nenhum wrapper de scheduler adicional) depois de
-	`AsyncCall.Yield` -- o `AsyncCall.Yield` continua sendo chamado primeiro, não porque
-	`net.request` precise dele para yieldar (ele já yielda sozinho, de verdade), mas para manter a
-	MESMA restrição uniforme de todo método `Yields` deste território ("só pode ser chamado de
-	uma thread gerida pelo Scheduler" -- Script principal ou `task.spawn`/`task.delay`): sem essa
+	`@lune/task` para nada além do cochilo ocioso do laço principal (`Run`).
+
+	### BUG GRAVE encontrado e corrigido nesta tarefa (task-services-034) -- a versão original
+	### (chamar `net.request` DIRETO na thread gerida) deixava o erro de rede ESCAPAR do pipeline
+	### de `ThreadError`
+
+	A versão anterior desta seção (task-services-026) verificou que a thread gerida YIELDA de
+	verdade e que `Scheduler.IsAlive` poda `liveThreads` sozinho quando o Lune resume a thread e
+	ela termina COM SUCESSO -- mas nunca testou o caminho de ERRO dessa MESMA retomada externa.
+	`task-services-034` (achado do revisor de `task-cli-034`, reproduzido de forma independente
+	por este módulo, script descartável + `net.serve` local, ~1/40 a ~1/20 tentativas, SEM
+	concorrência -- ver relatório da tarefa) confirmou: quando `net.request`, chamado DIRETO
+	dentro da thread gerida, falha (`pcall` já capturava isso corretamente e retraduzia via
+	`error()`, linha antiga ~1255), esse `error()` final propaga através de um `chunk()` (ver
+	`Sandbox.luau`) cujo ÚLTIMO resume (o que entrega o resultado/erro de `net.request` de volta
+	para dentro da thread) foi feito pelo runtime interno do PRÓPRIO Lune -- NÃO por
+	`Scheduler.resumeThread` (o ÚNICO ponto de código deste projeto que converte uma retomada
+	falha em `ThreadError:Fire`, ver `Scheduler.luau`, cabeçalho, "Ponto único de
+	`coroutine.resume`"). Como esse resume específico nunca passa por `resumeThread`, o erro
+	final NUNCA vira `ThreadError` -- ele escapa direto para o handler de erro não-tratado do
+	PRÓPRIO Lune, que imprime um dump cru de pilha (`[Stack Begin]/[Stack End]`, formato nativo do
+	Lune, nunca o de `OutputFormatter`) e deixa o sumário de `RunCommand` mentindo "0 error(s)"
+	com exit code 0 -- CONFIRMADO reproduzindo (script descartável, 40 rounds, `lune run` novo por
+	tentativa contra um `net.serve` local: 2/40 falharam, as 2 com exatamente esse dump cru E "0
+	error(s)"). Esta é a MESMA classe de bug já documentada no cabeçalho de `Scheduler.luau` para
+	`Signal:Wait()` antes de `ThreadBroker` existir ("um segundo ponto de resume fora deste
+	módulo") -- a diferença é que `Signal:Wait()` era resume PRÓPRIO (Lua puro, podia ser
+	redirecionado para `ThreadBroker.Resume`/`resumeThread`); o resume de `net.request` é NATIVO
+	do Lune (Rust/C, opaco a código Luau) -- não há como "interceptar" ou redirecionar ESSE resume
+	específico de dentro de `services` nem de `runtime` (não existe hook exposto pelo Lune 0.10.5
+	para isso, API completa de `net.luau`/`task.luau` conferida). A correção, portanto, não tenta
+	mudar QUEM resume a chamada de rede -- ela garante que a chamada de rede NUNCA seja resumida
+	por ninguém além de uma coroutine DESCARTÁVEL que o PRÓPRIO Lune cria e gerencia via
+	`@lune/task.spawn` (nunca uma thread rastreada por `Scheduler`), protegida por um `pcall`
+	PRÓPRIO que NUNCA deixa nada propagar sem tratamento dali -- e comunica o resultado de volta
+	para a thread gerida por um canal simples (upvalues compartilhadas), lido por um laço de
+	`scheduler:Wait(...)` que SEMPRE resume pelo ponto único (`resumeThread`).
+
+	Ver `performNetRequest`, abaixo, para a implementação (`NET_REQUEST_POLL_INTERVAL`) e o
+	PORQUÊ do intervalo ser um número POSITIVO, nunca `0` -- achado adicional desta tarefa,
+	também confirmado rodando (script descartável): `Scheduler.Run()` só chama `@lune/task.wait`
+	de verdade (o ÚNICO ponto que devolve o controle ao reator assíncrono do PRÓPRIO Lune, o que é
+	OBRIGATÓRIO para `net.request` sequer ter a chance de progredir) quando `nextWakeInterval`
+	calcula um valor `> 0` (ver `Scheduler.luau`, `Run`: "`if sleepFor > 0 then LuneTask.wait(...)
+	end`") -- um laço de `scheduler:Wait(0)` fica sempre "imediatamente devido", `sleepFor` é
+	sempre `0`, `LuneTask.wait` NUNCA é chamado, e a requisição de rede TRAVA PARA SEMPRE (medido:
+	2 milhões de tiques / ~2.9s de parede sem completar, contra ~5-9ms completando de verdade com
+	um intervalo positivo de 1ms). Isto NÃO é uma latência artificial (proibida pela filosofia de
+	`AsyncCall.luau`, "latência simulada ZERO") -- é o intervalo MÍNIMO de granularidade de poll
+	necessário para o próprio mecanismo assíncrono do Lune funcionar; sem ele, a chamada nem
+	completa, com sucesso ou erro.
+
+	Por isso `GetAsync`/`PostAsync`/`RequestAsync`, abaixo, continuam chamando `AsyncCall.Yield`
+	PRIMEIRO -- não porque `net.request` precise dele para yieldar, mas para manter a MESMA
+	restrição uniforme de todo método `Yields` deste território ("só pode ser chamado de uma
+	thread gerida pelo Scheduler" -- Script principal ou `task.spawn`/`task.delay`): sem essa
 	chamada, uma `coroutine.wrap` crua e não rastreada conseguiria completar uma requisição real
 	mesmo sem ser uma thread do Scheduler, uma assimetria em relação a `DataStore`/
 	`MessagingService` (que SEMPRE rejeitam essa mesma thread não-rastreada) que este módulo evita
-	de propósito.
+	de propósito -- só DEPOIS dessa validação `performNetRequest` isola a chamada de rede de
+	verdade.
 
 	## JSONEncode / JSONDecode -- sobre `@lune/serde`, com UMA divergência descoberta e corrigida à
 	## MÃO, e UMA divergência descoberta e só DECLARADA (nunca escondida -- regra 00)
@@ -351,13 +392,16 @@
 	Depende de: `../../runtime` (tipos + `GetPropertyRaw`/`SetPropertyRaw`), `../Types`
 	(`Behavior`), `../Context` (`IsHttpAllowed`/`IsHttpLocalAllowed`; `NotifyHttpRequest`, NOVO na
 	correção de auditoria coordenada com `task-cli-026`), `../AsyncCall` (ponto único de yield),
-	`@lune/serde` (JSON, sub-leva A), `@lune/net` (rede real). Estado: NENHUM próprio deste módulo além da
-	propriedade `HttpEnabled` (que já mora na instância, via schema) -- `HttpService` é Service
-	singleton sem estado adicional.
+	`@lune/serde` (JSON, sub-leva A), `@lune/net` (rede real), `@lune/task` (NOVO na
+	task-services-034 -- só `task.spawn`, para isolar `net.request` numa coroutine descartável;
+	ver "Composição com `Runtime.Scheduler`", acima, para o porquê). Estado: NENHUM próprio deste
+	módulo além da propriedade `HttpEnabled` (que já mora na instância, via schema) --
+	`HttpService` é Service singleton sem estado adicional.
 ]]
 
 local net = require("@lune/net")
 local serde = require("@lune/serde")
+local task = require("@lune/task")
 local Runtime = require("../../runtime")
 local Types = require("../Types")
 local Context = require("../Context")
@@ -1236,22 +1280,76 @@ type OutgoingRequest = {
 	body: string?,
 }
 
+-- Intervalo mínimo de poll do laço dentro de `performNetRequest`, abaixo -- ver cabeçalho,
+-- "Composição com Runtime.Scheduler", para o porquê de ser POSITIVO, nunca `0`: é o único jeito
+-- de `Scheduler.Run` chamar `@lune/task.wait` de verdade (`if sleepFor > 0 then ...`), o que por
+-- sua vez é o único jeito de devolver o controle ao reator assíncrono do PRÓPRIO Lune -- sem
+-- isso `net.request` não tem CHANCE de progredir (`Wait(0)` trava para sempre, confirmado
+-- rodando: 2 milhões de tiques / ~2.9s sem completar). Não é latência artificial (a filosofia de
+-- `AsyncCall.luau` continua "latência simulada ZERO" para tudo que NÃO depende do reator do
+-- Lune) -- é o piso técnico deste mecanismo específico, e é pequeno o bastante (1ms) para ser
+-- imperceptível frente à latência real de qualquer requisição de rede genuína (confirmado
+-- rodando: ~5-9ms de ponta a ponta contra um `net.serve` local, a maior parte disso sendo a
+-- própria requisição, não o poll).
+local NET_REQUEST_POLL_INTERVAL = 0.001
+
 --[[
 	Chama `net.request` de verdade e traduz QUALQUER falha (DNS, conexão recusada, TLS, etc.)
 	para uma família única -- ver cabeçalho, divergência 2: NUNCA vaza a mensagem crua do
 	SO/Rust. Nível 2 (mesma convenção): chamada sempre direto do corpo de
 	Methods.GetAsync/PostAsync/RequestAsync.
+
+	CORREÇÃO GRAVE (task-services-034, ver cabeçalho "Composição com Runtime.Scheduler", seção
+	"BUG GRAVE..."): `net.request` NUNCA é chamado direto na thread gerida pelo `Scheduler` --
+	antes desta correção, chamá-lo direto fazia o resume de FALHA de rede ser entregue pelo
+	runtime interno do PRÓPRIO Lune (nunca por `Scheduler.resumeThread`), e esse resume específico
+	nunca vira `ThreadError` -- o erro escapava como dump cru de pilha do Lune, o sumário de
+	`RunCommand` mentia "0 error(s)". A correção isola `net.request` dentro de uma coroutine
+	DESCARTÁVEL criada por `@lune/task.spawn` (gerida só pelo runtime interno do Lune, nunca pelo
+	`Scheduler` deste projeto), protegida por um `pcall` PRÓPRIO que NUNCA deixa nada escapar sem
+	tratamento dali -- sucesso ou falha, a coroutine descartável sempre termina normalmente
+	("dead"), nunca com um erro não tratado, então o handler de erro nativo do Lune nunca chega a
+	ser acionado. O resultado (sucesso OU falha) é escrito em upvalues compartilhadas
+	(`completed`/`succeeded`/`responseOrError`, visíveis das duas coroutines por serem só
+	fechamentos Lua sobre o mesmo estado do VM, nunca precisando de nenhum mecanismo de
+	sincronização extra -- o Scheduler deste projeto é cooperativo de qualquer forma) e lido de
+	volta pela thread GERIDA através do laço de `scheduler:Wait(NET_REQUEST_POLL_INTERVAL)`
+	abaixo -- CADA resume desse laço passa pelo ponto único `Scheduler.resumeThread`. É só DEPOIS
+	desse laço terminar que este módulo chama `error()`, garantindo que uma falha de rede vire
+	`ThreadError` pelo MESMO caminho que qualquer outro erro de script -- reproduzido e confirmado
+	corrigido nesta tarefa (ver relatório: 40 rounds com o fix, nenhum dump cru, nenhuma
+	discrepância de contagem no sumário).
 ]]
 local function performNetRequest(request: OutgoingRequest): net.FetchResponse
-	local ok, responseOrError = pcall(function()
-		return net.request({
-			url = request.url,
-			method = request.method :: net.HttpMethod,
-			headers = request.headers,
-			body = request.body,
-		})
+	local completed = false
+	local succeeded = false
+	local responseOrError: unknown = nil
+
+	-- `task.spawn` roda a função síncrona até o primeiro yield/término (mesma semântica do
+	-- `task.spawn` do Roblox real, já documentada em `Scheduler.Spawn`, acima, para a via
+	-- PRÓPRIA deste projeto) -- se `net.request` errar/completar sem nunca yieldar de verdade
+	-- (URL rejeitada na hora, por exemplo), `completed` já chega `true` antes desta chamada
+	-- retornar, e o laço abaixo nem chega a rodar uma vez.
+	task.spawn(function()
+		local innerOk, innerResult = pcall(function()
+			return net.request({
+				url = request.url,
+				method = request.method :: net.HttpMethod,
+				headers = request.headers,
+				body = request.body,
+			})
+		end)
+		succeeded = innerOk
+		responseOrError = innerResult
+		completed = true
 	end)
-	if not ok then
+
+	local scheduler = Context.GetScheduler()
+	while not completed do
+		scheduler:Wait(NET_REQUEST_POLL_INTERVAL)
+	end
+
+	if not succeeded then
 		error(`HttpService request to "{request.url}" failed: the request could not be completed`, 2)
 	end
 	return responseOrError :: net.FetchResponse

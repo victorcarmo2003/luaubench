@@ -1042,6 +1042,83 @@ test("OnHttpRequest NÃO é chamado quando a requisição é recusada por destin
 	assert(calls == 0, `OnHttpRequest NÃO deveria ter sido chamado, foi chamado {calls} vez(es)`)
 end)
 
+-- ================================================================================================
+-- REGRESSÃO task-services-034: uma falha de REDE genuína (não "HTTP não habilitado", não destino
+-- recusado -- um erro de verdade vindo de `net.request`, o caminho onde o bug morava) sai por
+-- `Scheduler.ThreadError`, NUNCA como dump cru de pilha do Lune. Ver `performNetRequest`
+-- (./HttpService.luau) para a causa raiz completa e a correção (`task.spawn` + poll).
+--
+-- ACHADO CENTRAL desta tarefa que explica por que NENHUM teste pré-existente deste arquivo pegava
+-- o bug: todo teste de rede acima usa `runOnScheduler`, que envolve a chamada num `pcall` PRÓPRIO
+-- (linha ~127) -- e um `pcall` comum já protege corretamente através de qualquer yield/resume,
+-- não importa QUEM fez o resume por baixo. O bug só se manifesta quando NÃO HÁ NENHUM pcall entre
+-- a chamada e o topo da thread gerida -- exatamente a forma de um script real
+-- (`local body = HttpService:GetAsync(...)`, sem pcall nenhum) -- por isso este teste NUNCA
+-- envolve a chamada num pcall, e dirige o Scheduler manualmente (não usa `runOnScheduler`).
+-- ================================================================================================
+
+-- Sobe um servidor local numa porta aleatória e o para IMEDIATAMENTE -- garante "conexão
+-- recusada" real, rápida e determinística (sem depender de DNS/rede externa, diferente do teste
+-- de "host inexistente" acima, que factualmente pode levar vários segundos). Mesma técnica de
+-- porta dinâmica com retry usada por `RunCommand.spec.luau` (`startLocalHttpServer`) -- nunca uma
+-- porta fixa, que colidiria entre execuções concorrentes.
+local function pickPortWithNothingListening(): number
+	local MAX_ATTEMPTS = 25
+	for _ = 1, MAX_ATTEMPTS do
+		local candidatePort = math.random(40000, 59999)
+		local ok, handleOrError = pcall(function()
+			return net.serve(candidatePort, function(_request: net.ServeRequest): net.ServeResponse
+				return { status = 200, body = "unused -- parado antes de qualquer requisição" }
+			end)
+		end)
+		if ok then
+			(handleOrError :: net.ServeHandle).stop()
+			return candidatePort
+		end
+	end
+	error(`HttpService.spec: não conseguiu achar uma porta livre em {MAX_ATTEMPTS} tentativas`)
+end
+
+test("task-services-034: GetAsync chamado SEM pcall (como um script real faria) -- falha de rede genuína sai por Scheduler.ThreadError, NUNCA como dump cru do Lune", function()
+	local port = pickPortWithNothingListening()
+
+	local httpService, scheduler = makeHttpService({ AllowHttp = true, AllowHttpLocal = true })
+	local getAsync = httpService.GetAsync :: (self: Dynamic, url: unknown, nocache: boolean?, headers: unknown) -> string
+
+	local threadErrorCount = 0
+	local threadErrorMessage: string? = nil
+	local errorConnection = scheduler.ThreadError:Connect(function(_thread: thread, message: string)
+		threadErrorCount += 1
+		threadErrorMessage = message
+	end)
+
+	local finished = false
+	scheduler:Spawn(function()
+		-- SEM pcall aqui de propósito -- ver comentário do cabeçalho desta seção: é exatamente a
+		-- ausência de qualquer pcall que reproduzia o bug original (o erro, antes da correção,
+		-- escapava como dump cru em vez de virar ThreadError).
+		getAsync(httpService, `http://127.0.0.1:{port}/`, nil, nil)
+		finished = true
+	end)
+
+	local startClock = os.clock()
+	scheduler:Run(function()
+		return threadErrorCount == 0 and (os.clock() - startClock) < 10
+	end)
+
+	assert(not finished, "a thread NUNCA deveria terminar normalmente -- GetAsync deveria ter errado (nada escuta na porta)")
+	assert(
+		threadErrorCount == 1,
+		`esperava exatamente 1 ThreadError (a falha de rede saindo pelo caminho normal), recebeu {threadErrorCount} -- se 0, o bug de task-services-034 voltou (erro escapando cru)`
+	)
+	assert(
+		string.find(threadErrorMessage or "", "the request could not be completed", 1, true) ~= nil,
+		`ThreadError deveria carregar a mensagem traduzida de falha de rede, recebeu: {tostring(threadErrorMessage)}`
+	)
+
+	errorConnection:Disconnect()
+end)
+
 test("SEM ANY: o texto-fonte de ./HttpService.luau nunca usa o tipo `any` (regra 01 -- checagem mecânica, complementar ao `luau-lsp analyze`)", function()
 	local source = fs.readFile("src/services/behavior/HttpService.luau")
 	assert(string.find(source, "%f[%w]any%f[%W]") == nil, "./HttpService.luau NÃO deveria conter o tipo `any` em lugar nenhum (regra 01)")
