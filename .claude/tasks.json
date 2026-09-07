@@ -5,7 +5,7 @@
     "review",
     "done"
   ],
-  "updatedAt": "2026-09-05",
+  "updatedAt": "2026-09-07",
   "tasks": [
     {
       "id": "task-runtime-001",
@@ -2771,6 +2771,93 @@
       "createdAt": "2026-09-07",
       "updatedAt": "2026-09-07",
       "result": "CONFIRMADO empiricamente (rojo build real contra Tiktok/default.project.json, read-only) e por codigo-fonte (rbx_reflection v7.0.0/rbx_reflection_database v3.0.0+roblox-728, Rojo 7.7.0): $properties de projeto e aplicado por deserializacao direta no DOM que NUNCA consulta Security.Read/Write nem Serialization.CanLoad/CanSave -- so valida nome+tipo contra a hierarquia de classes. rojo build escreveu Lighting.Technology (Security elevado RobloxScriptSecurity) e Workspace.FilteringEnabled (CanLoad=false, Deprecated) com sucesso total, exit 0, zero avisos mesmo em -vv. Existe um segundo caminho real (plugin ao vivo rojo serve, setProperty.lua) que SIM checa scriptability -- mas nao e o caminho que TreeMaterializer (batch/offline) precisa espelhar. Relatorio: .claude/agents-memory/pesquisa-rojo-properties-security-2026-09-07.md. Encaminhado pro arquiteto redesenhar a fronteira runtime/services/cli (task-cli-037 gerou tarefas de implementacao via arquiteto)."
+    },
+    {
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07",
+      "column": "todo",
+      "priority": "high",
+      "id": "task-runtime-039",
+      "title": "MemberDescriptor.ScriptVisible: separar 'membro existe na classe' de 'script enxerga o membro'",
+      "description": "LER ANTES: .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md (secoes D1, D3, 5 e 8) e .claude/agents-memory/pesquisa-rojo-properties-security-2026-09-07.md.\n\nCONTEXTO: hoje o ClassSchema colapsa dois eixos num so -- uma Property com Security.Read elevado (ex.: Lighting.Technology) simplesmente NAO EXISTE no schema, entao o caminho de hidratacao de $properties do Rojo (cli/TreeMaterializer) nao tem como escrever nela. A pesquisa provou que o rojo build real nunca consulta Security/Scriptability/Serialization ao aplicar $properties -- so valida nome+tipo contra a hierarquia de classes. A correcao e separar os eixos NO PROPRIO descritor.\n\nESCOPO (src/runtime/ apenas):\n1) src/runtime/Instance.luau: acrescentar `ScriptVisible: boolean?` a `export type MemberDescriptor` -- ADITIVO PURO (nil ou true = visivel, comportamento de hoje; false = membro EXISTE estruturalmente na classe mas e invisivel ao script). Documentar no comentario do tipo a correspondencia 1:1 com rbx_reflection::Scriptability (None -> ScriptVisible=false; Read -> ScriptVisible=true + ReadOnly=true; ReadWrite -> true + false) e por que o nome e 'ScriptVisible' e nao 'ScriptAccessible' (ReadOnly ja e o eixo de ESCRITA por script; este e o eixo de EXISTENCIA para o script).\n2) InstanceMeta.__index (passo 5, ~linha 629-638) e InstanceMeta.__newindex (passos 7/8, ~linha 750-790): resolver o descritor e, se `descriptor.ScriptVisible == false`, trata-lo como NIL -- todo o resto dos dois caminhos fica IGUAL (mesma resolucao de filho por nome no passo 7 do __index, mesma string final '{key} is not a valid member of {ClassName} \"{FullName}\"'). A neutralidade observavel e o ponto: uma entrada invisivel tem que ser INDISTINGUIVEL de uma chave ausente.\n3) Instance.SetClassSchema (~linha 1042-1082): validacao de forma aceita ScriptVisible boolean ou nil e erra alto para qualquer outro tipo (mesma familia das validacoes de Kind/ReadOnly); e a semeadura de defaults NAO semeia Default nem Signal para entrada com ScriptVisible == false (memoria por instancia fica identica a de hoje).\n\nNAO FAZER: nenhuma API nova (GetPropertyRaw/SetPropertyRaw ja sao a via de engenharia que ignora o schema -- ficam como estao); nao tocar em ReadOnly; nao tocar no modo LENIENTE; runtime continua sem conhecer o API Dump (so declara o vocabulario, quem preenche e services).",
+      "agent": "coder-runtime",
+      "reviewer": "revisor-runtime",
+      "wave": 55,
+      "tags": [
+        "runtime",
+        "schema",
+        "rojo",
+        "bug-alto-impacto"
+      ],
+      "acceptance": "MemberDescriptor.ScriptVisible existe e esta documentado. Spec NOVA em Instance.spec.luau provando NEUTRALIDADE OBSERVAVEL: com um ClassSchema contendo uma entrada ScriptVisible=false, (a) leitura da chave erra com a MESMA string de 'not a valid member of' que uma chave ausente produz; (b) escrita erra com a MESMA string; (c) se existir um FILHO com aquele nome, a leitura devolve o filho (prova que a resolucao de filho continua na mesma posicao relativa); (d) GetPropertyRaw/SetPropertyRaw continuam funcionando sobre a chave invisivel. Spec provando que SetClassSchema nao semeia default de entrada invisivel e que erra para ScriptVisible de tipo invalido. Todo ClassSchema escrito a mao antes desta tarefa (specs existentes, sem o campo) continua valido sem edicao. --!strict, sem any. lune run em todas as specs de runtime passando.",
+      "depends": []
+    },
+    {
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07",
+      "column": "todo",
+      "priority": "high",
+      "id": "task-services-035",
+      "title": "Gerador: toda Property do dump entra no schema; Security/Tags decidem ScriptVisible, nao existencia",
+      "description": "LER ANTES: .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md (secoes D2, 2 e 4) e .claude/agents-memory/pesquisa-rojo-properties-security-2026-09-07.md. DEPENDE de task-runtime-039 (o campo ScriptVisible precisa existir em Runtime.MemberDescriptor).\n\nESCOPO (tools/generate-services.luau + regeneracao de src/services/generated/**):\n1) classifySchemaMember (~linha 402-460) passa a devolver tambem `scriptVisible: boolean`. Ramo Property: `included = true` SEMPRE (toda Property da classe no dump entra no schema); NotScriptable OU Security.Read ~= 'None' OU tag WriteOnly OU (required_read com capability reservada) -> scriptVisible = false; senao scriptVisible = true e os passos 4/5 decidem readOnly EXATAMENTE como hoje. Ramo Event/Callback: regra LITERALMENTE INALTERADA (continuam sendo EXCLUIDOS do schema quando Security/Tags batem) -- $properties so carrega Property, e Event invisivel custaria um Signal por instancia sem consumidor nenhum. classifyMethodMember: INALTERADA.\n2) Emissao para entrada scriptVisible = false: `Default = nil` sempre (NAO chamar computeDefault -- evita puxar construtor de ValueTypes/enumDefault no load por um valor inalcancavel; documentar essa decisao deliberada no cabecalho do arquivo gerado, nunca deixar o leitor achar que o dump traz nil); ValueType/ValueCategory SEMPRE emitidos (e o dado que o cli usa pra decodificar $properties -- Lighting.Technology e Category='Enum', Name='Technology'); e a entrada NUNCA entra em typeFieldLines / no export type publico da classe (emitir faria o checker Luau aceitar `lighting.Technology` em codigo que erra em runtime). ScriptVisible e emitido literal (true e false) em todo descritor.\n3) Relatorio do gerador: nova secao 'Property no schema porem INVISIVEIS ao script (load-only)' com contagem por classe e o motivo (NotScriptable / Security.Read / WriteOnly / capability reservada). schemaExcludedByCapability continua listando os casos de capability, agora como load-only em vez de ausentes.\n4) Regenerar src/services/generated/** e conferir os numeros contra o desenho (medidos no dump fixado 28360dea, fecho de 45 classes): 258 Property no fecho, 115 hoje no schema, 143 novas load-only distribuidas em 17 classes -- Workspace 48, StarterPlayer 24, Instance 15, Model 11, LuaSourceContainer 7, WorldRoot 7, Players 6, StarterGui 6, SoundService 4, ModuleScript 3, RunService 3, DataStoreService 2, Lighting 2, PVInstance 2, Folder 1, Script 1, ServerScriptService 1. Divergencia entre o relatorio e esses numeros e sinal de bug -- investigar antes de fechar, nunca ajustar o numero do desenho.\n\nATENCAO: Script.Source e ModuleScript.Source (hoje excluidas por capability reservada PluginOrOpenCloud) passam a existir como load-only invisiveis. Isso NAO pode quebrar cli/TreeMaterializer (SetPropertyRaw 'Source') nem ModuleLoader/ScriptRunner (GetPropertyRaw 'Source') -- os dois caminhos ignoram o schema por desenho; confirmar no relatorio.",
+      "agent": "coder-services",
+      "reviewer": "revisor-services",
+      "wave": 56,
+      "tags": [
+        "services",
+        "gerador",
+        "api-dump",
+        "rojo",
+        "bug-alto-impacto"
+      ],
+      "acceptance": "src/services/generated/classes/Lighting.luau tem ['Technology'] no Schema com Kind='Property', ScriptVisible=false, ValueType='Technology', ValueCategory='Enum', Default=nil, e NAO tem Technology no export type publico. Workspace.FilteringEnabled continua ScriptVisible=true/ReadOnly=true. Nenhum Event/Callback ganhou entrada nova (contagem de Event no schema identica a de antes). Nenhum MethodNames mudou. Relatorio do gerador imprime a secao nova e bate com os numeros do desenho. tools/generate-services.spec.luau cobre a classificacao nova (Property com Security.Read elevado -> included + scriptVisible=false; Event com Security elevado -> continua excluido). Specs de services (incluindo Integration.spec) passando. --!strict, sem any. Declarar no relatorio qualquer divergencia observada.",
+      "depends": [
+        "task-runtime-039"
+      ]
+    },
+    {
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07",
+      "column": "todo",
+      "priority": "high",
+      "id": "task-cli-038",
+      "title": "$properties do Rojo vira caminho de HIDRATACAO (SetPropertyRaw), nao escrita de script",
+      "description": "LER ANTES: .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md (secoes D4, 4 e 5) e .claude/agents-memory/pesquisa-rojo-properties-security-2026-09-07.md. DEPENDE de task-services-035 (os descritores load-only precisam existir no schema achatado). Fecha o bug que impede o template LITERAL do `rojo init` (C:\\Users\\hakor\\Documents\\Roblox-Games\\Tiktok) de carregar.\n\nESCOPO (src/cli/ apenas -- TreeMaterializer.luau + Messages.luau + specs):\nTreeMaterializer.applyProperties (~linha 418-456) passa a ter DOIS caminhos:\nCAMINHO A -- instancia ESTRITA (Runtime.ClassRegistry.IsRegistered(ClassName) == true; todo no real do projeto):\n  A1) 'Name' / 'Parent' / 'ClassName' -> Diagnostic warning, codigo NOVO 'materialize/structural-property-ignored', e SKIP. Paridade literal com o rojo build (src/snapshot_middleware/project.rs linhas 234-260: log::warn! + continue para Name/Parent). ClassName entra na mesma regra porque no LuauBench e estado estrutural fora de data.properties -- gravar raw seria estado morto e silencioso. ISSO CORRIGE uma divergencia atual (hoje $properties.Name RENOMEIA a instancia; o Rojo real ignora).\n  A2) resolver o descritor via findMemberDescriptor (schema achatado, que agora enxerga tambem as load-only). Descritor nil -> Diagnostic error 'materialize/invalid-property' com mensagem NOVA Messages.MaterializePropertyNotAMember (mesma frase do runtime: 'X is not a valid member of Y'), construida pelo cli em vez de colhida de pcall. Descritor com Kind ~= 'Property' (Event/Callback) -> Diagnostic error 'materialize/invalid-property' com Messages.MaterializePropertyNotAProperty -- e a barreira dura que garante que nenhum evento vira gravavel por projeto.\n  A3) decodificacao INALTERADA (resolvePropertyValue / ValueTypes.Decode.FromRojoJson / os 3 diagnosticos existentes).\n  A4) escrita por Runtime.Instance.SetPropertyRaw -- ignora ReadOnly E ScriptVisible, exatamente como o rojo build ignora scriptability/serialization. SEM pcall: depois de A1-A3 nao sobra caminho de erro real (mesmo criterio ja documentado para `instance.Parent = parent` em createInstance).\nCAMINHO B -- instancia LENIENTE (so game/DataModel, IsRegistered == false): caminho de HOJE intocado (writable[key] = value dentro de pcall + MaterializePropertyAssignmentFailed). Divergencia DV-2 do desenho, declarar em comentario: PlaceId/JobId/GameId/PlaceVersion continuam recusadas porque sao estado do HOST, nao do projeto.\n\nDIVERGENCIAS a declarar em comentario e no relatorio (secao 4 do desenho): DV-1 (valor hidratado em propriedade invisivel e dado morto -- nenhum comportamento simulado reage), DV-5 (Name/Parent/ClassName warning+skip), DV-6 ($properties.Source num Script passa a ser aceito e SOBRESCREVE o Source vindo do $path, porque SetPropertyRaw('Source') roda antes de applyProperties em materializeNode -- o Rojo real tambem aceita Source em $properties).",
+      "agent": "coder-cli",
+      "reviewer": "revisor-cli",
+      "wave": 57,
+      "tags": [
+        "cli",
+        "rojo",
+        "materializer",
+        "bug-alto-impacto"
+      ],
+      "acceptance": "Spec de TreeMaterializer cobrindo: (1) $properties numa propriedade com Security.Read elevado (Lighting.Technology='Voxel') materializa com sucesso, zero Diagnostic, e o valor e legivel por Runtime.Instance.GetPropertyRaw como o EnumItem certo; (2) $properties numa propriedade ReadOnly (Workspace.FilteringEnabled=true) materializa com sucesso e workspace.FilteringEnabled le true pelo caminho normal; (3) escrita de script continua bloqueada: workspace.FilteringEnabled = false erra 'Property is read only' e lighting.Technology erra 'not a valid member of'; (4) $properties.Name/.Parent/.ClassName -> warning materialize/structural-property-ignored e a instancia NAO e renomeada; (5) $properties apontando pra um Event (ex.: 'ChildAdded') e pra um nome inexistente -> error materialize/invalid-property; (6) $properties.Source num Script sobrescreve o Source do arquivo (precedencia fixada por teste). Rodar o pipeline completo contra o default.project.json do Tiktok (READ-ONLY nesse projeto) e confirmar zero materialize/invalid-property. Specs de cli (Args/Messages/RunCommand/TreeMaterializer/TreePlanner/init) passando. --!strict, sem any.",
+      "depends": [
+        "task-services-035"
+      ]
+    },
+    {
+      "createdAt": "2026-09-07",
+      "updatedAt": "2026-09-07",
+      "column": "todo",
+      "priority": "high",
+      "id": "task-test-rojo-properties-001",
+      "title": "Cenario: template padrao do rojo init (Tiktok) carrega limpo fim a fim",
+      "description": "LER ANTES: .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md. DEPENDE de task-cli-038.\n\nCenario em tests/scenarios/ provando que o projeto Rojo mais basico que existe -- o template LITERAL gerado por `rojo init`, presente em C:\\Users\\hakor\\Documents\\Roblox-Games\\Tiktok\\default.project.json (READ-ONLY, nunca editar) -- carrega no LuauBench sem nenhum Diagnostic de severidade error, incluindo Lighting.$properties.Technology='Voxel' (Security.Read=RobloxScriptSecurity), Workspace.$properties.FilteringEnabled=true (Security.Write=PluginSecurity, CanLoad=false, Deprecated) e SoundService.$properties.RespectFilteringEnabled=true. Reexecutar tambem real-roblox-games-pipeline-smoke.scenario.luau contra os 3 projetos reais e comparar o antes/depois de Diagnostics -- qualquer regressao nova e achado, nao ruido. Se algum projeto real continuar falhando por OUTRA causa, relatar como achado separado (nao corrigir aqui).",
+      "agent": "testador",
+      "reviewer": null,
+      "wave": 58,
+      "tags": [
+        "testador",
+        "cenario",
+        "rojo",
+        "regressao"
+      ],
+      "acceptance": "Cenario novo (ou extensao declarada do smoke existente) roda por lune e falha se voltar a aparecer materialize/invalid-property nas 3 propriedades do template. Relatorio comparando o numero de Diagnostics por severidade dos 3 projetos reais antes e depois da leva. Territorio exclusivo tests/scenarios/; read-only em src/** e em C:\\Users\\hakor\\Documents\\Roblox-Games.",
+      "depends": [
+        "task-cli-038"
+      ]
     }
   ]
 }
