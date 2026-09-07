@@ -109,6 +109,35 @@ export type MemberDescriptor = {
 	-- consumirem (defaults reais de DataType, decodificação de `$properties` do Rojo).
 	ValueType: string?,
 	ValueCategory: MemberValueCategory?,
+
+	-- NOVO, OPCIONAL DE PROPÓSITO (task-runtime-039): `nil` ou `true` = o script do usuário
+	-- ENXERGA este membro (padrão; todo ClassSchema escrito antes desta tarefa continua válido
+	-- sem edição, mesma disciplina aditiva de ValueType/ValueCategory acima). `false` = o membro
+	-- EXISTE estruturalmente na classe (está no Roblox API Dump) mas é INVISÍVEL ao script: ler
+	-- ou escrever produz exatamente a mesma resposta que uma chave AUSENTE do schema produziria
+	-- ("X is not a valid member of Y") — ver InstanceMeta.__index/__newindex, abaixo. Serve ao
+	-- caminho de HIDRATAÇÃO (`$properties` de um projeto Rojo via Instance.SetPropertyRaw), que
+	-- no Rojo real nunca consulta Security/Scriptability para decidir se uma propriedade pode
+	-- vir do arquivo de projeto (CONFIRMADO por pesquisa contra o código-fonte real do Rojo e
+	-- teste empírico, ver .claude/agents-memory/pesquisa-rojo-properties-security-2026-09-07.md).
+	--
+	-- Por que o nome é `ScriptVisible` e não `ScriptAccessible`: `ReadOnly`, acima, já é o eixo de
+	-- ESCRITA por script (pode gravar ou não); este é o eixo de EXISTÊNCIA para o script (o membro
+	-- aparece ou não ao ler/escrever por nome). Nomes distintos evitam que um leitor futuro ache
+	-- que os dois codificam a mesma coisa.
+	--
+	-- Correspondência 1:1 com `rbx_reflection::Scriptability` (a base de reflection que o Rojo
+	-- real embute — ver pesquisa acima, seção 4), útil como conferência cruzada de quem for gerar
+	-- este campo a partir do dump:
+	--   Scriptability::None      -> ScriptVisible = false
+	--   Scriptability::Read      -> ScriptVisible = true,  ReadOnly = true
+	--   Scriptability::ReadWrite -> ScriptVisible = true,  ReadOnly = false
+	--
+	-- Decisão de arquitetura (D1) em
+	-- .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md: UM descritor com dois eixos,
+	-- não dois schemas separados — evita duplicar ValueType/ValueCategory numa tabela "delta" que
+	-- todo consumidor teria que lembrar de consultar em segundo lugar.
+	ScriptVisible: boolean?,
 }
 
 -- Tabela ACHATADA (membros próprios + herdados) e CONGELADA de uma classe concreta, COMPARTILHADA
@@ -633,7 +662,14 @@ InstanceMeta.__index = function(self: Instance, key: string): unknown
 		-- mesmo que seja `nil` — é exatamente o caso que motivou o schema inteiro (ex.:
 		-- Humanoid.SeatPart, ObjectValue.Value: propriedade válida com valor corrente nil, que uma
 		-- tabela Lua não armazena, então presença em `properties` sozinha nunca serviria de schema).
-		if classSchema[key] ~= nil then
+		--
+		-- task-runtime-039: um descritor com `ScriptVisible == false` EXISTE no schema (a classe
+		-- tem o membro, no sentido estrutural) mas é tratado aqui como se `classSchema[key]` fosse
+		-- `nil` — NEUTRALIDADE OBSERVÁVEL by design: o resto deste caminho (passo 7, resolução de
+		-- filho por nome; passo 8, mensagem de erro) roda idêntico ao caso de chave ausente, então
+		-- uma entrada invisível é indistinguível de uma chave que nunca existiu no schema.
+		local descriptor = classSchema[key]
+		if descriptor ~= nil and descriptor.ScriptVisible ~= false then
 			return data.properties[key]
 		end
 	else
@@ -749,7 +785,14 @@ InstanceMeta.__newindex = function(self: Instance, key: string, value: unknown):
 	-- __newindex".
 	local classSchema = data.classSchema
 	if classSchema ~= nil then
-		local descriptor = classSchema[key]
+		local descriptor: MemberDescriptor? = classSchema[key]
+		-- task-runtime-039: mesma neutralidade observável de InstanceMeta.__index, acima — um
+		-- descritor com `ScriptVisible == false` é tratado daqui pra baixo como se não existisse
+		-- no schema, caindo direto no passo (8)/erro "not a valid member of" em vez do ramo de
+		-- escrita válida/ReadOnly/evento.
+		if descriptor ~= nil and descriptor.ScriptVisible == false then
+			descriptor = nil
+		end
 		if descriptor ~= nil then
 			-- (7) MODO ESTRITO, `key` é membro do schema:
 			if descriptor.Kind == "Event" then
@@ -1064,6 +1107,15 @@ function Instance.SetClassSchema(instance: Instance, schema: ClassSchema): ()
 			if typeof(descriptor.ReadOnly) ~= "boolean" then
 				error(`Instance.SetClassSchema: ReadOnly de '{key}' precisa ser boolean, recebeu {typeof(descriptor.ReadOnly)}`, 2)
 			end
+			-- task-runtime-039: mesma família de validação de forma que Kind/ReadOnly, acima —
+			-- ScriptVisible é aditivo puro (nil = comportamento de hoje), então o único tipo
+			-- inválido é qualquer coisa que não seja boolean nem nil.
+			if descriptor.ScriptVisible ~= nil and typeof(descriptor.ScriptVisible) ~= "boolean" then
+				error(
+					`Instance.SetClassSchema: ScriptVisible de '{key}' precisa ser boolean ou nil, recebeu {typeof(descriptor.ScriptVisible)}`,
+					2
+				)
+			end
 		end
 
 		validatedClassSchemas[schema] = true
@@ -1073,6 +1125,15 @@ function Instance.SetClassSchema(instance: Instance, schema: ClassSchema): ()
 	data.classSchema = schema
 
 	for key, descriptor in schema do
+		-- task-runtime-039: entrada invisível ao script (ScriptVisible == false) NÃO é semeada —
+		-- nem Default (não há leitura de script pra devolver) nem Signal (não há evento pra
+		-- conectar) — a memória por instância fica idêntica à de hoje para essas entradas. Isso
+		-- também garante que `data.properties[key]` fique `nil` para uma chave invisível, o que já
+		-- seria irrelevante de qualquer forma: __index/__newindex tratam o descritor como ausente
+		-- antes de consultar `data.properties`.
+		if descriptor.ScriptVisible == false then
+			continue
+		end
 		if descriptor.Kind == "Event" then
 			data.properties[key] = SignalModule.new()
 		else

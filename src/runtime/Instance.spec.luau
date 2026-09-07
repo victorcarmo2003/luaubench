@@ -685,9 +685,18 @@ test(
 type ClassSchema = InstanceModule.ClassSchema
 
 -- Helper só destes testes: monta e congela um ClassSchema bem-formado a partir de um mapa
--- nome -> descritor parcial (ReadOnly default para `false` quando omitido).
+-- nome -> descritor parcial (ReadOnly default para `false` quando omitido). `ScriptVisible`
+-- (task-runtime-039) é ADITIVO: omitido (nil) mantém o comportamento de hoje em todo teste
+-- escrito antes desta tarefa, sem precisar editar uma única chamada existente.
 local function makeSchema(
-	entries: { [string]: { Kind: InstanceModule.MemberKind, Default: unknown?, ReadOnly: boolean? } }
+	entries: {
+		[string]: {
+			Kind: InstanceModule.MemberKind,
+			Default: unknown?,
+			ReadOnly: boolean?,
+			ScriptVisible: boolean?,
+		},
+	}
 ): ClassSchema
 	local schema: ClassSchema = {}
 	for key, entry in entries do
@@ -695,6 +704,7 @@ local function makeSchema(
 			Kind = entry.Kind,
 			Default = entry.Default,
 			ReadOnly = if entry.ReadOnly ~= nil then entry.ReadOnly else false,
+			ScriptVisible = entry.ScriptVisible,
 		}
 	end
 	table.freeze(schema)
@@ -989,6 +999,201 @@ test("GetPropertyRaw/SetPropertyRaw NUNCA consultam o schema (via de engenharia 
 		InstanceModule.GetPropertyRaw(instance, "Heartbeat") == "valor de engenharia",
 		"GetPropertyRaw deveria devolver o valor bruto, sem checagem de schema"
 	)
+end)
+
+--[[
+	Testes NOVOS da task-runtime-039 (MemberDescriptor.ScriptVisible -- separar "membro existe na
+	classe" de "script enxerga o membro"). Ver .claude/agents-memory/arquiteto-rojo-properties-
+	2026-09-07.md (seções D1/D3/5/8) e .claude/agents-memory/pesquisa-rojo-properties-security-
+	2026-09-07.md. Nenhum dos 65 testes acima foi alterado -- makeSchema, acima, ganhou um campo
+	`ScriptVisible` opcional, aditivo puro (default nil == comportamento de hoje).
+
+	Ponto central, cobrado literalmente pelo acceptance da task: NEUTRALIDADE OBSERVÁVEL -- uma
+	entrada com ScriptVisible=false precisa ser INDISTINGUÍVEL de uma chave ausente do schema, em
+	leitura, em escrita, na resolução de filho homônimo e pelas APIs de engenharia
+	(GetPropertyRaw/SetPropertyRaw).
+]]
+
+test(
+	"ScriptVisible=false: leitura e escrita erram com a MESMA string, byte-a-byte, que uma chave ausente do schema produziria",
+	function()
+		-- Duas instâncias com o MESMO ClassName e o MESMO Name, sem Parent -- GetFullName()
+		-- colapsa para o próprio Name quando não há ancestral (ver Instance.luau, Methods.GetFullName),
+		-- então a única diferença possível na mensagem final entre os dois casos seria a CHAVE
+		-- tentada. Usamos a MESMA chave ("Technology") nos dois lados: o schema `hidden` a declara
+		-- com ScriptVisible=false, o schema `absent` simplesmente não a declara -- comparação
+		-- byte-a-byte das duas mensagens é a prova de neutralidade, não uma comparação de "duas
+		-- famílias de mensagem parecidas".
+		local hidden = InstanceModule.NewBase("TestScriptVisibleParity", "Widget")
+		InstanceModule.SetClassSchema(
+			hidden,
+			makeSchema({
+				Technology = { Kind = "Property", Default = nil, ScriptVisible = false },
+			})
+		)
+
+		local absent = InstanceModule.NewBase("TestScriptVisibleParity", "Widget")
+		InstanceModule.SetClassSchema(
+			absent,
+			makeSchema({
+				Gravity = { Kind = "Property", Default = 196.2 },
+			})
+		)
+
+		-- `error(msg, 2)`, dentro de InstanceMeta.__index/__newindex, atribui o erro ao SITE DE
+		-- CHAMADA do metamétodo (a linha de source onde `instance.Technology` foi avaliado). Para
+		-- que a comparação abaixo seja byte-a-byte de verdade (incluindo esse prefixo
+		-- "arquivo:linha:" que `tostring(err)` inclui), as duas leituras/escritas precisam
+		-- acontecer NA MESMA LINHA de source -- daí estas duas funções DEFINIDAS UMA VEZ E
+		-- CHAMADAS DUAS VEZES (uma por instância), em vez de dois `pcall(function() ... end)`
+		-- inline (que ficariam em linhas diferentes e produziriam prefixos diferentes por
+		-- acidente de formatação, mascarando a prova de neutralidade em vez de fazê-la).
+		local function tryRead(instance: Instance): (boolean, unknown)
+			return pcall(function()
+				return asDynamic(instance).Technology
+			end)
+		end
+		local function tryWrite(instance: Instance): (boolean, unknown)
+			return pcall(function()
+				asDynamic(instance).Technology = 1
+			end)
+		end
+
+		local okReadHidden, errReadHidden = tryRead(hidden)
+		local okReadAbsent, errReadAbsent = tryRead(absent)
+		assert(not okReadHidden, "ler uma chave ScriptVisible=false deveria errar")
+		assert(not okReadAbsent, "ler uma chave que nunca existiu no schema deveria errar (baseline)")
+		assert(
+			string.find(tostring(errReadHidden), "is not a valid member of", 1, true) ~= nil,
+			`mensagem de leitura deveria conter 'is not a valid member of', recebeu: {errReadHidden}`
+		)
+		assert(
+			tostring(errReadHidden) == tostring(errReadAbsent),
+			`leitura: a mensagem de erro de uma entrada invisível precisa ser IDÊNTICA à de uma chave ausente -- hidden={tostring(errReadHidden)} absent={tostring(errReadAbsent)}`
+		)
+
+		local okWriteHidden, errWriteHidden = tryWrite(hidden)
+		local okWriteAbsent, errWriteAbsent = tryWrite(absent)
+		assert(not okWriteHidden, "escrever uma chave ScriptVisible=false deveria errar")
+		assert(not okWriteAbsent, "escrever uma chave que nunca existiu no schema deveria errar (baseline)")
+		assert(
+			string.find(tostring(errWriteHidden), "is not a valid member of", 1, true) ~= nil,
+			`mensagem de escrita deveria conter 'is not a valid member of', recebeu: {errWriteHidden}`
+		)
+		assert(
+			tostring(errWriteHidden) == tostring(errWriteAbsent),
+			`escrita: a mensagem de erro de uma entrada invisível precisa ser IDÊNTICA à de uma chave ausente -- hidden={tostring(errWriteHidden)} absent={tostring(errWriteAbsent)}`
+		)
+	end
+)
+
+test(
+	"ScriptVisible=false: existindo um FILHO com o mesmo nome, a leitura devolve o filho (resolução de filho na mesma posição relativa do passo 7 de __index)",
+	function()
+		local parent = InstanceModule.NewBase("TestScriptVisibleChild", nil)
+		InstanceModule.SetClassSchema(
+			parent,
+			makeSchema({
+				Technology = { Kind = "Property", Default = nil, ScriptVisible = false },
+			})
+		)
+		local child = InstanceModule.NewBase("Folder", "Technology")
+		child.Parent = parent
+
+		assert(
+			asDynamic(parent).Technology == child,
+			"leitura por nome deveria resolver o filho homônimo quando o membro do schema é invisível ao script"
+		)
+		assert(parent:FindFirstChild("Technology") == child, "o filho continua alcançável via FindFirstChild")
+	end
+)
+
+test(
+	"ScriptVisible=false: GetPropertyRaw/SetPropertyRaw continuam funcionando sobre a chave invisível (via de engenharia abaixo do enforcement)",
+	function()
+		local instance = InstanceModule.NewBase("TestScriptVisibleRawBypass", nil)
+		InstanceModule.SetClassSchema(
+			instance,
+			makeSchema({
+				Technology = { Kind = "Property", Default = nil, ScriptVisible = false },
+			})
+		)
+
+		local ok = pcall(function()
+			InstanceModule.SetPropertyRaw(instance, "Technology", "Voxel")
+		end)
+		assert(ok, "SetPropertyRaw não deveria consultar ScriptVisible nem errar sobre uma entrada invisível")
+		assert(
+			InstanceModule.GetPropertyRaw(instance, "Technology") == "Voxel",
+			"GetPropertyRaw deveria devolver o valor bruto escrito por SetPropertyRaw, sem checagem de ScriptVisible"
+		)
+
+		-- A via raw e a via de script são independentes por desenho: o valor gravado por
+		-- engenharia continua INALCANÇÁVEL por leitura de script mesmo depois de escrito.
+		local okScriptRead = pcall(function()
+			return asDynamic(instance).Technology
+		end)
+		assert(
+			not okScriptRead,
+			"leitura de script sobre a mesma chave deveria continuar errando mesmo após SetPropertyRaw ter gravado um valor"
+		)
+	end
+)
+
+test(
+	"SetClassSchema NÃO semeia Default nem Signal para entrada ScriptVisible=false (memória por instância idêntica à de hoje)",
+	function()
+		local instance = InstanceModule.NewBase("TestScriptVisibleNoSeed", nil)
+		InstanceModule.SetClassSchema(
+			instance,
+			makeSchema({
+				Technology = { Kind = "Property", Default = "Voxel", ScriptVisible = false },
+				PlayerAdded = { Kind = "Event", Default = nil, ScriptVisible = false },
+			})
+		)
+
+		-- GetPropertyRaw é a única via que ainda alcança `data.properties` diretamente -- se
+		-- SetClassSchema tivesse semeado o Default (ou um Signal fresco) para uma entrada
+		-- invisível, isto devolveria "Voxel"/um Signal em vez de nil.
+		assert(
+			InstanceModule.GetPropertyRaw(instance, "Technology") == nil,
+			"Default de uma entrada ScriptVisible=false não deveria ter sido semeado em data.properties"
+		)
+		assert(
+			InstanceModule.GetPropertyRaw(instance, "PlayerAdded") == nil,
+			"nenhum Signal deveria ter sido criado para uma entrada Kind == 'Event' com ScriptVisible=false"
+		)
+	end
+)
+
+test("SetClassSchema rejeita ScriptVisible que não é boolean nem nil", function()
+	local instance = InstanceModule.NewBase("TestScriptVisibleInvalidType", nil)
+	local schema = makeRawSchema({
+		Foo = { Kind = "Property", Default = nil, ReadOnly = false, ScriptVisible = "nope" },
+	})
+
+	local ok, err = pcall(function()
+		InstanceModule.SetClassSchema(instance, schema)
+	end)
+	assert(not ok, "SetClassSchema deveria rejeitar ScriptVisible que não é boolean nem nil")
+	assert(
+		string.find(tostring(err), "ScriptVisible de", 1, true) ~= nil,
+		`mensagem deveria mencionar o ScriptVisible inválido, recebeu: {err}`
+	)
+end)
+
+test("ScriptVisible=true explícito é idêntico ao padrão (nil) -- leitura e escrita continuam normais", function()
+	local instance = InstanceModule.NewBase("TestScriptVisibleExplicitTrue", nil)
+	InstanceModule.SetClassSchema(
+		instance,
+		makeSchema({
+			Gravity = { Kind = "Property", Default = 196.2, ScriptVisible = true },
+		})
+	)
+
+	assert(asDynamic(instance).Gravity == 196.2, "ScriptVisible=true deveria ler o Default semeado normalmente")
+	asDynamic(instance).Gravity = 50
+	assert(asDynamic(instance).Gravity == 50, "ScriptVisible=true deveria continuar gravável normalmente")
 end)
 
 --[[

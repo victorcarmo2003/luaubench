@@ -2775,7 +2775,7 @@
     {
       "createdAt": "2026-09-07",
       "updatedAt": "2026-09-07",
-      "column": "todo",
+      "column": "done",
       "priority": "high",
       "id": "task-runtime-039",
       "title": "MemberDescriptor.ScriptVisible: separar 'membro existe na classe' de 'script enxerga o membro'",
@@ -2790,7 +2790,9 @@
         "bug-alto-impacto"
       ],
       "acceptance": "MemberDescriptor.ScriptVisible existe e esta documentado. Spec NOVA em Instance.spec.luau provando NEUTRALIDADE OBSERVAVEL: com um ClassSchema contendo uma entrada ScriptVisible=false, (a) leitura da chave erra com a MESMA string de 'not a valid member of' que uma chave ausente produz; (b) escrita erra com a MESMA string; (c) se existir um FILHO com aquele nome, a leitura devolve o filho (prova que a resolucao de filho continua na mesma posicao relativa); (d) GetPropertyRaw/SetPropertyRaw continuam funcionando sobre a chave invisivel. Spec provando que SetClassSchema nao semeia default de entrada invisivel e que erra para ScriptVisible de tipo invalido. Todo ClassSchema escrito a mao antes desta tarefa (specs existentes, sem o campo) continua valido sem edicao. --!strict, sem any. lune run em todas as specs de runtime passando.",
-      "depends": []
+      "depends": [],
+      "result": "MemberDescriptor ganhou ScriptVisible: boolean? (aditivo puro, nil/true=visivel, false=existe estruturalmente mas invisivel ao script) -- correspondencia 1:1 documentada com rbx_reflection::Scriptability. __index/__newindex tratam ScriptVisible==false como chave ausente do schema (mesma string final de erro, resto dos caminhos byte-a-byte igual). SetClassSchema valida tipo de ScriptVisible (erro alto senao) e nao semeia Default/Signal pra entrada invisivel. GetPropertyRaw/SetPropertyRaw intocados -- ja ignoram o schema, via que task-cli-038 vai usar pra hidratar $properties.",
+      "reviewResult": "APROVADO (revisor-runtime, 2026-09-07). Reproduzido de forma independente: probe proprio (classe/propriedade diferentes das specs do coder) confirmou paridade BYTE-A-BYTE entre erro de leitura/escrita em chave invisivel vs chave ausente. Confirmado por leitura de codigo que resolucao de filho homonimo roda incondicionalmente depois da neutralizacao do descritor (passo 7 do __index). SetClassSchema: validacao de tipo e nao-semeadura de default/signal confirmadas por leitura direta do codigo. 201/201 specs de src/runtime/ rodadas uma a uma pelo revisor. Retrocompatibilidade confirmada via ClassRegistry.spec.luau (arquivo NAO tocado, constroi MemberDescriptor sem o campo em dezenas de lugares, 33/33 sem edicao). GetPropertyRaw/SetPropertyRaw confirmados por leitura + probe: nao tocam classSchema, leem/escrevem data.properties direto. Territorio limpo (so os 3 arquivos alegados). --strict/zero any confirmado, luau-lsp 0 diagnosticos."
     },
     {
       "createdAt": "2026-09-07",

@@ -146,6 +146,14 @@
 	task-runtime-034 não acrescenta nada à superfície deste arquivo -- `JobId`/`PlaceId`/`GameId`/
 	`PlaceVersion` são propriedades comuns da Instance devolvida por `Runtime.DataModel.new()`,
 	já alcançáveis por `dataModel.JobId` etc. sem nenhum export novo (ver DataModel.luau).
+
+	task-runtime-039 não acrescenta nenhum export novo -- `MemberDescriptor` ganha o campo opcional
+	`ScriptVisible` (separa "membro existe na classe" de "script enxerga o membro", ver cabeçalho
+	do tipo em Instance.luau e .claude/agents-memory/arquiteto-rojo-properties-2026-09-07.md,
+	seções D1/D3) e o alias `export type MemberDescriptor = InstanceModule.MemberDescriptor`, acima,
+	já o propaga estruturalmente sem edição nesta linha. Nenhuma API nova: `GetPropertyRaw`/
+	`SetPropertyRaw` (já reexportadas) continuam sendo a única via que ignora o schema por completo,
+	inclusive para uma entrada `ScriptVisible == false`.
 ]]
 
 local SignalModule = require("./runtime/Signal")
