@@ -46,6 +46,14 @@ local Generated: Types.GeneratedClass = {
 	Superclass = "WorldRoot",
 	IsService = true,
 	IsAbstract = true,
+	-- Entradas abaixo com `ScriptVisible = false` têm `Default = nil` de propósito: a
+	-- propriedade REAL do Roblox tem um default (às vezes um valor concreto, ex.:
+	-- `Technology = Enum.Technology.Voxel`), só que ele não é representável/semeável
+	-- por este runtime, porque a propriedade é invisível a script (`instance.X`/`instance.X
+	-- = v` de um script nunca a alcança -- só `Instance.SetPropertyRaw`/`GetPropertyRaw`,
+	-- o caminho que a hidratação de `$properties` do Rojo usa). Não leia `Default = nil`
+	-- aqui como "esta propriedade não tem default no Roblox real" -- ver
+	-- tools/generate-services.luau, classifySchemaMember/computeDefault.
 	Schema = {
 		["AirDensity"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive", ScriptVisible = true },
 		["AirTurbulenceIntensity"] = { Kind = "Property", Default = nil, ReadOnly = false, ValueType = "float", ValueCategory = "Primitive", ScriptVisible = true },

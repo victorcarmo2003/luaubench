@@ -2870,7 +2870,7 @@
       "id": "task-services-036",
       "title": "Propagar nota de Default=nil deliberado pros arquivos gerados afetados",
       "description": "Ressalva nao-bloqueante do revisor de task-services-035: a decisao de nunca chamar computeDefault pra entrada scriptVisible=false (Default=nil sempre, evita puxar construtor de ValueTypes/enumDefault por um valor inalcancavel) esta documentada no comentario do gerador-fonte (tools/generate-services.luau) mas nao propaga pro cabecalho dos 17 arquivos GERADOS afetados (Workspace.luau, Lighting.luau, etc) -- um leitor que abra so o arquivo gerado pode achar que a propriedade nao tem default real no Roblox (tem, so nao e representavel/alcancavel aqui). Adicionar uma linha de comentario no template de emissao do gerador (perto de onde Default=nil e escrito pra entrada ScriptVisible=false) explicando a decisao, pra que apareca nos arquivos gerados.",
-      "column": "todo",
+      "column": "done",
       "agent": "coder-services",
       "reviewer": "revisor-services",
       "wave": 59,
@@ -2882,9 +2882,12 @@
       ],
       "priority": "low",
       "acceptance": "Arquivos gerados com entrada ScriptVisible=false (ex: Lighting.luau, Workspace.luau) tem um comentario proximo ao Schema explicando que Default=nil e deliberado (property real do Roblox tem default, so nao e representavel/semeavel aqui). tools/generate-services.spec.luau continua passando. Regenerar src/services/generated/** e conferir que so o comentario mudou (nenhum valor de Schema/Default/ScriptVisible alterado).",
+      "result": "tools/generate-services.luau: flag hasScriptInvisibleEntry (true assim que a 1a entrada ScriptVisible=false da classe e emitida) decide, por classe, se o bloco Schema do arquivo GERADO ganha um comentario de cabecalho unico (nao repetido por entrada) explicando que Default=nil ali e deliberado -- a propriedade real do Roblox tem default, so nao e representavel/semeavel por este runtime porque e invisivel a script. Regenerado via `lune run tools/generate-services`: exatamente os mesmos 17 arquivos (DataStoreService, Folder, Instance, Lighting, LuaSourceContainer, Model, ModuleScript, PVInstance, Players, RunService, Script, ServerScriptService, SoundService, StarterGui, StarterPlayer, Workspace, WorldRoot) ganharam +8 linhas / -0 cada (git diff --numstat identico antes/depois da regeneracao -- idempotente). Confirmado por script: todo arquivo com >=1 `ScriptVisible = false` tem o comentario; nenhum arquivo SEM entrada ScriptVisible=false ganhou o comentario a toa (guarda funciona). Nao encontrei nenhuma linha alem do comentario nos 17 diffs (grep de linhas +/- excluindo o texto do comentario veio vazio) e nenhum outro arquivo fora dos 17 mudou.",
+      "testResult": "tools/generate-services.spec.luau: 26/26. Suite completa de src/services (31 arquivos .spec.luau): 30/31 com resumo `N/N testes passaram` limpo; HttpService.spec.luau reproduz o MESMO timeout de rede pre-existente ja registrado na review de task-services-035 (`runOnScheduler: a thread nao terminou dentro do watchdog de 10s (rede travada?)`, linha 141) -- nao criado por esta tarefa, arquivo nem tocado por ela.",
       "depends": [],
       "createdAt": "2026-09-07",
-      "updatedAt": "2026-09-07"
+      "updatedAt": "2026-09-07",
+      "reviewResult": "APROVADO (revisor-services, 2026-09-07). Reproduzido: diff isolado de generate-services.luau confirma so a flag hasScriptInvisibleEntry + comentario condicional, zero mudanca de logica. Diff --numstat dos 17 arquivos gerados: exatamente +8/-0 cada, inspecao linha a linha (Lighting/Workspace) confirma so o bloco de comentario foi inserido, toda entrada de Schema identica. Confirmado que exatamente os 17 arquivos com ScriptVisible=false ganharam o comentario, os outros 28 nao (sem poluicao). 26/26 generate-services.spec, regeneracao idempotente confirmada pelo proprio revisor (nao so alegacao do coder). Suite services 30/31 -- unica falha e o mesmo timeout de rede pre-existente ja documentado na revisao de task-services-035, arquivo nao tocado. --strict/zero any confirmado. Territorio limpo."
     }
   ]
 }

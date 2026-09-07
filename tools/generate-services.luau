@@ -1118,6 +1118,13 @@ local function generateClassFile(className: string): string
 	local schemaValueLines: { string } = {}
 	local typeFieldLines: { string } = {}
 	local emittedSchemaCount = 0
+	-- task-services-036: `true` assim que a PRIMEIRA entrada `ScriptVisible = false` desta classe é
+	-- emitida em `schemaValueLines` -- usado só para decidir se o comentário de cabeçalho do bloco
+	-- `Schema = {` do ARQUIVO GERADO (abaixo, perto de `table.insert(lines, "\tSchema = {\n")`)
+	-- precisa existir. Sem isso, uma classe sem nenhuma entrada load-only ganharia um comentário
+	-- morto explicando um padrão que não ocorre nela (o pedido explícito da tarefa: só poluir o
+	-- arquivo gerado quando ele de fato tem pelo menos uma entrada afetada).
+	local hasScriptInvisibleEntry = false
 
 	for _, member in schemaMembers do
 		local classification = classifySchemaMember(member)
@@ -1212,6 +1219,11 @@ local function generateClassFile(className: string): string
 					report.scriptInvisibleEntries,
 					`{className}.{member.Name} ({classification.scriptInvisibleReason or "?"})`
 				)
+				-- task-services-036: marca que este ARQUIVO GERADO precisa do comentário de
+				-- Default=nil deliberado (ver `hasScriptInvisibleEntry`, declarada no topo desta
+				-- função) -- pelo menos uma entrada `ScriptVisible = false` foi de fato emitida em
+				-- `schemaValueLines` pra esta classe.
+				hasScriptInvisibleEntry = true
 			end
 		end
 	end
@@ -1333,6 +1345,23 @@ local function generateClassFile(className: string): string
 	table.insert(lines, `\tSuperclass = {luaStringLiteral(normalizedSuperclass)},\n`)
 	table.insert(lines, `\tIsService = {tostring(isService)},\n`)
 	table.insert(lines, `\tIsAbstract = {tostring(isAbstract)},\n`)
+	if hasScriptInvisibleEntry then
+		-- task-services-036: nota de decisão deliberada, propagada pro ARQUIVO GERADO (antes só
+		-- existia no comentário do gerador-fonte, ver `computeDefault`/o bloco acima que monta
+		-- `schemaValueLines`) -- só emitida quando esta classe tem de fato pelo menos uma entrada
+		-- `ScriptVisible = false` abaixo (não polui classes sem nenhuma).
+		table.insert(
+			lines,
+			"\t-- Entradas abaixo com `ScriptVisible = false` têm `Default = nil` de propósito: a\n"
+				.. "\t-- propriedade REAL do Roblox tem um default (às vezes um valor concreto, ex.:\n"
+				.. "\t-- `Technology = Enum.Technology.Voxel`), só que ele não é representável/semeável\n"
+				.. "\t-- por este runtime, porque a propriedade é invisível a script (`instance.X`/`instance.X\n"
+				.. "\t-- = v` de um script nunca a alcança -- só `Instance.SetPropertyRaw`/`GetPropertyRaw`,\n"
+				.. "\t-- o caminho que a hidratação de `$properties` do Rojo usa). Não leia `Default = nil`\n"
+				.. "\t-- aqui como \"esta propriedade não tem default no Roblox real\" -- ver\n"
+				.. "\t-- tools/generate-services.luau, classifySchemaMember/computeDefault.\n"
+		)
+	end
 	table.insert(lines, "\tSchema = {\n")
 	for _, line in schemaValueLines do
 		table.insert(lines, line)
